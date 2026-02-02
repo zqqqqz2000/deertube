@@ -66,6 +66,7 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
   const [activeProfileId, setActiveProfileId] = useState<string | null>(() =>
     loadActiveProfileId(project.path),
   )
+  const [panelVisible, setPanelVisible] = useState(false)
   const lastQuestionId = useRef<string | null>(null)
   const hydrated = useRef(false)
   const saveTimer = useRef<number | null>(null)
@@ -91,6 +92,16 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
   useEffect(() => {
     saveActiveProfileId(project.path, activeProfileId)
   }, [activeProfileId, project.path])
+
+  useEffect(() => {
+    if (!selectedId) {
+      setPanelVisible(false)
+      return
+    }
+    setPanelVisible(false)
+    const id = window.requestAnimationFrame(() => setPanelVisible(true))
+    return () => window.cancelAnimationFrame(id)
+  }, [selectedId])
 
   useEffect(() => {
     if (initialState.nodes.length === 0) {
@@ -435,37 +446,52 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
           const position = (selectedNode.positionAbsolute ?? selectedNode.position)
           const screenX = position.x * viewport.zoom + viewport.x
           const screenY = position.y * viewport.zoom + viewport.y
+          const nodeHeight =
+            selectedNode.height ?? (selectedNode.type === 'question' ? 170 : 150)
+          const fallbackWidth =
+            selectedNode.width ??
+            selectedNode.style?.width ??
+            (selectedNode.type === 'question' ? QUESTION_NODE_WIDTH : SOURCE_NODE_WIDTH)
+          const nodeElement = document.querySelector(
+            `[data-id="${selectedNode.id}"]`,
+          ) as HTMLElement | null
+          const nodeRect = nodeElement?.getBoundingClientRect()
+          const nodeWidth = nodeRect?.width ?? fallbackWidth
+          const panelOffsetY = nodeHeight + 8
           return (
             <div
-              className="pointer-events-auto absolute z-10 w-[320px] rounded-2xl border border-white/10 bg-slate-950/90 p-3 text-white shadow-xl shadow-black/50"
+              className={`pointer-events-auto absolute z-10 text-white transition-all duration-300 ${
+                panelVisible ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0'
+              }`}
               style={{
-                left: screenX + 20,
-                top: screenY + 20,
+                left: nodeRect?.left ?? screenX,
+                top: screenY + panelOffsetY,
+                width: nodeWidth,
               }}
             >
-              <div className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">
-                Ask on selected node
+              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/70 px-2 py-1.5 shadow-lg shadow-black/30">
+                <Input
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="Ask a research question..."
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault()
+                      handleAsk()
+                    }
+                  }}
+                  disabled={busy}
+                  className="h-8 border-transparent bg-transparent text-xs text-white placeholder:text-white/40 focus-visible:ring-0"
+                />
+                <Button
+                  size="sm"
+                  className="h-8 rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 px-4 text-xs font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
+                  onClick={handleAsk}
+                  disabled={busy || !prompt.trim()}
+                >
+                  {busy ? '...' : 'Send'}
+                </Button>
               </div>
-              <Input
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Ask a research question..."
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    handleAsk()
-                  }
-                }}
-                disabled={busy}
-                className="mt-2 h-8 border-white/10 bg-white/5 text-xs text-white placeholder:text-white/40 focus-visible:ring-0"
-              />
-              <Button
-                className="mt-3 w-full bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-xs font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
-                onClick={handleAsk}
-                disabled={busy || !prompt.trim()}
-              >
-                {busy ? 'Thinking...' : 'Ask'}
-              </Button>
             </div>
           )
         })()}
