@@ -22,6 +22,15 @@ import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  QUESTION_NODE_HEIGHT,
+  QUESTION_NODE_WIDTH,
+  SOURCE_NODE_HEIGHT,
+  SOURCE_NODE_WIDTH,
+  layoutQuestionWithElk,
+  layoutSourcesWithElk,
+  resolveRightBiasedPosition,
+} from "../lib/elkLayout";
+import {
   createProfileDraft,
   ensureActiveProfileId,
   loadActiveProfileId,
@@ -46,12 +55,6 @@ type FlowWorkspaceProps = {
   initialState: ProjectState;
   onExit: () => void;
 };
-
-const QUESTION_NODE_WIDTH = 360;
-const SOURCE_NODE_WIDTH = 300;
-const QUESTION_SPACING_Y = 260;
-const SOURCE_SPACING_Y = 170;
-const SOURCE_OFFSET_X = 420;
 
 export default function FlowWorkspace({
   project,
@@ -286,10 +289,16 @@ export default function FlowWorkspace({
     const parentPosition = parentNode?.position ?? { x: 0, y: 0 };
 
     const questionId = crypto.randomUUID();
-    const questionPosition = {
-      x: parentPosition.x,
-      y: parentPosition.y + QUESTION_SPACING_Y,
-    };
+    const elkQuestionPosition = await layoutQuestionWithElk({
+      parent: parentNode,
+      parentPosition,
+      questionId,
+    });
+    const questionPosition = resolveRightBiasedPosition({
+      desired: elkQuestionPosition,
+      nodes,
+      size: { width: QUESTION_NODE_WIDTH, height: QUESTION_NODE_HEIGHT },
+    });
     const questionNode: QuestionNodeType = {
       id: questionId,
       type: "question",
@@ -346,14 +355,41 @@ export default function FlowWorkspace({
           : undefined,
       });
 
+      const elkSourcePositions = await layoutSourcesWithElk({
+        questionPosition,
+        questionId,
+        sourceIds: result.sources.map((source) => source.id),
+      });
+      const placedNodes: FlowNode[] = [
+        ...nodes,
+        {
+          id: questionId,
+          type: "question",
+          position: questionPosition,
+          data: { question: questionText, answer: "" },
+          width: QUESTION_NODE_WIDTH,
+        },
+      ];
+      const sourcePositions = elkSourcePositions.map((position, index) => {
+        const resolved = resolveRightBiasedPosition({
+          desired: position,
+          nodes: placedNodes,
+          size: { width: SOURCE_NODE_WIDTH, height: SOURCE_NODE_HEIGHT },
+        });
+        placedNodes.push({
+          id: `__placed_${index}`,
+          type: "source",
+          position: resolved,
+          data: { title: "", url: "" },
+          width: SOURCE_NODE_WIDTH,
+        });
+        return resolved;
+      });
       const sourceNodes: SourceNodeType[] = result.sources.map(
         (source, index) => ({
           id: source.id,
           type: "source",
-          position: {
-            x: questionPosition.x + SOURCE_OFFSET_X,
-            y: questionPosition.y + index * SOURCE_SPACING_Y,
-          },
+          position: sourcePositions[index],
           data: {
             title: source.title,
             url: source.url,

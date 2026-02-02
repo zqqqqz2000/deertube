@@ -19,6 +19,7 @@
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "electron-trpc-experimental": "latest",
+        "elkjs": "^0.11.0",
         "lucide-react": "^0.563.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
@@ -713,6 +714,8 @@
     "electron-to-chromium": ["electron-to-chromium@1.5.283", "", {}, "sha512-3vifjt1HgrGW/h76UEeny+adYApveS9dH2h3p57JYzBSXJIKUJAvtmIytDKjcSCt9xHfrNCFJ7gts6vkhuq++w=="],
 
     "electron-trpc-experimental": ["electron-trpc-experimental@1.0.0-alpha.1", "", { "dependencies": { "@watchable/unpromise": "^1.0.2", "debug": "^4.4.1", "typescript": "^5.8.3" }, "peerDependencies": { "@trpc/client": ">11.0.0", "@trpc/server": ">11.0.0", "electron": ">19.0.0" } }, "sha512-7UZNnXpgTWoavza5L6FgRdacWSAoFDnzJ2A2sPAKoY1xQpdJ763AFM0gvjRhmO0c64xLLJuiofMTjhDJs3CzdQ=="],
+
+    "elkjs": ["elkjs@0.11.0", "", {}, "sha512-u4J8h9mwEDaYMqo0RYJpqNMFDoMK7f+pu4GjcV+N8jIC7TRdORgzkfSjTJemhqONFfH6fBI3wpysgWbhgVWIXw=="],
 
     "emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
 
