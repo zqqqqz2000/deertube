@@ -7,7 +7,6 @@ import ReactFlow, {
   ReactFlowProvider,
   type ReactFlowInstance,
   type Viewport,
-  useStore,
   useReactFlow,
   useEdgesState,
   useNodesState,
@@ -331,7 +330,7 @@ function FlowWorkspaceInner({
         ...prev,
         {
           id: crypto.randomUUID(),
-          source: lastQuestionId.current,
+          source: lastQuestionId.current ?? "",
           target: questionId,
           type: "smoothstep",
         },

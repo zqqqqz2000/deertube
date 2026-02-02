@@ -46,8 +46,12 @@ export const placeQuestionNode = async ({
         {
           id: questionId,
           type: "question",
-          data: { question: "", answer: "", new: true },
+          data: { question: "", answer: "" },
           width: QUESTION_NODE_WIDTH,
+          position: {
+            x: 0,
+            y: 0,
+          },
         },
       ],
       edges: [...edges, { source: parentNode.id, target: questionId }],
