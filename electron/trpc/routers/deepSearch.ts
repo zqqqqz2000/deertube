@@ -87,12 +87,17 @@ async function fetchTavilySearchWithKey(
   return results
 }
 
-async function fetchJinaReaderMarkdown(url: string, baseUrl?: string): Promise<string> {
+async function fetchJinaReaderMarkdown(
+  url: string,
+  baseUrl?: string,
+  apiKey?: string,
+): Promise<string> {
   const normalizedBase = baseUrl && baseUrl.trim().length > 0 ? baseUrl.trim() : 'https://r.jina.ai/'
   const readerUrl = `${normalizedBase}${url}`
   const response = await fetch(readerUrl, {
     headers: {
       Accept: 'application/json',
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
   })
   if (!response.ok) {
@@ -135,6 +140,7 @@ export const deepSearchRouter = createTRPCRouter({
           .object({
             tavilyApiKey: z.string().optional(),
             jinaReaderBaseUrl: z.string().optional(),
+            jinaReaderApiKey: z.string().optional(),
             llmProvider: z.string().optional(),
             llmModelId: z.string().optional(),
             llmApiKey: z.string().optional(),
@@ -157,7 +163,11 @@ export const deepSearchRouter = createTRPCRouter({
           let markdown = item.content ?? item.snippet ?? ''
           if (url) {
             try {
-              markdown = await fetchJinaReaderMarkdown(url, input.settings?.jinaReaderBaseUrl)
+              markdown = await fetchJinaReaderMarkdown(
+                url,
+                input.settings?.jinaReaderBaseUrl,
+                input.settings?.jinaReaderApiKey,
+              )
             }
             catch {
               // keep fallback content from search if reader fails

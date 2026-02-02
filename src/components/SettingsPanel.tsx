@@ -159,6 +159,19 @@ export default function SettingsPanel({
                         placeholder="https://r.jina.ai/"
                       />
                     </div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                        Reader Token (optional)
+                      </Label>
+                      <Input
+                        className="border-white/10 bg-white/5 text-white"
+                        value={profile.jinaReaderApiKey}
+                        onChange={(event) =>
+                          onProfileChange(profile.id, { jinaReaderApiKey: event.target.value })
+                        }
+                        placeholder="jina_..."
+                      />
+                    </div>
                   </div>
 
                   <Separator className="bg-white/10" />

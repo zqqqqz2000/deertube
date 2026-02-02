@@ -108,6 +108,8 @@ export function useQuestionActions({
               tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
               jinaReaderBaseUrl:
                 activeProfile.jinaReaderBaseUrl.trim() || undefined,
+              jinaReaderApiKey:
+                activeProfile.jinaReaderApiKey.trim() || undefined,
               llmProvider: activeProfile.llmProvider.trim() || undefined,
               llmModelId: activeProfile.llmModelId.trim() || undefined,
               llmApiKey: activeProfile.llmApiKey.trim() || undefined,

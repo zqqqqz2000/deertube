@@ -3,6 +3,7 @@ export interface ProviderProfile {
   name: string
   tavilyApiKey: string
   jinaReaderBaseUrl: string
+  jinaReaderApiKey: string
   llmProvider: string
   llmModelId: string
   llmApiKey: string
@@ -17,6 +18,7 @@ const createDefaultProfile = (): ProviderProfile => ({
   name: 'Default',
   tavilyApiKey: '',
   jinaReaderBaseUrl: 'https://r.jina.ai/',
+  jinaReaderApiKey: '',
   llmProvider: 'openai',
   llmModelId: 'gpt-4o-mini',
   llmApiKey: '',
@@ -30,6 +32,7 @@ const normalizeProfile = (raw: Partial<ProviderProfile>): ProviderProfile => {
     name: raw.name ?? defaults.name,
     tavilyApiKey: raw.tavilyApiKey ?? '',
     jinaReaderBaseUrl: raw.jinaReaderBaseUrl ?? defaults.jinaReaderBaseUrl,
+    jinaReaderApiKey: raw.jinaReaderApiKey ?? '',
     llmProvider: raw.llmProvider ?? defaults.llmProvider,
     llmModelId: raw.llmModelId ?? defaults.llmModelId,
     llmApiKey: raw.llmApiKey ?? '',
