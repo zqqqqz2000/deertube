@@ -52,6 +52,26 @@ export function useContextBuilder(nodes: FlowNode[], edges: FlowEdge[]) {
     },
     [buildContextPath],
   );
+  const buildContextEdgeIds = useCallback(
+    (targetId: string) => {
+      const visited = new Set<string>();
+      const edgeIds: string[] = [];
+      let currentId: string | null = targetId;
+
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        const parentEdge = edges.find((edge) => edge.target === currentId);
+        if (!parentEdge) {
+          break;
+        }
+        edgeIds.push(parentEdge.id);
+        currentId = parentEdge.source;
+      }
+
+      return edgeIds;
+    },
+    [edges],
+  );
   const buildQaContext = useCallback(
     (targetId: string) => {
       const path = buildContextPath(targetId);
@@ -72,5 +92,5 @@ export function useContextBuilder(nodes: FlowNode[], edges: FlowEdge[]) {
     [buildContextPath],
   );
 
-  return { buildContextSummary, buildQaContext };
+  return { buildContextSummary, buildQaContext, buildContextEdgeIds };
 }

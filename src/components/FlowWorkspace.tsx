@@ -65,13 +65,31 @@ function FlowWorkspaceInner({
     activeProfile,
   } = useProfileSettings(project.path);
   const { panelVisible, panelNodeId } = usePanelState(selectedId, isDragging);
-  const { buildContextSummary, buildQaContext } = useContextBuilder(
+  const { buildContextSummary, buildQaContext, buildContextEdgeIds } =
+    useContextBuilder(
     nodes,
     edges,
   );
   const qaContext = useMemo(
     () => (selectedId ? buildQaContext(selectedId) : ""),
     [buildQaContext, selectedId],
+  );
+  const highlightedEdgeIds = useMemo(
+    () => new Set(selectedId ? buildContextEdgeIds(selectedId) : []),
+    [buildContextEdgeIds, selectedId],
+  );
+  const displayEdges = useMemo(
+    () =>
+      edges.map((edge) => {
+        const baseClassName = edge.className
+          ? edge.className.replace(/\bedge-path-glow\b/g, "").trim()
+          : "";
+        const className = highlightedEdgeIds.has(edge.id)
+          ? [baseClassName, "edge-path-glow"].filter(Boolean).join(" ")
+          : baseClassName || undefined;
+        return className === edge.className ? edge : { ...edge, className };
+      }),
+    [edges, highlightedEdgeIds],
   );
   const { prompt, setPrompt, busy, handleAsk, retryQuestion } =
     useQuestionActions({
@@ -155,7 +173,7 @@ function FlowWorkspaceInner({
         <div className="relative flex-1">
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={displayEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}

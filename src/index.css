@@ -109,6 +109,18 @@
       opacity: 0.95;
     }
   }
+
+  .react-flow__edge .react-flow__edge-path {
+    transition: stroke 200ms ease, stroke-width 200ms ease,
+      filter 200ms ease;
+  }
+
+  .react-flow__edge.edge-path-glow .react-flow__edge-path {
+    stroke: rgba(234, 179, 8, 1) !important;
+    stroke-width: 3.1;
+    filter: drop-shadow(0 0 6px rgba(202, 138, 4, 0.95))
+      drop-shadow(0 0 12px rgba(202, 138, 4, 0.7));
+  }
 }
 
 :root {
