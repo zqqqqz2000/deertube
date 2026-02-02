@@ -3,7 +3,7 @@ import type { Edge, Node } from 'reactflow'
 export interface QuestionNodeData {
   question: string
   answer: string
-  status?: string
+  status?: 'running' | 'failed'
 }
 
 export interface SourceNodeData {

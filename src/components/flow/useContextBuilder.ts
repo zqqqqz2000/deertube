@@ -52,6 +52,25 @@ export function useContextBuilder(nodes: FlowNode[], edges: FlowEdge[]) {
     },
     [buildContextPath],
   );
+  const buildQaContext = useCallback(
+    (targetId: string) => {
+      const path = buildContextPath(targetId);
+      if (path.length === 0) {
+        return "";
+      }
+      return path
+        .map((node) => {
+          if (node.type !== "question") {
+            return "";
+          }
+          const data = node.data as QuestionNodeType["data"];
+          return `Q: ${data.question}\nA: ${data.answer}`;
+        })
+        .filter(Boolean)
+        .join("\n\n");
+    },
+    [buildContextPath],
+  );
 
-  return { buildContextSummary };
+  return { buildContextSummary, buildQaContext };
 }

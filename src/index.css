@@ -99,6 +99,18 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+@layer utilities {
+  @keyframes halo-breathe {
+    0%,
+    100% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 0.95;
+    }
+  }
+}
+
 :root {
 
   --radius: 0.625rem;

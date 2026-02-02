@@ -27,6 +27,8 @@ import { usePanelState } from "./flow/usePanelState";
 import { usePreviewHover } from "./flow/usePreviewHover";
 import { useProfileSettings } from "./flow/useProfileSettings";
 import { useQuestionActions } from "./flow/useQuestionActions";
+import { QuestionActionProvider } from "./flow/QuestionActionContext";
+import FlowContextPanel from "./flow/FlowContextPanel";
 
 function FlowWorkspaceInner({
   project,
@@ -63,8 +65,16 @@ function FlowWorkspaceInner({
     activeProfile,
   } = useProfileSettings(project.path);
   const { panelVisible, panelNodeId } = usePanelState(selectedId, isDragging);
-  const { buildContextSummary } = useContextBuilder(nodes, edges);
-  const { prompt, setPrompt, busy, handleAsk } = useQuestionActions({
+  const { buildContextSummary, buildQaContext } = useContextBuilder(
+    nodes,
+    edges,
+  );
+  const qaContext = useMemo(
+    () => (selectedId ? buildQaContext(selectedId) : ""),
+    [buildQaContext, selectedId],
+  );
+  const { prompt, setPrompt, busy, handleAsk, retryQuestion } =
+    useQuestionActions({
     projectPath: project.path,
     nodes,
     edges,
@@ -133,101 +143,107 @@ function FlowWorkspaceInner({
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
-      <FlowHeader
-        projectName={project.name}
-        projectPath={project.path}
-        busy={busy}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onExit={handleExit}
-      />
-      <div className="relative flex-1">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodeTypes={nodeTypes}
-          onInit={(instance) => {
-            setFlowInstance(instance);
-            setViewport(instance.getViewport());
-          }}
-          onMove={(_, nextViewport) => setViewport(nextViewport)}
-          onMoveStart={() => setIsDragging(true)}
-          onMoveEnd={() => setIsDragging(false)}
-          onNodeClick={(_, node) => {
-            setSelectedId(node.id);
-            setPrompt("");
-          }}
-          selectNodesOnDrag={false}
-          onPaneClick={() => setSelectedId(null)}
-          onNodeDragStart={() => setIsDragging(true)}
-          onNodeDragStop={() => setIsDragging(false)}
-          onNodeMouseEnter={handleNodeEnter}
-          onNodeMouseLeave={handleNodeLeave}
-          defaultEdgeOptions={{
-            type: "smoothstep",
-            style: { stroke: "rgba(255,255,255,0.35)", strokeWidth: 1.6 },
-          }}
-          className="h-full w-full"
-          fitView
-        >
-          <Background gap={20} size={1} color="rgba(255,255,255,0.08)" />
-          <Panel position="top-right" className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-white/15 bg-slate-900/80 text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
-              onClick={() => {
-                void handleAutoLayout();
-              }}
-              disabled={isLayouting || nodes.length === 0}
-            >
-              {isLayouting ? "Layout..." : "Auto layout"}
-            </Button>
-          </Panel>
-          <Controls
-            showInteractive={false}
-            className="rounded-xl border border-white/10 bg-slate-900/80 text-white"
+    <QuestionActionProvider value={{ retryQuestion, busy }}>
+      <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+        <FlowHeader
+          projectName={project.name}
+          projectPath={project.path}
+          busy={busy}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onExit={handleExit}
+        />
+        <div className="relative flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            nodeTypes={nodeTypes}
+            onInit={(instance) => {
+              setFlowInstance(instance);
+              setViewport(instance.getViewport());
+            }}
+            onMove={(_, nextViewport) => setViewport(nextViewport)}
+            onMoveStart={() => setIsDragging(true)}
+            onMoveEnd={() => setIsDragging(false)}
+            onNodeClick={(_, node) => {
+              setSelectedId(node.id);
+              setPrompt("");
+            }}
+            selectNodesOnDrag={false}
+            onPaneClick={() => setSelectedId(null)}
+            onNodeDragStart={() => setIsDragging(true)}
+            onNodeDragStop={() => setIsDragging(false)}
+            onNodeMouseEnter={handleNodeEnter}
+            onNodeMouseLeave={handleNodeLeave}
+            defaultEdgeOptions={{
+              type: "smoothstep",
+              style: { stroke: "rgba(255,255,255,0.35)", strokeWidth: 1.6 },
+            }}
+            className="h-full w-full"
+            fitView
+          >
+            <Background gap={20} size={1} color="rgba(255,255,255,0.08)" />
+            <Panel position="top-right" className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-white/15 bg-slate-900/80 text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+                onClick={() => {
+                  void handleAutoLayout();
+                }}
+                disabled={isLayouting || nodes.length === 0}
+              >
+                {isLayouting ? "Layout..." : "Auto layout"}
+              </Button>
+            </Panel>
+            <Controls
+              showInteractive={false}
+              className="rounded-xl border border-white/10 bg-slate-900/80 text-white"
+            />
+            <MiniMap
+              className="rounded-xl border border-white/10 bg-slate-900/70"
+              zoomable
+              pannable
+            />
+          </ReactFlow>
+          <FlowContextPanel
+            visible={!!selectedId}
+            context={qaContext}
           />
-          <MiniMap
-            className="rounded-xl border border-white/10 bg-slate-900/70"
-            zoomable
-            pannable
-          />
-        </ReactFlow>
-        {renderPanelInput()}
+          {renderPanelInput()}
+        </div>
+        <SettingsPanel
+          open={settingsOpen}
+          profiles={profiles}
+          activeProfileId={activeProfileId}
+          onClose={() => setSettingsOpen(false)}
+          onActiveProfileChange={(id) => setActiveProfileId(id)}
+          onProfileAdd={() => {
+            setProfiles((prev) => {
+              const nextIndex = prev.length + 1;
+              return [...prev, createProfileDraft(`Profile ${nextIndex}`)];
+            });
+          }}
+          onProfileDelete={(id) => {
+            setProfiles((prev) => {
+              const next = prev.filter((profile) => profile.id !== id);
+              if (activeProfileId === id) {
+                setActiveProfileId(next[0]?.id ?? null);
+              }
+              return next;
+            });
+          }}
+          onProfileChange={(id, patch) => {
+            setProfiles((prev) =>
+              prev.map((profile) =>
+                profile.id === id ? { ...profile, ...patch } : profile,
+              ),
+            );
+          }}
+        />
       </div>
-      <SettingsPanel
-        open={settingsOpen}
-        profiles={profiles}
-        activeProfileId={activeProfileId}
-        onClose={() => setSettingsOpen(false)}
-        onActiveProfileChange={(id) => setActiveProfileId(id)}
-        onProfileAdd={() => {
-          setProfiles((prev) => {
-            const nextIndex = prev.length + 1;
-            return [...prev, createProfileDraft(`Profile ${nextIndex}`)];
-          });
-        }}
-        onProfileDelete={(id) => {
-          setProfiles((prev) => {
-            const next = prev.filter((profile) => profile.id !== id);
-            if (activeProfileId === id) {
-              setActiveProfileId(next[0]?.id ?? null);
-            }
-            return next;
-          });
-        }}
-        onProfileChange={(id, patch) => {
-          setProfiles((prev) =>
-            prev.map((profile) =>
-              profile.id === id ? { ...profile, ...patch } : profile,
-            ),
-          );
-        }}
-      />
-    </div>
+    </QuestionActionProvider>
   );
 }
 

@@ -1,7 +1,11 @@
 import { useCallback, useState, type MutableRefObject } from "react";
 import type { ReactFlowInstance } from "reactflow";
 import { placeQuestionNode, placeSourceNodes } from "../../lib/flowPlacement";
-import { QUESTION_NODE_WIDTH, SOURCE_NODE_WIDTH } from "../../lib/elkLayout";
+import {
+  QUESTION_NODE_HEIGHT,
+  QUESTION_NODE_WIDTH,
+  SOURCE_NODE_WIDTH,
+} from "../../lib/elkLayout";
 import { trpc } from "../../lib/trpc";
 import type {
   FlowEdge,
@@ -41,6 +45,128 @@ export function useQuestionActions({
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const updateQuestionNode = useCallback(
+    (questionId: string, patch: Partial<QuestionNodeType["data"]>) => {
+      setNodes((prev: FlowNode[]) =>
+        prev.map((node) => {
+          if (node.id === questionId && node.type === "question") {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                ...patch,
+              },
+            };
+          }
+          return node;
+        }),
+      );
+    },
+    [setNodes],
+  );
+
+  const runQuestion = useCallback(
+    async (
+      questionId: string,
+      questionText: string,
+      questionPosition: { x: number; y: number },
+      parentId: string | null,
+    ) => {
+      setBusy(true);
+      try {
+        const context = parentId ? buildContextSummary(parentId) : "";
+        const result = await trpc.deepSearch.run.mutate({
+          projectPath,
+          query: questionText,
+          maxResults: 5,
+          context,
+          settings: activeProfile
+            ? {
+                tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
+                jinaReaderBaseUrl:
+                  activeProfile.jinaReaderBaseUrl.trim() || undefined,
+                jinaReaderApiKey:
+                  activeProfile.jinaReaderApiKey.trim() || undefined,
+                llmProvider: activeProfile.llmProvider.trim() || undefined,
+                llmModelId: activeProfile.llmModelId.trim() || undefined,
+                llmApiKey: activeProfile.llmApiKey.trim() || undefined,
+                llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
+              }
+            : undefined,
+        });
+
+        const sourcePositions = await placeSourceNodes({
+          questionId,
+          questionPosition,
+          nodes,
+          edges,
+          sources: result.sources.map((source) => ({ id: source.id })),
+        });
+        const sourceNodes: SourceNodeType[] = result.sources.map(
+          (source, index) => ({
+            id: source.id,
+            type: "source",
+            position: sourcePositions[index],
+            data: {
+              title: source.title,
+              url: source.url,
+              snippet: source.snippet,
+            },
+            width: SOURCE_NODE_WIDTH,
+          }),
+        );
+
+        setNodes((prev: FlowNode[]) =>
+          prev
+            .map((node) => {
+              if (node.id === questionId && node.type === "question") {
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    answer: result.answer,
+                    status: undefined,
+                  },
+                };
+              }
+              return node;
+            })
+            .concat(sourceNodes),
+        );
+
+        const sourceEdges: FlowEdge[] = result.sources.map((source) => ({
+          id: crypto.randomUUID(),
+          source: questionId,
+          target: source.id,
+          type: "smoothstep",
+        }));
+        setEdges((prev: FlowEdge[]) => [...prev, ...sourceEdges]);
+
+        requestAnimationFrame(() => {
+          flowInstance?.fitView({ padding: 0.2, duration: 400 });
+        });
+      } catch {
+        updateQuestionNode(questionId, {
+          answer: "Request failed. Please try again.",
+          status: "failed",
+        });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      activeProfile,
+      buildContextSummary,
+      edges,
+      flowInstance,
+      nodes,
+      projectPath,
+      setEdges,
+      setNodes,
+      updateQuestionNode,
+    ],
+  );
+
   const handleAsk = useCallback(async () => {
     if (!prompt.trim() || busy || !selectedId) {
       return;
@@ -67,11 +193,22 @@ export function useQuestionActions({
       data: {
         question: questionText,
         answer: "Searching and reasoning...",
+        status: "running",
       },
       width: QUESTION_NODE_WIDTH,
     };
 
     setNodes((prev: FlowNode[]) => [...prev, questionNode]);
+    if (flowInstance) {
+      const centerX = questionPosition.x + QUESTION_NODE_WIDTH / 2;
+      const centerY = questionPosition.y + QUESTION_NODE_HEIGHT / 2;
+      requestAnimationFrame(() => {
+        flowInstance.setCenter(centerX, centerY, {
+          zoom: flowInstance.getZoom(),
+          duration: 400,
+        });
+      });
+    }
     if (selectedId) {
       setEdges((prev: FlowEdge[]) => [
         ...prev,
@@ -96,95 +233,7 @@ export function useQuestionActions({
     lastQuestionId.current = questionId;
     setSelectedId(questionId);
 
-    try {
-      const context = selectedId ? buildContextSummary(selectedId) : "";
-      const result = await trpc.deepSearch.run.mutate({
-        projectPath,
-        query: questionText,
-        maxResults: 5,
-        context,
-        settings: activeProfile
-          ? {
-              tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
-              jinaReaderBaseUrl:
-                activeProfile.jinaReaderBaseUrl.trim() || undefined,
-              jinaReaderApiKey:
-                activeProfile.jinaReaderApiKey.trim() || undefined,
-              llmProvider: activeProfile.llmProvider.trim() || undefined,
-              llmModelId: activeProfile.llmModelId.trim() || undefined,
-              llmApiKey: activeProfile.llmApiKey.trim() || undefined,
-              llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
-            }
-          : undefined,
-      });
-
-      const sourcePositions = await placeSourceNodes({
-        questionId,
-        questionPosition,
-        nodes,
-        edges,
-        sources: result.sources.map((source) => ({ id: source.id })),
-      });
-      const sourceNodes: SourceNodeType[] = result.sources.map(
-        (source, index) => ({
-          id: source.id,
-          type: "source",
-          position: sourcePositions[index],
-          data: {
-            title: source.title,
-            url: source.url,
-            snippet: source.snippet,
-          },
-          width: SOURCE_NODE_WIDTH,
-        }),
-      );
-
-      setNodes((prev: FlowNode[]) =>
-        prev
-          .map((node) => {
-            if (node.id === questionId && node.type === "question") {
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  answer: result.answer,
-                },
-              };
-            }
-            return node;
-          })
-          .concat(sourceNodes),
-      );
-
-      const sourceEdges: FlowEdge[] = result.sources.map((source) => ({
-        id: crypto.randomUUID(),
-        source: questionId,
-        target: source.id,
-        type: "smoothstep",
-      }));
-      setEdges((prev: FlowEdge[]) => [...prev, ...sourceEdges]);
-
-      requestAnimationFrame(() => {
-        flowInstance?.fitView({ padding: 0.2, duration: 400 });
-      });
-    } catch {
-      setNodes((prev: FlowNode[]) =>
-        prev.map((node) => {
-          if (node.id === questionId && node.type === "question") {
-            return {
-              ...node,
-              data: {
-                ...node.data,
-                answer: "Request failed. Please try again.",
-              },
-            };
-          }
-          return node;
-        }),
-      );
-    } finally {
-      setBusy(false);
-    }
+    void runQuestion(questionId, questionText, questionPosition, selectedId);
   }, [
     activeProfile,
     buildContextSummary,
@@ -199,7 +248,37 @@ export function useQuestionActions({
     setNodes,
     setSelectedId,
     lastQuestionId,
+    runQuestion,
   ]);
 
-  return { prompt, setPrompt, busy, handleAsk };
+  const retryQuestion = useCallback(
+    async (questionId: string) => {
+      if (busy) {
+        return;
+      }
+      const questionNode = nodes.find(
+        (node) => node.id === questionId && node.type === "question",
+      ) as QuestionNodeType | undefined;
+      if (!questionNode) {
+        return;
+      }
+      if (questionNode.data.status !== "failed") {
+        return;
+      }
+      const parentEdge = edges.find((edge) => edge.target === questionId);
+      updateQuestionNode(questionId, {
+        answer: "Searching and reasoning...",
+        status: "running",
+      });
+      void runQuestion(
+        questionId,
+        questionNode.data.question,
+        questionNode.position,
+        parentEdge?.source ?? null,
+      );
+    },
+    [busy, edges, nodes, runQuestion, updateQuestionNode],
+  );
+
+  return { prompt, setPrompt, busy, handleAsk, retryQuestion };
 }
