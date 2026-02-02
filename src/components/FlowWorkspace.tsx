@@ -4,8 +4,10 @@ import ReactFlow, {
   Controls,
   MiniMap,
   Panel,
+  ReactFlowProvider,
   type ReactFlowInstance,
   type Viewport,
+  useStore,
   useEdgesState,
   useNodesState,
 } from "reactflow";
@@ -56,7 +58,7 @@ interface FlowWorkspaceProps {
   onExit: () => void;
 }
 
-export default function FlowWorkspace({
+function FlowWorkspaceInner({
   project,
   initialState,
   onExit,
@@ -85,6 +87,7 @@ export default function FlowWorkspace({
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isLayouting, setIsLayouting] = useState(false);
+  const nodeInternals = useStore((state) => state.nodeInternals);
   const lastQuestionId = useRef<string | null>(null);
   const hydrated = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -532,6 +535,7 @@ export default function FlowWorkspace({
             setSelectedId(node.id);
             setPrompt("");
           }}
+          selectNodesOnDrag={false}
           onPaneClick={() => setSelectedId(null)}
           onNodeDragStart={() => setIsDragging(true)}
           onNodeDragStop={() => setIsDragging(false)}
@@ -575,17 +579,17 @@ export default function FlowWorkspace({
             if (!selectedNode) {
               return null;
             }
+            const internalNode = nodeInternals.get(selectedNode.id);
             const position =
-              selectedNode.positionAbsolute ?? selectedNode.position;
+              internalNode?.positionAbsolute ??
+              selectedNode.positionAbsolute ??
+              selectedNode.position;
+            const nodeWidth = internalNode?.width ?? selectedNode.width ?? 0;
+            const nodeHeight = internalNode?.height ?? 0;
             const screenX = position.x * viewport.zoom + viewport.x;
             const screenY = position.y * viewport.zoom + viewport.y;
-            const nodeElement = document.querySelector(
-              `[data-id="${selectedNode.id}"]`,
-            );
-            const nodeRect = nodeElement?.getBoundingClientRect();
-            const nodeWidth = nodeRect?.width;
             const panelTop =
-              screenY + (nodeRect?.height ?? 0) + 10 * viewport.zoom;
+              screenY + nodeHeight * viewport.zoom + 10 * viewport.zoom;
             return (
               <div
                 className={`pointer-events-auto absolute z-10 text-white transition-all duration-300 ${
@@ -594,9 +598,9 @@ export default function FlowWorkspace({
                     : "-translate-y-2 opacity-0"
                 }`}
                 style={{
-                  left: nodeRect?.left ?? screenX,
+                  left: screenX,
                   top: panelTop,
-                  width: nodeWidth,
+                  width: nodeWidth || undefined,
                 }}
               >
                 <div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/70 px-2 py-1.5 shadow-lg shadow-black/30">
@@ -663,5 +667,13 @@ export default function FlowWorkspace({
         }}
       />
     </div>
+  );
+}
+
+export default function FlowWorkspace(props: FlowWorkspaceProps) {
+  return (
+    <ReactFlowProvider>
+      <FlowWorkspaceInner {...props} />
+    </ReactFlowProvider>
   );
 }
