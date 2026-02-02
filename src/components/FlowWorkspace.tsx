@@ -486,18 +486,13 @@ export default function FlowWorkspace({
               selectedNode.positionAbsolute ?? selectedNode.position;
             const screenX = position.x * viewport.zoom + viewport.x;
             const screenY = position.y * viewport.zoom + viewport.y;
-            const fallbackWidth =
-              selectedNode.width ??
-              selectedNode.style?.width ??
-              (selectedNode.type === "question"
-                ? QUESTION_NODE_WIDTH
-                : SOURCE_NODE_WIDTH);
             const nodeElement = document.querySelector(
               `[data-id="${selectedNode.id}"]`,
             ) as HTMLElement | null;
             const nodeRect = nodeElement?.getBoundingClientRect();
-            const nodeWidth = nodeRect?.width ?? fallbackWidth;
-            const panelTop = (nodeRect?.bottom ?? screenY) + 0 * viewport.zoom;
+            const nodeWidth = nodeRect?.width;
+            const panelTop =
+              screenY + (nodeRect?.height ?? 0) + 10 * viewport.zoom;
             return (
               <div
                 className={`pointer-events-auto absolute z-10 text-white transition-all duration-300 ${
