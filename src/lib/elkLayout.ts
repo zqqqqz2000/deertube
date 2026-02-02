@@ -14,6 +14,7 @@ export const SOURCE_NODE_HEIGHT = 170;
 export const QUESTION_FALLBACK_OFFSET_X = 360;
 export const SOURCE_FALLBACK_OFFSET_X = 420;
 export const SOURCE_FALLBACK_SPACING_Y = 170;
+export const COLLISION_PADDING = 32;
 
 interface Point {
   x: number;
@@ -37,9 +38,12 @@ const elk = new ELK();
 const baseLayoutOptions: LayoutOptions = {
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "120",
-  "elk.spacing.nodeNode": "70",
-  "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "160",
+  "elk.spacing.nodeNode": "90",
+  "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
+  "elk.layered.nodePlacement.bk.fixedAlignment": "LEFT",
+  "elk.layered.nodePlacement.bk.edgeStraightening": "IMPROVE",
+  "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
 };
 
 export const getNodeSize = (node: FlowNode | null) => {
@@ -55,7 +59,11 @@ export const getNodeSize = (node: FlowNode | null) => {
   };
 };
 
-const toBounds = (point: Point, size: Size, padding = 24): Bounds => ({
+const toBounds = (
+  point: Point,
+  size: Size,
+  padding = COLLISION_PADDING,
+): Bounds => ({
   left: point.x - padding,
   right: point.x + size.width + padding,
   top: point.y - padding,
@@ -116,6 +124,41 @@ export const resolveRightBiasedPosition = ({
   return desired;
 };
 
+export const resolveColumnPosition = ({
+  desired,
+  nodes,
+  size,
+  stepY = 70,
+  stepX = 120,
+  rings = 10,
+}: {
+  desired: Point;
+  nodes: FlowNode[];
+  size: Size;
+  stepY?: number;
+  stepX?: number;
+  rings?: number;
+}): Point => {
+  for (let column = 0; column <= rings; column += 1) {
+    const x = desired.x + stepX * column;
+    if (column === 0 && !collides({ x, y: desired.y }, size, nodes)) {
+      return { x, y: desired.y };
+    }
+    for (let offset = 1; offset <= rings; offset += 1) {
+      const y = stepY * offset;
+      const up = { x, y: desired.y - y };
+      const down = { x, y: desired.y + y };
+      if (!collides(up, size, nodes)) {
+        return up;
+      }
+      if (!collides(down, size, nodes)) {
+        return down;
+      }
+    }
+  }
+  return desired;
+};
+
 const nodeById = (layout: ElkNode, id: string): ElkNode | undefined =>
   layout.children?.find((child) => child.id === id);
 
@@ -130,6 +173,59 @@ const layoutGraph = async (graph: ElkNode): Promise<ElkNode | null> => {
   } catch {
     return null;
   }
+};
+
+interface LayoutRequest {
+  nodes: FlowNode[];
+  edges: { id?: string; source: string; target: string }[];
+  direction?: "RIGHT" | "LEFT" | "DOWN" | "UP";
+}
+
+interface LayoutResult {
+  positions: Record<string, Point>;
+}
+
+export const layoutFlowWithElk = async ({
+  nodes,
+  edges,
+  direction = "RIGHT",
+}: LayoutRequest): Promise<LayoutResult> => {
+  const children: ElkNode[] = nodes.map((node) => {
+    const size = getNodeSize(node);
+    return {
+      id: node.id,
+      width: size.width,
+      height: size.height,
+    };
+  });
+
+  const elkEdges: ElkExtendedEdge[] = edges.map((edge, index) => ({
+    id: edge.id ?? `edge-${edge.source}-${edge.target}-${index}`,
+    sources: [edge.source],
+    targets: [edge.target],
+  }));
+
+  const graph: ElkNode = {
+    id: "root",
+    layoutOptions: { ...baseLayoutOptions, "elk.direction": direction },
+    children,
+    edges: elkEdges,
+  };
+
+  const layout = await layoutGraph(graph);
+  if (!layout) {
+    return { positions: {} };
+  }
+
+  const positions: Record<string, Point> = {};
+  layout.children?.forEach((node) => {
+    positions[node.id] = {
+      x: node.x ?? 0,
+      y: node.y ?? 0,
+    };
+  });
+
+  return { positions };
 };
 
 export const layoutQuestionWithElk = async ({
@@ -262,6 +358,11 @@ export const layoutSourcesWithElk = async ({
     y: questionPosition.y - (layoutQuestion.y ?? 0),
   };
 
+  const xCandidates = sourceIds
+    .map((id) => nodeById(layout, id)?.x)
+    .filter((value): value is number => typeof value === "number");
+  const snapX = xCandidates.length > 0 ? Math.max(...xCandidates) : null;
+
   return sourceIds.map((id, index) => {
     const node = nodeById(layout, id);
     if (!node) {
@@ -270,9 +371,11 @@ export const layoutSourcesWithElk = async ({
         y: questionPosition.y + index * SOURCE_FALLBACK_SPACING_Y,
       };
     }
+    const baseX =
+      snapX ?? node.x ?? questionPosition.x + SOURCE_FALLBACK_OFFSET_X;
     return applyDelta(
       {
-        x: node.x ?? questionPosition.x + SOURCE_FALLBACK_OFFSET_X,
+        x: baseX,
         y: node.y ?? questionPosition.y + index * SOURCE_FALLBACK_SPACING_Y,
       },
       delta,

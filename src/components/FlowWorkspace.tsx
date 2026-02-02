@@ -3,6 +3,7 @@ import ReactFlow, {
   Background,
   Controls,
   MiniMap,
+  Panel,
   type ReactFlowInstance,
   type Viewport,
   useEdgesState,
@@ -24,14 +25,11 @@ import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  QUESTION_NODE_HEIGHT,
   QUESTION_NODE_WIDTH,
-  SOURCE_NODE_HEIGHT,
   SOURCE_NODE_WIDTH,
-  layoutQuestionWithElk,
-  layoutSourcesWithElk,
-  resolveRightBiasedPosition,
 } from "../lib/elkLayout";
+import { placeQuestionNode, placeSourceNodes } from "../lib/flowPlacement";
+import { layoutFlowWithElk } from "../lib/elkLayout";
 import {
   createProfileDraft,
   ensureActiveProfileId,
@@ -86,6 +84,7 @@ export default function FlowWorkspace({
   const [panelVisible, setPanelVisible] = useState(false);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isLayouting, setIsLayouting] = useState(false);
   const lastQuestionId = useRef<string | null>(null);
   const hydrated = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -297,15 +296,12 @@ export default function FlowWorkspace({
     const parentPosition = parentNode?.position ?? { x: 0, y: 0 };
 
     const questionId = crypto.randomUUID();
-    const elkQuestionPosition = await layoutQuestionWithElk({
-      parent: parentNode,
+    const questionPosition = await placeQuestionNode({
+      parentNode,
       parentPosition,
       questionId,
-    });
-    const questionPosition = resolveRightBiasedPosition({
-      desired: elkQuestionPosition,
       nodes,
-      size: { width: QUESTION_NODE_WIDTH, height: QUESTION_NODE_HEIGHT },
+      edges,
     });
     const questionNode: QuestionNodeType = {
       id: questionId,
@@ -363,35 +359,12 @@ export default function FlowWorkspace({
           : undefined,
       });
 
-      const elkSourcePositions = await layoutSourcesWithElk({
-        questionPosition,
+      const sourcePositions = await placeSourceNodes({
         questionId,
-        sourceIds: result.sources.map((source) => source.id),
-      });
-      const placedNodes: FlowNode[] = [
-        ...nodes,
-        {
-          id: questionId,
-          type: "question",
-          position: questionPosition,
-          data: { question: questionText, answer: "" },
-          width: QUESTION_NODE_WIDTH,
-        },
-      ];
-      const sourcePositions = elkSourcePositions.map((position, index) => {
-        const resolved = resolveRightBiasedPosition({
-          desired: position,
-          nodes: placedNodes,
-          size: { width: SOURCE_NODE_WIDTH, height: SOURCE_NODE_HEIGHT },
-        });
-        placedNodes.push({
-          id: `__placed_${index}`,
-          type: "source",
-          position: resolved,
-          data: { title: "", url: "" },
-          width: SOURCE_NODE_WIDTH,
-        });
-        return resolved;
+        questionPosition,
+        nodes,
+        edges,
+        sources: result.sources.map((source) => ({ id: source.id })),
       });
       const sourceNodes: SourceNodeType[] = result.sources.map(
         (source, index) => ({
@@ -458,6 +431,7 @@ export default function FlowWorkspace({
     buildContextSummary,
     busy,
     flowInstance,
+    edges,
     nodes,
     project.path,
     prompt,
@@ -465,6 +439,28 @@ export default function FlowWorkspace({
     setEdges,
     setNodes,
   ]);
+
+  const handleAutoLayout = useCallback(async () => {
+    if (isLayouting || nodes.length === 0) {
+      return;
+    }
+    setIsLayouting(true);
+    const { positions } = await layoutFlowWithElk({
+      nodes,
+      edges,
+      direction: "RIGHT",
+    });
+    setNodes((prev) =>
+      prev.map((node) => ({
+        ...node,
+        position: positions[node.id] ?? node.position,
+      })),
+    );
+    requestAnimationFrame(() => {
+      flowInstance?.fitView({ padding: 0.2, duration: 400 });
+    });
+    setIsLayouting(false);
+  }, [edges, flowInstance, isLayouting, nodes, setNodes]);
 
   const handleNodeEnter = useCallback((_: unknown, node: FlowNode) => {
     if (node.type !== "source") {
@@ -549,6 +545,19 @@ export default function FlowWorkspace({
           fitView
         >
           <Background gap={20} size={1} color="rgba(255,255,255,0.08)" />
+          <Panel position="top-right" className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-white/15 bg-slate-900/80 text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+              onClick={() => {
+                void handleAutoLayout();
+              }}
+              disabled={isLayouting || nodes.length === 0}
+            >
+              {isLayouting ? "Layout..." : "Auto layout"}
+            </Button>
+          </Panel>
           <Controls
             showInteractive={false}
             className="rounded-xl border border-white/10 bg-slate-900/80 text-white"
