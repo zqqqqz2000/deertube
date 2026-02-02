@@ -26,10 +26,7 @@ import type {
 import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  QUESTION_NODE_WIDTH,
-  SOURCE_NODE_WIDTH,
-} from "../lib/elkLayout";
+import { QUESTION_NODE_WIDTH, SOURCE_NODE_WIDTH } from "../lib/elkLayout";
 import { placeQuestionNode, placeSourceNodes } from "../lib/flowPlacement";
 import { layoutFlowWithElk } from "../lib/elkLayout";
 import {
@@ -452,6 +449,7 @@ function FlowWorkspaceInner({
       nodes,
       edges,
       direction: "RIGHT",
+      useExistingPositions: true,
     });
     setNodes((prev) =>
       prev.map((node) => ({
@@ -631,11 +629,6 @@ function FlowWorkspaceInner({
               </div>
             );
           })()}
-        {!selectedId && (
-          <div className="pointer-events-none absolute right-6 top-6 rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-xs uppercase tracking-[0.2em] text-white/60">
-            Click a node to ask
-          </div>
-        )}
       </div>
       <SettingsPanel
         open={settingsOpen}

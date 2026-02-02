@@ -39,11 +39,22 @@ export const placeQuestionNode = async ({
   edges,
 }: QuestionPlacementInput): Promise<Point> => {
   if (parentNode) {
+    console.log(questionId, "que");
     const { positions } = await layoutFlowWithElk({
-      nodes,
+      nodes: [
+        ...nodes,
+        {
+          id: questionId,
+          type: "question",
+          data: { question: "", answer: "", new: true },
+          width: QUESTION_NODE_WIDTH,
+        },
+      ],
       edges: [...edges, { source: parentNode.id, target: questionId }],
       direction: "RIGHT",
+      useExistingPositions: true,
     });
+    console.log(positions);
     const placed = positions[questionId];
     if (placed) {
       return resolveRightBiasedPosition({
@@ -101,6 +112,7 @@ export const placeSourceNodes = async ({
     nodes: layoutNodes,
     edges: layoutEdges,
     direction: "RIGHT",
+    useExistingPositions: true,
   });
 
   const rawPositions = sources.map((source, index) => {

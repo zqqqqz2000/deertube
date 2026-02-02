@@ -39,11 +39,18 @@ const baseLayoutOptions: LayoutOptions = {
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
   "elk.layered.spacing.nodeNodeBetweenLayers": "160",
-  "elk.spacing.nodeNode": "90",
+  "elk.spacing.nodeNode": "100",
   "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
   "elk.layered.nodePlacement.bk.fixedAlignment": "LEFT",
   "elk.layered.nodePlacement.bk.edgeStraightening": "IMPROVE",
   "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
+  "elk.edgeRouting": "POLYLINE",
+  "elk.interactiveLayout": "true",
+  "elk.interactive": "true",
+  "elk.layered.crossingMinimization": "true",
+  "elk.layered.considerModelOrder.strategy": "PREFER_NODES",
+  "elk.layered.nodePlacement.favorStraightEdges": "true",
+  "elk.layered.compaction.postCompaction.strategy": "EDGE_LENGTH",
 };
 
 export const getNodeSize = (node: FlowNode | null) => {
@@ -179,6 +186,7 @@ interface LayoutRequest {
   nodes: FlowNode[];
   edges: { id?: string; source: string; target: string }[];
   direction?: "RIGHT" | "LEFT" | "DOWN" | "UP";
+  useExistingPositions?: boolean;
 }
 
 interface LayoutResult {
@@ -189,14 +197,26 @@ export const layoutFlowWithElk = async ({
   nodes,
   edges,
   direction = "RIGHT",
+  useExistingPositions = false,
 }: LayoutRequest): Promise<LayoutResult> => {
   const children: ElkNode[] = nodes.map((node) => {
     const size = getNodeSize(node);
-    return {
+    const positionedNode: ElkNode = {
       id: node.id,
       width: size.width,
       height: size.height,
     };
+    if (useExistingPositions) {
+      if (node.position) {
+        positionedNode.x = node.position.x;
+        positionedNode.y = node.position.y;
+      }
+      if (node.positionAbsolute) {
+        positionedNode.x = node.positionAbsolute.x;
+        positionedNode.y = node.positionAbsolute.y;
+      }
+    }
+    return positionedNode;
   });
 
   const elkEdges: ElkExtendedEdge[] = edges.map((edge, index) => ({
