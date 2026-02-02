@@ -1,13 +1,6 @@
 import type { ProviderProfile } from '../lib/settings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -62,44 +55,40 @@ export default function SettingsPanel({
         </SheetHeader>
         <ScrollArea className="flex-1">
           <div className="px-2 py-6 sm:px-6">
-            <Card className="border-white/10 bg-white/5 text-white">
-              <CardHeader>
-                <CardTitle className="text-sm uppercase tracking-[0.3em] text-white/60">
-                  Graph settings
-                </CardTitle>
-                <CardDescription className="text-white/60">
+            <div className="space-y-3">
+              <div>
+                <div className="text-sm uppercase tracking-[0.3em] text-white/60">Graph settings</div>
+                <div className="mt-1 text-sm text-white/60">
                   Choose the active profile for this graph.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="grid gap-2">
-                  <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
-                    Active profile
-                  </Label>
-                  <Select
-                    value={activeProfileId ?? ''}
-                    onValueChange={(value) => onActiveProfileChange(value)}
-                  >
-                    <SelectTrigger className="h-10 border-white/10 bg-slate-900/70 text-white">
-                      <SelectValue placeholder="Choose profile" />
-                    </SelectTrigger>
-                    <SelectContent className="border-white/10 bg-slate-900 text-white">
-                      {profiles.length === 0 ? (
-                        <SelectItem value="" disabled>
-                          No profiles yet
-                        </SelectItem>
-                      ) : (
-                        profiles.map((profile) => (
-                          <SelectItem key={profile.id} value={profile.id}>
-                            {profile.name}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+              <div className="grid gap-2">
+                <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                  Active profile
+                </Label>
+                <Select
+                  value={activeProfileId ?? ''}
+                  onValueChange={(value) => onActiveProfileChange(value)}
+                >
+                  <SelectTrigger className="h-10 border-white/10 bg-slate-900/70 text-white">
+                    <SelectValue placeholder="Choose profile" />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-slate-900 text-white">
+                    {profiles.length === 0 ? (
+                      <SelectItem value="" disabled>
+                        No profiles yet
+                      </SelectItem>
+                    ) : (
+                      profiles.map((profile) => (
+                        <SelectItem key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
 
             <Separator className="my-6 bg-white/10" />
 
@@ -118,14 +107,17 @@ export default function SettingsPanel({
               </Button>
             </div>
 
-            <div className="mt-4 flex flex-col gap-5">
+            <div className="mt-4 flex flex-col gap-6">
               {profiles.map((profile) => (
-                <Card key={profile.id} className="border-white/10 bg-slate-900/70 text-white">
-                  <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
+                <div key={profile.id} className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="text-sm font-semibold">
                       {profile.name}
                       {activeProfileId === profile.id && (
-                        <Badge variant="secondary" className="ml-2 border border-emerald-400/40 bg-emerald-500/10 text-emerald-200">
+                        <Badge
+                          variant="secondary"
+                          className="ml-2 border border-emerald-400/40 bg-emerald-500/10 text-emerald-200"
+                        >
                           Active
                         </Badge>
                       )}
@@ -139,78 +131,113 @@ export default function SettingsPanel({
                     >
                       Delete
                     </Button>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
-                      <div className="grid gap-2">
-                        <Label className="text-xs uppercase tracking-[0.2em] text-white/50">Name</Label>
-                        <Input
-                          className="border-white/10 bg-white/5 text-white"
-                          value={profile.name}
-                          onChange={(event) => onProfileChange(profile.id, { name: event.target.value })}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label className="text-xs uppercase tracking-[0.2em] text-white/50">Tavily API Key</Label>
-                        <Input
-                          className="border-white/10 bg-white/5 text-white"
-                          value={profile.tavilyApiKey}
-                          onChange={(event) => onProfileChange(profile.id, { tavilyApiKey: event.target.value })}
-                          placeholder="tvly-..."
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label className="text-xs uppercase tracking-[0.2em] text-white/50">Jina Reader Base URL</Label>
-                        <Input
-                          className="border-white/10 bg-white/5 text-white"
-                          value={profile.jinaReaderBaseUrl}
-                          onChange={(event) =>
-                            onProfileChange(profile.id, { jinaReaderBaseUrl: event.target.value })
-                          }
-                          placeholder="https://r.jina.ai/"
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label className="text-xs uppercase tracking-[0.2em] text-white/50">LLM Provider</Label>
-                        <Input
-                          className="border-white/10 bg-white/5 text-white"
-                          value={profile.llmProvider}
-                          onChange={(event) => onProfileChange(profile.id, { llmProvider: event.target.value })}
-                          placeholder="openai"
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label className="text-xs uppercase tracking-[0.2em] text-white/50">LLM Model ID</Label>
-                        <Input
-                          className="border-white/10 bg-white/5 text-white"
-                          value={profile.llmModelId}
-                          onChange={(event) => onProfileChange(profile.id, { llmModelId: event.target.value })}
-                          placeholder="gpt-4o-mini"
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label className="text-xs uppercase tracking-[0.2em] text-white/50">LLM API Key (optional)</Label>
-                        <Input
-                          className="border-white/10 bg-white/5 text-white"
-                          value={profile.llmApiKey}
-                          onChange={(event) => onProfileChange(profile.id, { llmApiKey: event.target.value })}
-                          placeholder="sk-..."
-                        />
-                      </div>
-                      <div className="grid gap-2 md:col-span-2">
-                        <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
-                          LLM Base URL
-                        </Label>
-                        <Input
-                          className="border-white/10 bg-white/5 text-white"
-                          value={profile.llmBaseUrl}
-                          onChange={(event) => onProfileChange(profile.id, { llmBaseUrl: event.target.value })}
-                          placeholder="https://api.openai.com/v1"
-                        />
-                      </div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label className="text-xs uppercase tracking-[0.2em] text-white/50">Name</Label>
+                    <Input
+                      className="border-white/10 bg-white/5 text-white"
+                      value={profile.name}
+                      onChange={(event) => onProfileChange(profile.id, { name: event.target.value })}
+                    />
+                  </div>
+
+                  <Separator className="bg-white/10" />
+
+                  <div className="space-y-3">
+                    <div className="text-xs uppercase tracking-[0.3em] text-white/50">Jina</div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                        Reader Base URL
+                      </Label>
+                      <Input
+                        className="border-white/10 bg-white/5 text-white"
+                        value={profile.jinaReaderBaseUrl}
+                        onChange={(event) =>
+                          onProfileChange(profile.id, { jinaReaderBaseUrl: event.target.value })
+                        }
+                        placeholder="https://r.jina.ai/"
+                      />
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+
+                  <Separator className="bg-white/10" />
+
+                  <div className="space-y-3">
+                    <div className="text-xs uppercase tracking-[0.3em] text-white/50">Tavily</div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                        API Key
+                      </Label>
+                      <Input
+                        className="border-white/10 bg-white/5 text-white"
+                        value={profile.tavilyApiKey}
+                        onChange={(event) =>
+                          onProfileChange(profile.id, { tavilyApiKey: event.target.value })
+                        }
+                        placeholder="tvly-..."
+                      />
+                    </div>
+                  </div>
+
+                  <Separator className="bg-white/10" />
+
+                  <div className="space-y-3">
+                    <div className="text-xs uppercase tracking-[0.3em] text-white/50">LLM</div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                        Provider
+                      </Label>
+                      <Input
+                        className="border-white/10 bg-white/5 text-white"
+                        value={profile.llmProvider}
+                        onChange={(event) =>
+                          onProfileChange(profile.id, { llmProvider: event.target.value })
+                        }
+                        placeholder="openai"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                        Model ID
+                      </Label>
+                      <Input
+                        className="border-white/10 bg-white/5 text-white"
+                        value={profile.llmModelId}
+                        onChange={(event) =>
+                          onProfileChange(profile.id, { llmModelId: event.target.value })
+                        }
+                        placeholder="gpt-4o-mini"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                        API Key (optional)
+                      </Label>
+                      <Input
+                        className="border-white/10 bg-white/5 text-white"
+                        value={profile.llmApiKey}
+                        onChange={(event) =>
+                          onProfileChange(profile.id, { llmApiKey: event.target.value })
+                        }
+                        placeholder="sk-..."
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                        Base URL
+                      </Label>
+                      <Input
+                        className="border-white/10 bg-white/5 text-white"
+                        value={profile.llmBaseUrl}
+                        onChange={(event) =>
+                          onProfileChange(profile.id, { llmBaseUrl: event.target.value })
+                        }
+                        placeholder="https://api.openai.com/v1"
+                      />
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
