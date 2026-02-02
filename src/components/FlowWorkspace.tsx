@@ -1,0 +1,424 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ReactFlow, {
+  Background,
+  Controls,
+  MiniMap,
+  type ReactFlowInstance,
+  type Viewport,
+  useEdgesState,
+  useNodesState,
+} from 'reactflow'
+import 'reactflow/dist/style.css'
+import { trpc } from '../lib/trpc'
+import QuestionNode from './nodes/QuestionNode'
+import SourceNode from './nodes/SourceNode'
+import type {
+  FlowEdge,
+  FlowNode,
+  QuestionNode as QuestionNodeType,
+  SourceNode as SourceNodeType,
+} from '../types/flow'
+
+type ProjectState = {
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+}
+
+type ProjectInfo = {
+  path: string
+  name: string
+}
+
+type FlowWorkspaceProps = {
+  project: ProjectInfo
+  initialState: ProjectState
+  onExit: () => void
+}
+
+const QUESTION_NODE_WIDTH = 360
+const SOURCE_NODE_WIDTH = 300
+const QUESTION_SPACING_Y = 260
+const SOURCE_SPACING_Y = 170
+const SOURCE_OFFSET_X = 420
+
+export default function FlowWorkspace({ project, initialState, onExit }: FlowWorkspaceProps) {
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(initialState.nodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>(initialState.edges)
+  const [prompt, setPrompt] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null)
+  const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 })
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const lastQuestionId = useRef<string | null>(null)
+  const hydrated = useRef(false)
+  const saveTimer = useRef<number | null>(null)
+  const initialFitDone = useRef(false)
+
+  const nodeTypes = useMemo(() => ({ question: QuestionNode, source: SourceNode }), [])
+
+  useEffect(() => {
+    if (initialState.nodes.length === 0) {
+      const rootId = crypto.randomUUID()
+      const rootNode: QuestionNodeType = {
+        id: rootId,
+        type: 'question',
+        position: { x: 0, y: 0 },
+        data: {
+          question: 'Start here',
+          answer: 'Select this node to ask your first question.',
+        },
+        width: QUESTION_NODE_WIDTH,
+      }
+      setNodes([rootNode])
+      setEdges([])
+      lastQuestionId.current = rootId
+      setSelectedId(rootId)
+      trpc.project.saveState
+        .mutate({
+          path: project.path,
+          state: {
+            nodes: [rootNode],
+            edges: [],
+            version: 1,
+          },
+        })
+        .catch(() => undefined)
+    } else {
+      setNodes(initialState.nodes)
+      setEdges(initialState.edges)
+      const lastQuestion = [...initialState.nodes].filter((node) => node.type === 'question').slice(-1)[0]
+      lastQuestionId.current = lastQuestion?.id ?? null
+    }
+    hydrated.current = true
+  }, [initialState.edges, initialState.nodes, setEdges, setNodes])
+
+  useEffect(() => {
+    if (!flowInstance || initialFitDone.current || nodes.length === 0) {
+      return
+    }
+    initialFitDone.current = true
+    requestAnimationFrame(() => {
+      flowInstance.fitView({ padding: 0.2, duration: 400 })
+    })
+  }, [flowInstance, nodes.length])
+
+  useEffect(() => {
+    if (!hydrated.current) {
+      return
+    }
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current)
+    }
+    saveTimer.current = window.setTimeout(() => {
+      trpc.project.saveState
+        .mutate({
+          path: project.path,
+          state: {
+            nodes,
+            edges,
+            version: 1,
+          },
+        })
+        .catch(() => undefined)
+    }, 500)
+    return () => {
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current)
+      }
+    }
+  }, [nodes, edges, project.path])
+
+  const buildContextPath = useCallback(
+    (targetId: string) => {
+      const visited = new Set<string>()
+      const pathNodes: FlowNode[] = []
+      let currentId: string | null = targetId
+
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId)
+        const currentNode = nodes.find((node) => node.id === currentId)
+        if (!currentNode) {
+          break
+        }
+        pathNodes.push(currentNode)
+        const parentEdge = edges.find((edge) => edge.target === currentId)
+        currentId = parentEdge?.source ?? null
+      }
+
+      return pathNodes.reverse()
+    },
+    [edges, nodes],
+  )
+
+  const buildContextSummary = useCallback(
+    (targetId: string) => {
+      const path = buildContextPath(targetId)
+      if (path.length === 0) {
+        return ''
+      }
+      return path
+        .map((node) => {
+          if (node.type === 'question') {
+            const data = node.data as QuestionNodeType['data']
+            return `Q: ${data.question}\nA: ${data.answer}`
+          }
+          if (node.type === 'source') {
+            const data = node.data as SourceNodeType['data']
+            return `Source: ${data.title}\n${data.url}`
+          }
+          return ''
+        })
+        .filter(Boolean)
+        .join('\n\n')
+    },
+    [buildContextPath],
+  )
+
+  const handleAsk = useCallback(async () => {
+    if (!prompt.trim() || busy || !selectedId) {
+      return
+    }
+    const questionText = prompt.trim()
+    setPrompt('')
+    setBusy(true)
+
+    const parentNode = nodes.find((node) => node.id === selectedId) ?? null
+    const parentPosition = parentNode?.position ?? { x: 0, y: 0 }
+
+    const questionId = crypto.randomUUID()
+    const questionPosition = {
+      x: parentPosition.x,
+      y: parentPosition.y + QUESTION_SPACING_Y,
+    }
+    const questionNode: QuestionNodeType = {
+      id: questionId,
+      type: 'question',
+      position: questionPosition,
+      data: {
+        question: questionText,
+        answer: 'Searching and reasoning...',
+      },
+      width: QUESTION_NODE_WIDTH,
+    }
+
+    setNodes((prev: FlowNode[]) => [...prev, questionNode])
+    if (selectedId) {
+      setEdges((prev: FlowEdge[]) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          source: selectedId,
+          target: questionId,
+          type: 'smoothstep',
+        },
+      ])
+    } else if (lastQuestionId.current) {
+      setEdges((prev: FlowEdge[]) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          source: lastQuestionId.current,
+          target: questionId,
+          type: 'smoothstep',
+        },
+      ])
+    }
+    lastQuestionId.current = questionId
+    setSelectedId(questionId)
+
+    try {
+      const context = selectedId ? buildContextSummary(selectedId) : ''
+      const result = await trpc.deepSearch.run.mutate({
+        projectPath: project.path,
+        query: questionText,
+        maxResults: 5,
+        context,
+      })
+
+      const sourceNodes: SourceNodeType[] = result.sources.map((source, index) => ({
+        id: source.id,
+        type: 'source',
+        position: {
+          x: questionPosition.x + SOURCE_OFFSET_X,
+          y: questionPosition.y + index * SOURCE_SPACING_Y,
+        },
+        data: {
+          title: source.title,
+          url: source.url,
+          snippet: source.snippet,
+        },
+        width: SOURCE_NODE_WIDTH,
+      }))
+
+      setNodes((prev: FlowNode[]) =>
+        prev
+          .map((node) => {
+            if (node.id === questionId && node.type === 'question') {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  answer: result.answer,
+                },
+              }
+            }
+            return node
+          })
+          .concat(sourceNodes),
+      )
+
+      const sourceEdges: FlowEdge[] = result.sources.map((source) => ({
+        id: crypto.randomUUID(),
+        source: questionId,
+        target: source.id,
+        type: 'smoothstep',
+      }))
+      setEdges((prev: FlowEdge[]) => [...prev, ...sourceEdges])
+
+      requestAnimationFrame(() => {
+        flowInstance?.fitView({ padding: 0.2, duration: 400 })
+      })
+    } catch (error) {
+      setNodes((prev: FlowNode[]) =>
+        prev.map((node) => {
+          if (node.id === questionId && node.type === 'question') {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                answer: 'Request failed. Please try again.',
+              },
+            }
+          }
+          return node
+        }),
+      )
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, flowInstance, nodes, project.path, prompt, setEdges, setNodes])
+
+  const handleNodeEnter = useCallback((_: unknown, node: FlowNode) => {
+    if (node.type !== 'source') {
+      return
+    }
+    const data = node.data
+    if (!data?.url) {
+      return
+    }
+    const width = Math.min(window.innerWidth * 0.6, 980)
+    const height = Math.min(window.innerHeight * 0.65, 720)
+    const x = window.innerWidth - width - 24
+    const y = 24
+    trpc.preview
+      .show
+      .mutate({
+        url: data.url,
+        bounds: { x, y, width, height },
+      })
+      .catch(() => undefined)
+  }, [])
+
+  const handleNodeLeave = useCallback(() => {
+    trpc.preview.hide.mutate().catch(() => undefined)
+  }, [])
+
+  return (
+    <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+      <header className="flex flex-wrap items-center justify-between gap-6 border-b border-white/10 bg-slate-950/80 px-8 py-5 backdrop-blur">
+        <div>
+          <div className="text-lg font-semibold text-white">{project.name}</div>
+          <div className="text-xs text-white/50">{project.path}</div>
+        </div>
+        <button
+          className="rounded-full border border-white/15 px-4 py-2 text-xs uppercase tracking-[0.2em] text-white/80 transition hover:border-white/30 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
+          onClick={() => {
+            trpc.preview.hide.mutate().catch(() => undefined)
+            onExit()
+          }}
+          disabled={busy}
+        >
+          Switch project
+        </button>
+      </header>
+      <div className="relative flex-1">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes}
+          onInit={(instance) => {
+            setFlowInstance(instance)
+            setViewport(instance.getViewport())
+          }}
+          onMove={(_, nextViewport) => setViewport(nextViewport)}
+          onNodeClick={(_, node) => {
+            setSelectedId(node.id)
+            setPrompt('')
+          }}
+          onPaneClick={() => setSelectedId(null)}
+          onNodeMouseEnter={handleNodeEnter}
+          onNodeMouseLeave={handleNodeLeave}
+          defaultEdgeOptions={{
+            type: 'smoothstep',
+            style: { stroke: 'rgba(255,255,255,0.35)', strokeWidth: 1.6 },
+          }}
+          className="h-full w-full"
+          fitView
+        >
+          <Background gap={20} size={1} color="rgba(255,255,255,0.08)" />
+          <Controls showInteractive={false} className="rounded-xl border border-white/10 bg-slate-900/80 text-white" />
+          <MiniMap className="rounded-xl border border-white/10 bg-slate-900/70" zoomable pannable />
+        </ReactFlow>
+        {selectedId && flowInstance && (() => {
+          const selectedNode = nodes.find((node) => node.id === selectedId)
+          if (!selectedNode) {
+            return null
+          }
+          const position = (selectedNode.positionAbsolute ?? selectedNode.position)
+          const screenX = position.x * viewport.zoom + viewport.x
+          const screenY = position.y * viewport.zoom + viewport.y
+          return (
+            <div
+              className="pointer-events-auto absolute z-10 w-[320px] rounded-2xl border border-white/10 bg-slate-950/90 p-3 text-white shadow-xl shadow-black/50"
+              style={{
+                left: screenX + 20,
+                top: screenY + 20,
+              }}
+            >
+              <div className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">
+                Ask on selected node
+              </div>
+              <input
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="Ask a research question..."
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    handleAsk()
+                  }
+                }}
+                disabled={busy}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:border-white/20 focus:outline-none"
+              />
+              <button
+                className="mt-3 w-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 px-4 py-2 text-xs font-semibold text-slate-900 shadow-lg shadow-orange-500/30 transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={handleAsk}
+                disabled={busy || !prompt.trim()}
+              >
+                {busy ? 'Thinking...' : 'Ask'}
+              </button>
+            </div>
+          )
+        })()}
+        {!selectedId && (
+          <div className="pointer-events-none absolute right-6 top-6 rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-xs uppercase tracking-[0.2em] text-white/60">
+            Click a node to ask
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
