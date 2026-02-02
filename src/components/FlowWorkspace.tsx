@@ -8,6 +8,7 @@ import ReactFlow, {
   type ReactFlowInstance,
   type Viewport,
   useStore,
+  useReactFlow,
   useEdgesState,
   useNodesState,
 } from "reactflow";
@@ -84,7 +85,7 @@ function FlowWorkspaceInner({
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isLayouting, setIsLayouting] = useState(false);
-  const nodeInternals = useStore((state) => state.nodeInternals);
+  const { getNode } = useReactFlow();
   const lastQuestionId = useRef<string | null>(null);
   const hydrated = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -577,7 +578,7 @@ function FlowWorkspaceInner({
             if (!selectedNode) {
               return null;
             }
-            const internalNode = nodeInternals.get(selectedNode.id);
+            const internalNode = getNode(selectedNode.id);
             const position =
               internalNode?.positionAbsolute ??
               selectedNode.positionAbsolute ??
