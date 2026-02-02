@@ -1,4 +1,4 @@
-export type ProviderProfile = {
+export interface ProviderProfile {
   id: string
   name: string
   tavilyApiKey: string

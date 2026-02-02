@@ -1,4 +1,5 @@
 import ELK from "elkjs/lib/elk.bundled";
+
 import type {
   ElkExtendedEdge,
   LayoutOptions,
@@ -14,9 +15,22 @@ export const QUESTION_FALLBACK_OFFSET_X = 360;
 export const SOURCE_FALLBACK_OFFSET_X = 420;
 export const SOURCE_FALLBACK_SPACING_Y = 170;
 
-type Point = { x: number; y: number };
-type Size = { width: number; height: number };
-type Bounds = { left: number; right: number; top: number; bottom: number };
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Size {
+  width: number;
+  height: number;
+}
+
+interface Bounds {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
 
 const elk = new ELK();
 

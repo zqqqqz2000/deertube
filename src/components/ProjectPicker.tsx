@@ -3,7 +3,7 @@ import { trpc } from '../lib/trpc'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 
-export type ProjectOpenResult = {
+export interface ProjectOpenResult {
   path: string
   name: string
   state: {
@@ -12,13 +12,13 @@ export type ProjectOpenResult = {
   }
 }
 
-type RecentProject = {
+interface RecentProject {
   path: string
   name: string
   lastOpened: string
 }
 
-type ProjectPickerProps = {
+interface ProjectPickerProps {
   onOpen: (project: ProjectOpenResult) => void
 }
 

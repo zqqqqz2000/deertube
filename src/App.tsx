@@ -3,12 +3,12 @@ import type { FlowEdge, FlowNode } from './types/flow'
 import ProjectPicker, { type ProjectOpenResult } from './components/ProjectPicker'
 import FlowWorkspace from './components/FlowWorkspace'
 
-type ProjectInfo = {
+interface ProjectInfo {
   path: string
   name: string
 }
 
-type ProjectState = {
+interface ProjectState {
   nodes: FlowNode[]
   edges: FlowEdge[]
 }

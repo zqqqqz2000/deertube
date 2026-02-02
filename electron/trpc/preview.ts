@@ -1,6 +1,6 @@
 import type { BrowserWindow, WebContentsView } from 'electron'
 
-type PreviewBounds = {
+interface PreviewBounds {
   x: number
   y: number
   width: number
@@ -16,7 +16,7 @@ class PreviewController {
     this.window = window
   }
 
-  private async ensureView() {
+  private ensureView() {
     if (!this.window) {
       return null
     }
@@ -33,7 +33,7 @@ class PreviewController {
   }
 
   async show(url: string, bounds: PreviewBounds) {
-    const view = await this.ensureView()
+    const view = this.ensureView()
     if (!view) {
       return
     }

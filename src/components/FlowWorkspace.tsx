@@ -15,7 +15,9 @@ import SourceNode from "./nodes/SourceNode";
 import type {
   FlowEdge,
   FlowNode,
+  FlowNodeData,
   QuestionNode as QuestionNodeType,
+  SourceNodeData,
   SourceNode as SourceNodeType,
 } from "../types/flow";
 import SettingsPanel from "./SettingsPanel";
@@ -40,28 +42,28 @@ import {
   type ProviderProfile,
 } from "../lib/settings";
 
-type ProjectState = {
+interface ProjectState {
   nodes: FlowNode[];
   edges: FlowEdge[];
-};
+}
 
-type ProjectInfo = {
+interface ProjectInfo {
   path: string;
   name: string;
-};
+}
 
-type FlowWorkspaceProps = {
+interface FlowWorkspaceProps {
   project: ProjectInfo;
   initialState: ProjectState;
   onExit: () => void;
-};
+}
 
 export default function FlowWorkspace({
   project,
   initialState,
   onExit,
 }: FlowWorkspaceProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNodeData>(
     initialState.nodes,
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>(
@@ -193,7 +195,13 @@ export default function FlowWorkspace({
       lastQuestionId.current = lastQuestion?.id ?? null;
     }
     hydrated.current = true;
-  }, [initialState.edges, initialState.nodes, setEdges, setNodes]);
+  }, [
+    initialState.edges,
+    initialState.nodes,
+    project.path,
+    setEdges,
+    setNodes,
+  ]);
 
   useEffect(() => {
     if (!flowInstance || initialFitDone.current || nodes.length === 0) {
@@ -427,7 +435,7 @@ export default function FlowWorkspace({
       requestAnimationFrame(() => {
         flowInstance?.fitView({ padding: 0.2, duration: 400 });
       });
-    } catch (error) {
+    } catch {
       setNodes((prev: FlowNode[]) =>
         prev.map((node) => {
           if (node.id === questionId && node.type === "question") {
@@ -447,11 +455,13 @@ export default function FlowWorkspace({
     }
   }, [
     activeProfile,
+    buildContextSummary,
     busy,
     flowInstance,
     nodes,
     project.path,
     prompt,
+    selectedId,
     setEdges,
     setNodes,
   ]);
@@ -460,8 +470,8 @@ export default function FlowWorkspace({
     if (node.type !== "source") {
       return;
     }
-    const data = node.data;
-    if (!data?.url) {
+    const data = node.data as SourceNodeData;
+    if (!data.url) {
       return;
     }
     const width = Math.min(window.innerWidth * 0.6, 980);
@@ -529,6 +539,7 @@ export default function FlowWorkspace({
           onPaneClick={() => setSelectedId(null)}
           onNodeDragStart={() => setIsDragging(true)}
           onNodeDragStop={() => setIsDragging(false)}
+          onNodeMouseEnter={handleNodeEnter}
           onNodeMouseLeave={handleNodeLeave}
           defaultEdgeOptions={{
             type: "smoothstep",
@@ -561,7 +572,7 @@ export default function FlowWorkspace({
             const screenY = position.y * viewport.zoom + viewport.y;
             const nodeElement = document.querySelector(
               `[data-id="${selectedNode.id}"]`,
-            ) as HTMLElement | null;
+            );
             const nodeRect = nodeElement?.getBoundingClientRect();
             const nodeWidth = nodeRect?.width;
             const panelTop =
@@ -587,7 +598,7 @@ export default function FlowWorkspace({
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
-                        handleAsk();
+                        void handleAsk();
                       }
                     }}
                     disabled={busy}
@@ -596,7 +607,9 @@ export default function FlowWorkspace({
                   <Button
                     size="sm"
                     className="h-8 rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 px-4 text-xs font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
-                    onClick={handleAsk}
+                    onClick={() => {
+                      void handleAsk();
+                    }}
                     disabled={busy || !prompt.trim()}
                   >
                     {busy ? "..." : "Send"}

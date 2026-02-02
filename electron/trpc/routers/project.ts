@@ -4,14 +4,14 @@ import fs from 'node:fs/promises'
 import { z } from 'zod'
 import { baseProcedure, createTRPCRouter } from '../init'
 
-type ProjectState = {
+interface ProjectState {
   version: number
   nodes: unknown[]
   edges: unknown[]
   updatedAt: string
 }
 
-type RecentProject = {
+interface RecentProject {
   path: string
   name: string
   lastOpened: string

@@ -20,7 +20,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 process.env.APP_ROOT = path.join(__dirname, '..')
 
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
-export const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
+export const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 export const MAIN_DIST = path.join(process.env.APP_ROOT, 'dist-electron')
 export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
@@ -41,14 +41,14 @@ function createWindow() {
   createIPCHandler({
     router: appRouter,
     windows: [win],
-    createContext: async ({ event }) => createTRPCContext({ event }),
+    createContext: ({ event }) => createTRPCContext({ event }),
   })
 
   if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL)
+    void win.loadURL(VITE_DEV_SERVER_URL)
   } else {
     // win.loadFile('dist/index.html')
-    win.loadFile(path.join(RENDERER_DIST, 'index.html'))
+    void win.loadFile(path.join(RENDERER_DIST, 'index.html'))
   }
 }
 
@@ -70,4 +70,4 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+void app.whenReady().then(createWindow)

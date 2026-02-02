@@ -7,13 +7,28 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { baseProcedure, createTRPCRouter } from '../init'
 import { ensureProjectStore } from './project'
 
-type TavilySearchResult = {
-  title?: string
-  url?: string
-  content?: string
-  raw_content?: string
-  snippet?: string
-  description?: string
+const TavilySearchResultSchema = z.object({
+  title: z.string().optional(),
+  url: z.string().optional(),
+  content: z.string().optional(),
+  raw_content: z.string().optional(),
+  snippet: z.string().optional(),
+  description: z.string().optional(),
+})
+
+type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>
+
+const TavilyResponseSchema = z.object({
+  results: z.array(TavilySearchResultSchema).optional(),
+})
+
+const parseJson = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw) as unknown
+  }
+  catch {
+    return null
+  }
 }
 
 async function writeJsonFile(filePath: string, data: unknown) {
@@ -41,9 +56,9 @@ async function fetchTavilySearch(query: string, maxResults: number): Promise<Tav
   if (!response.ok) {
     throw new Error(`Tavily search failed: ${response.status}`)
   }
-  const data = await response.json()
-  const results = Array.isArray(data?.results) ? data.results : []
-  return results as TavilySearchResult[]
+  const parsed = TavilyResponseSchema.safeParse(await response.json())
+  const results = parsed.success ? parsed.data.results ?? [] : []
+  return results
 }
 
 async function fetchTavilySearchWithKey(
@@ -67,9 +82,9 @@ async function fetchTavilySearchWithKey(
   if (!response.ok) {
     throw new Error(`Tavily search failed: ${response.status}`)
   }
-  const data = await response.json()
-  const results = Array.isArray(data?.results) ? data.results : []
-  return results as TavilySearchResult[]
+  const parsed = TavilyResponseSchema.safeParse(await response.json())
+  const results = parsed.success ? parsed.data.results ?? [] : []
+  return results
 }
 
 async function fetchJinaReaderMarkdown(url: string, baseUrl?: string): Promise<string> {
@@ -84,22 +99,28 @@ async function fetchJinaReaderMarkdown(url: string, baseUrl?: string): Promise<s
     throw new Error(`Jina reader failed: ${response.status}`)
   }
   const raw = await response.text()
-  try {
-    const data = JSON.parse(raw)
-    if (typeof data === 'string') {
-      return data
-    }
-    if (data?.content) {
-      return data.content as string
-    }
-    if (data?.data?.content) {
-      return data.data.content as string
-    }
-    return JSON.stringify(data, null, 2)
-  }
-  catch {
+  const parsed = parseJson(raw)
+  if (parsed === null) {
     return raw
   }
+  if (typeof parsed === 'string') {
+    return parsed
+  }
+  if (typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>
+    if (typeof obj.content === 'string') {
+      return obj.content
+    }
+    const nested = obj.data
+    if (nested && typeof nested === 'object') {
+      const nestedContent = (nested as Record<string, unknown>).content
+      if (typeof nestedContent === 'string') {
+        return nestedContent
+      }
+    }
+    return JSON.stringify(obj, null, 2)
+  }
+  return raw
 }
 
 export const deepSearchRouter = createTRPCRouter({
@@ -168,13 +189,15 @@ export const deepSearchRouter = createTRPCRouter({
       })
 
       let answer = 'Search completed.'
-      const llmProvider = (input.settings?.llmProvider ?? 'openai').trim()
+      const rawProvider = input.settings?.llmProvider?.trim()
+      const llmProvider = rawProvider && rawProvider.length > 0 ? rawProvider : 'openai'
       const llmModelId = input.settings?.llmModelId ?? 'gpt-4o-mini'
       const providerApiKey = input.settings?.llmApiKey
+      const rawBaseUrl = input.settings?.llmBaseUrl?.trim()
       const providerBaseUrl =
-        input.settings?.llmBaseUrl?.trim() ||
-        process.env.OPENAI_BASE_URL ||
-        'https://api.openai.com/v1'
+        rawBaseUrl && rawBaseUrl.length > 0
+          ? rawBaseUrl
+          : (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1')
       const contextBlock = input.context
         ? `Context from current graph path:\n${input.context}\n\n`
         : ''

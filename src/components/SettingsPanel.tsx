@@ -20,7 +20,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 
-type SettingsPanelProps = {
+interface SettingsPanelProps {
   open: boolean
   profiles: ProviderProfile[]
   activeProfileId: string | null
