@@ -600,7 +600,7 @@ function FlowWorkspaceInner({
                 style={{
                   left: screenX,
                   top: panelTop,
-                  width: nodeWidth || undefined,
+                  width: nodeWidth ? nodeWidth * viewport.zoom : undefined,
                 }}
               >
                 <div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/70 px-2 py-1.5 shadow-lg shadow-black/30">
