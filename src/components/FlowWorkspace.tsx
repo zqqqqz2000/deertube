@@ -18,6 +18,18 @@ import type {
   QuestionNode as QuestionNodeType,
   SourceNode as SourceNodeType,
 } from '../types/flow'
+import SettingsPanel from './SettingsPanel'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  createProfileDraft,
+  ensureActiveProfileId,
+  loadActiveProfileId,
+  loadProfiles,
+  saveActiveProfileId,
+  saveProfiles,
+  type ProviderProfile,
+} from '../lib/settings'
 
 type ProjectState = {
   nodes: FlowNode[]
@@ -49,12 +61,36 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 })
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [profiles, setProfiles] = useState<ProviderProfile[]>(() => loadProfiles())
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(() =>
+    loadActiveProfileId(project.path),
+  )
   const lastQuestionId = useRef<string | null>(null)
   const hydrated = useRef(false)
   const saveTimer = useRef<number | null>(null)
   const initialFitDone = useRef(false)
 
   const nodeTypes = useMemo(() => ({ question: QuestionNode, source: SourceNode }), [])
+  const activeProfile = useMemo(
+    () => profiles.find((profile) => profile.id === activeProfileId) ?? null,
+    [profiles, activeProfileId],
+  )
+
+  useEffect(() => {
+    const loadedProfiles = loadProfiles()
+    const loadedActiveId = loadActiveProfileId(project.path)
+    setProfiles(loadedProfiles)
+    setActiveProfileId(ensureActiveProfileId(project.path, loadedProfiles, loadedActiveId))
+  }, [project.path])
+
+  useEffect(() => {
+    saveProfiles(profiles)
+  }, [profiles])
+
+  useEffect(() => {
+    saveActiveProfileId(project.path, activeProfileId)
+  }, [activeProfileId, project.path])
 
   useEffect(() => {
     if (initialState.nodes.length === 0) {
@@ -233,6 +269,16 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
         query: questionText,
         maxResults: 5,
         context,
+        settings: activeProfile
+          ? {
+              tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
+              jinaReaderBaseUrl: activeProfile.jinaReaderBaseUrl.trim() || undefined,
+              llmProvider: activeProfile.llmProvider.trim() || undefined,
+              llmModelId: activeProfile.llmModelId.trim() || undefined,
+              llmApiKey: activeProfile.llmApiKey.trim() || undefined,
+              llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
+            }
+          : undefined,
       })
 
       const sourceNodes: SourceNodeType[] = result.sources.map((source, index) => ({
@@ -296,7 +342,7 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
     } finally {
       setBusy(false)
     }
-  }, [busy, flowInstance, nodes, project.path, prompt, setEdges, setNodes])
+  }, [activeProfile, busy, flowInstance, nodes, project.path, prompt, setEdges, setNodes])
 
   const handleNodeEnter = useCallback((_: unknown, node: FlowNode) => {
     if (node.type !== 'source') {
@@ -330,16 +376,26 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
           <div className="text-lg font-semibold text-white">{project.name}</div>
           <div className="text-xs text-white/50">{project.path}</div>
         </div>
-        <button
-          className="rounded-full border border-white/15 px-4 py-2 text-xs uppercase tracking-[0.2em] text-white/80 transition hover:border-white/30 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-60"
-          onClick={() => {
-            trpc.preview.hide.mutate().catch(() => undefined)
-            onExit()
-          }}
-          disabled={busy}
-        >
-          Switch project
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="outline"
+            className="border-white/15 bg-transparent text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+            onClick={() => setSettingsOpen(true)}
+          >
+            Settings
+          </Button>
+          <Button
+            variant="outline"
+            className="border-white/15 bg-transparent text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+            onClick={() => {
+              trpc.preview.hide.mutate().catch(() => undefined)
+              onExit()
+            }}
+            disabled={busy}
+          >
+            Switch project
+          </Button>
+        </div>
       </header>
       <div className="relative flex-1">
         <ReactFlow
@@ -390,7 +446,7 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
               <div className="text-[0.65rem] uppercase tracking-[0.2em] text-white/50">
                 Ask on selected node
               </div>
-              <input
+              <Input
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 placeholder="Ask a research question..."
@@ -401,15 +457,15 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
                   }
                 }}
                 disabled={busy}
-                className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:border-white/20 focus:outline-none"
+                className="mt-2 h-8 border-white/10 bg-white/5 text-xs text-white placeholder:text-white/40 focus-visible:ring-0"
               />
-              <button
-                className="mt-3 w-full rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 px-4 py-2 text-xs font-semibold text-slate-900 shadow-lg shadow-orange-500/30 transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+              <Button
+                className="mt-3 w-full bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-xs font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
                 onClick={handleAsk}
                 disabled={busy || !prompt.trim()}
               >
                 {busy ? 'Thinking...' : 'Ask'}
-              </button>
+              </Button>
             </div>
           )
         })()}
@@ -419,6 +475,33 @@ export default function FlowWorkspace({ project, initialState, onExit }: FlowWor
           </div>
         )}
       </div>
+      <SettingsPanel
+        open={settingsOpen}
+        profiles={profiles}
+        activeProfileId={activeProfileId}
+        onClose={() => setSettingsOpen(false)}
+        onActiveProfileChange={(id) => setActiveProfileId(id)}
+        onProfileAdd={() => {
+          setProfiles((prev) => {
+            const nextIndex = prev.length + 1
+            return [...prev, createProfileDraft(`Profile ${nextIndex}`)]
+          })
+        }}
+        onProfileDelete={(id) => {
+          setProfiles((prev) => {
+            const next = prev.filter((profile) => profile.id !== id)
+            if (activeProfileId === id) {
+              setActiveProfileId(next[0]?.id ?? null)
+            }
+            return next
+          })
+        }}
+        onProfileChange={(id, patch) => {
+          setProfiles((prev) =>
+            prev.map((profile) => (profile.id === id ? { ...profile, ...patch } : profile)),
+          )
+        }}
+      />
     </div>
   )
 }

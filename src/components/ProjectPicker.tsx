@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { trpc } from '../lib/trpc'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
 
 export type ProjectOpenResult = {
   path: string
@@ -65,58 +67,67 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-12 px-8 py-16">
-        <div className="flex flex-wrap items-center justify-between gap-10 rounded-3xl border border-white/10 bg-white/5 p-10 shadow-2xl shadow-black/40 backdrop-blur">
-          <div className="max-w-2xl">
-            <p className="text-xs uppercase tracking-[0.3em] text-white/60">DeepSearch Workspace</p>
-            <h1 className="mt-3 text-3xl font-semibold text-white md:text-4xl">
-              Choose a project directory
-            </h1>
-            <p className="mt-4 text-sm text-white/70 md:text-base">
-              Your knowledge graph and source archives live inside the selected folder.
-            </p>
-          </div>
-          <button
-            className="rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 px-6 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-orange-500/30 transition hover:-translate-y-0.5 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={handleBrowse}
-            disabled={loading}
-          >
-            {loading ? 'Opening...' : 'Browse for folder'}
-          </button>
-        </div>
+        <Card className="border-white/10 bg-white/5 text-white shadow-2xl shadow-black/40 backdrop-blur">
+          <CardContent className="flex flex-wrap items-center justify-between gap-10 p-10">
+            <div className="max-w-2xl">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/60">DeepSearch Workspace</p>
+              <h1 className="mt-3 text-3xl font-semibold text-white md:text-4xl">
+                Choose a project directory
+              </h1>
+              <p className="mt-4 text-sm text-white/70 md:text-base">
+                Your knowledge graph and source archives live inside the selected folder.
+              </p>
+            </div>
+            <Button
+              className="bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-sm font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
+              onClick={handleBrowse}
+              disabled={loading}
+            >
+              {loading ? 'Opening...' : 'Browse for folder'}
+            </Button>
+          </CardContent>
+        </Card>
         <div className="flex flex-col gap-4">
           <div className="text-xs uppercase tracking-[0.3em] text-white/50">Recent projects</div>
           {recents.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-6 text-sm text-white/60">
-              No recent projects yet.
-            </div>
+            <Card className="border-dashed border-white/10 bg-white/5 text-white/60">
+              <CardContent className="p-6 text-sm">No recent projects yet.</CardContent>
+            </Card>
           ) : (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {recents.map((project) => (
-                <div
+                <Card
                   key={project.path}
-                  className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-900/70 p-5 text-left text-white shadow-lg shadow-black/40"
+                  className="border-white/10 bg-slate-900/70 text-left text-white shadow-lg shadow-black/40"
                 >
-                  <button
-                    className="text-left transition hover:-translate-y-0.5 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={() => handleOpenPath(project.path)}
-                    disabled={loading}
-                  >
-                    <div className="text-lg font-semibold">{project.name}</div>
-                    <div className="text-xs text-white/60">{project.path}</div>
-                    <div className="text-xs text-white/40">
-                      {new Date(project.lastOpened).toLocaleString()}
-                    </div>
-                  </button>
-                  <div className="flex items-center justify-end">
-                    <button
-                      className="rounded-full border border-red-400/40 px-3 py-1 text-[0.65rem] uppercase tracking-[0.2em] text-red-200 transition hover:border-red-300/70 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                      onClick={() => handleDelete(project.path)}
+                  <CardContent className="flex h-full flex-col gap-3 p-5">
+                    <Button
+                      variant="ghost"
+                      className="h-auto w-full justify-start p-0 text-left hover:bg-transparent"
+                      onClick={() => handleOpenPath(project.path)}
                       disabled={loading}
                     >
-                      Delete
-                    </button>
-                  </div>
-                </div>
+                      <div>
+                        <div className="text-lg font-semibold">{project.name}</div>
+                        <div className="text-xs text-white/60">{project.path}</div>
+                        <div className="text-xs text-white/40">
+                          {new Date(project.lastOpened).toLocaleString()}
+                        </div>
+                      </div>
+                    </Button>
+                    <div className="mt-auto flex items-center justify-end">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-red-400/40 text-[0.65rem] uppercase tracking-[0.2em] text-red-200 hover:bg-red-500/10 hover:text-red-200"
+                        onClick={() => handleDelete(project.path)}
+                        disabled={loading}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
               ))}
             </div>
           )}

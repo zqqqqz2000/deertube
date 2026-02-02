@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { generateText } from 'ai'
-import { openai } from '@ai-sdk/openai'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { baseProcedure, createTRPCRouter } from '../init'
 import { ensureProjectStore } from './project'
 
@@ -46,8 +46,35 @@ async function fetchTavilySearch(query: string, maxResults: number): Promise<Tav
   return results as TavilySearchResult[]
 }
 
-async function fetchJinaReaderMarkdown(url: string): Promise<string> {
-  const readerUrl = `https://r.jina.ai/${url}`
+async function fetchTavilySearchWithKey(
+  query: string,
+  maxResults: number,
+  apiKey: string,
+): Promise<TavilySearchResult[]> {
+  const response = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      query,
+      max_results: maxResults,
+      include_raw_content: false,
+      search_depth: 'advanced',
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(`Tavily search failed: ${response.status}`)
+  }
+  const data = await response.json()
+  const results = Array.isArray(data?.results) ? data.results : []
+  return results as TavilySearchResult[]
+}
+
+async function fetchJinaReaderMarkdown(url: string, baseUrl?: string): Promise<string> {
+  const normalizedBase = baseUrl && baseUrl.trim().length > 0 ? baseUrl.trim() : 'https://r.jina.ai/'
+  const readerUrl = `${normalizedBase}${url}`
   const response = await fetch(readerUrl, {
     headers: {
       Accept: 'application/json',
@@ -83,12 +110,24 @@ export const deepSearchRouter = createTRPCRouter({
         query: z.string().min(1),
         maxResults: z.number().min(1).max(8).optional(),
         context: z.string().optional(),
+        settings: z
+          .object({
+            tavilyApiKey: z.string().optional(),
+            jinaReaderBaseUrl: z.string().optional(),
+            llmProvider: z.string().optional(),
+            llmModelId: z.string().optional(),
+            llmApiKey: z.string().optional(),
+            llmBaseUrl: z.string().optional(),
+          })
+          .optional(),
       }),
     )
     .mutation(async ({ input }) => {
       const store = await ensureProjectStore(input.projectPath)
       const maxResults = input.maxResults ?? 5
-      const searchItems = await fetchTavilySearch(input.query, maxResults)
+      const searchItems = input.settings?.tavilyApiKey
+        ? await fetchTavilySearchWithKey(input.query, maxResults, input.settings.tavilyApiKey)
+        : await fetchTavilySearch(input.query, maxResults)
       const sources = await Promise.all(
         searchItems.map(async (item) => {
           const pageId = randomUUID()
@@ -97,7 +136,7 @@ export const deepSearchRouter = createTRPCRouter({
           let markdown = item.content ?? item.snippet ?? ''
           if (url) {
             try {
-              markdown = await fetchJinaReaderMarkdown(url)
+              markdown = await fetchJinaReaderMarkdown(url, input.settings?.jinaReaderBaseUrl)
             }
             catch {
               // keep fallback content from search if reader fails
@@ -129,31 +168,37 @@ export const deepSearchRouter = createTRPCRouter({
       })
 
       let answer = 'Search completed.'
-      if (!process.env.OPENAI_API_KEY) {
-        answer =
-          'OPENAI_API_KEY is not set. Add it to your environment to enable LLM answers. Search sources were saved.'
+      const llmProvider = (input.settings?.llmProvider ?? 'openai').trim()
+      const llmModelId = input.settings?.llmModelId ?? 'gpt-4o-mini'
+      const providerApiKey = input.settings?.llmApiKey
+      const providerBaseUrl =
+        input.settings?.llmBaseUrl?.trim() ||
+        process.env.OPENAI_BASE_URL ||
+        'https://api.openai.com/v1'
+      const contextBlock = input.context
+        ? `Context from current graph path:\n${input.context}\n\n`
+        : ''
+      const context = sources
+        .map((source, index) => {
+          return `Source ${index + 1}: ${source.title}\n${source.snippet}`
+        })
+        .join('\n\n')
+      try {
+        const provider = createOpenAICompatible({
+          name: llmProvider || 'openai',
+          baseURL: providerBaseUrl,
+          apiKey: providerApiKey,
+        })
+        const result = await generateText({
+          model: provider(llmModelId),
+          system:
+            'You are a deep-research assistant. Write a concise answer and cite sources by index like [1].',
+          prompt: `${contextBlock}Question: ${input.query}\n\n${context}`,
+        })
+        answer = result.text
       }
-      else {
-        const contextBlock = input.context
-          ? `Context from current graph path:\n${input.context}\n\n`
-          : ''
-        const context = sources
-          .map((source, index) => {
-            return `Source ${index + 1}: ${source.title}\n${source.snippet}`
-          })
-          .join('\n\n')
-        try {
-          const result = await generateText({
-            model: openai('gpt-4o-mini'),
-            system:
-              'You are a deep-research assistant. Write a concise answer and cite sources by index like [1].',
-            prompt: `${contextBlock}Question: ${input.query}\n\n${context}`,
-          })
-          answer = result.text
-        }
-        catch {
-          answer = 'LLM request failed. Check your API key and network, then retry.'
-        }
+      catch {
+        answer = 'LLM request failed. Check your model configuration and network, then retry.'
       }
 
       return {
