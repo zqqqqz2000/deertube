@@ -79,10 +79,13 @@ export default function FlowWorkspace({
     loadActiveProfileId(project.path),
   );
   const [panelVisible, setPanelVisible] = useState(false);
+  const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const lastQuestionId = useRef<string | null>(null);
   const hydrated = useRef(false);
   const saveTimer = useRef<number | null>(null);
   const initialFitDone = useRef(false);
+  const panelHideTimer = useRef<number | null>(null);
 
   const nodeTypes = useMemo(
     () => ({ question: QuestionNode, source: SourceNode }),
@@ -115,10 +118,41 @@ export default function FlowWorkspace({
       setPanelVisible(false);
       return;
     }
+    setPanelNodeId(selectedId);
     setPanelVisible(false);
     const id = window.requestAnimationFrame(() => setPanelVisible(true));
     return () => window.cancelAnimationFrame(id);
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId && !panelVisible && panelNodeId) {
+      if (panelHideTimer.current) {
+        window.clearTimeout(panelHideTimer.current);
+      }
+      panelHideTimer.current = window.setTimeout(() => {
+        setPanelNodeId(null);
+      }, 300);
+      return () => {
+        if (panelHideTimer.current) {
+          window.clearTimeout(panelHideTimer.current);
+        }
+      };
+    }
+    return () => undefined;
+  }, [panelNodeId, panelVisible, selectedId]);
+
+  useEffect(() => {
+    if (isDragging) {
+      setPanelVisible(false);
+      return;
+    }
+    if (selectedId) {
+      setPanelVisible(false);
+      const id = window.requestAnimationFrame(() => setPanelVisible(true));
+      return () => window.cancelAnimationFrame(id);
+    }
+    return () => undefined;
+  }, [isDragging, selectedId]);
 
   useEffect(() => {
     if (initialState.nodes.length === 0) {
@@ -450,12 +484,15 @@ export default function FlowWorkspace({
             setViewport(instance.getViewport());
           }}
           onMove={(_, nextViewport) => setViewport(nextViewport)}
+          onMoveStart={() => setIsDragging(true)}
+          onMoveEnd={() => setIsDragging(false)}
           onNodeClick={(_, node) => {
             setSelectedId(node.id);
             setPrompt("");
           }}
           onPaneClick={() => setSelectedId(null)}
-          onNodeMouseEnter={handleNodeEnter}
+          onNodeDragStart={() => setIsDragging(true)}
+          onNodeDragStop={() => setIsDragging(false)}
           onNodeMouseLeave={handleNodeLeave}
           defaultEdgeOptions={{
             type: "smoothstep",
@@ -475,10 +512,10 @@ export default function FlowWorkspace({
             pannable
           />
         </ReactFlow>
-        {selectedId &&
+        {panelNodeId &&
           flowInstance &&
           (() => {
-            const selectedNode = nodes.find((node) => node.id === selectedId);
+            const selectedNode = nodes.find((node) => node.id === panelNodeId);
             if (!selectedNode) {
               return null;
             }

@@ -1,15 +1,17 @@
-import { Handle, Position } from 'reactflow'
+import { Handle, Position, type NodeProps } from 'reactflow'
 import type { QuestionNodeData } from '../../types/flow'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 
-type QuestionNodeProps = {
-  data: QuestionNodeData
-}
+type QuestionNodeProps = NodeProps<QuestionNodeData>
 
-export default function QuestionNode({ data }: QuestionNodeProps) {
+export default function QuestionNode({ data, selected }: QuestionNodeProps) {
   return (
-    <Card className="w-[360px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40">
+    <Card
+      className={`relative w-[360px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 transition-[box-shadow,transform] duration-200 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(251,191,36,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
+        selected ? "ring-1 ring-white/20 after:opacity-100" : ""
+      }`}
+    >
       <CardContent className="p-4">
         <div className="text-[0.65rem] uppercase tracking-[0.25em] text-white/50">Question</div>
         <div className="mt-2 text-sm font-semibold text-white">{data.question}</div>
