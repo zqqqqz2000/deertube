@@ -1,30 +1,55 @@
-# React + TypeScript + Vite
+# Deertube DeepSearch (Electron)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Electron + React Flow knowledge graph for deep search. Users pick a project folder, ask questions on nodes, and the app stores sources + answers inside the project directory.
 
-Currently, two official plugins are available:
+## Features
+- Project picker with recent projects list and delete.
+- Full-screen React Flow graph.
+- Ask on a selected node; new questions become children of the selected node.
+- Context is built from the path root → selected node and fed into the LLM prompt.
+- Tavily search integration for web results.
+- Jina Reader converts source pages to Markdown and stores content, URL, title, and metadata.
+- LLM responses via Vercel AI SDK (OpenAI provider).
+- Hover a source node to preview the URL in an Electron WebContentsView.
+- State persisted in the project folder under `.deertube/`.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Data Storage
+Each project directory gets:
+```
+.deertube/
+  state.json
+  pages/
+  searches/
+```
+- `state.json`: graph nodes/edges + timestamps
+- `pages/`: per-source JSON (Markdown content, title, url)
+- `searches/`: per-search JSON (query + source ids)
 
-## Expanding the ESLint configuration
+## Tech Stack
+- Electron
+- React + React Flow
+- tRPC over `electron-trpc-experimental`
+- Vercel AI SDK
+- Tailwind CSS
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
-
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default {
-  // other rules...
-  parserOptions: {
-    ecmaVersion: 'latest',
-    sourceType: 'module',
-    project: ['./tsconfig.json', './tsconfig.node.json'],
-    tsconfigRootDir: __dirname,
-  },
-}
+## Environment Variables
+Create these in your shell before running:
+```
+TAVILY_API_KEY=...
+OPENAI_API_KEY=...
 ```
 
-- Replace `plugin:@typescript-eslint/recommended` to `plugin:@typescript-eslint/recommended-type-checked` or `plugin:@typescript-eslint/strict-type-checked`
-- Optionally add `plugin:@typescript-eslint/stylistic-type-checked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and add `plugin:react/recommended` & `plugin:react/jsx-runtime` to the `extends` list
+## Dev
+```
+bun i
+bun run dev
+```
+
+## Build
+```
+bun run build
+```
+
+## Notes
+- The initial empty project auto-creates a root question node so you can start asking immediately.
+- Source previews appear on hover (WebContentsView).
