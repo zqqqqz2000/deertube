@@ -178,6 +178,29 @@ function FlowWorkspaceInner({
     [flowInstance, getNode, nodes, setSelectedId],
   );
 
+  const handleNodeDoubleClick = useCallback(
+    (_: unknown, node: { id: string }) => {
+      if (!flowInstance) {
+        return;
+      }
+      const internalNode = getNode(node.id);
+      const position =
+        internalNode?.positionAbsolute ?? internalNode?.position ?? { x: 0, y: 0 };
+      const width = internalNode?.width ?? 0;
+      const height = internalNode?.height ?? 0;
+      const centerX = position.x + width / 2;
+      const centerY = position.y + height / 2;
+      requestAnimationFrame(() => {
+        flowInstance.setCenter(centerX, centerY, {
+          zoom: Math.max(flowInstance.getZoom(), 1.6),
+          duration: 450,
+        });
+      });
+      setSelectedId(node.id);
+    },
+    [flowInstance, getNode, setSelectedId],
+  );
+
   const renderPanelInput = () => {
     if (!panelNodeId || !flowInstance) {
       return null;
@@ -247,6 +270,7 @@ function FlowWorkspaceInner({
             onNodeDragStop={() => setIsDragging(false)}
             onNodeMouseEnter={handleNodeEnter}
             onNodeMouseLeave={handleNodeLeave}
+            onNodeDoubleClick={handleNodeDoubleClick}
             defaultEdgeOptions={{
               type: "smoothstep",
               style: { stroke: "rgba(255,255,255,0.35)", strokeWidth: 1.6 },

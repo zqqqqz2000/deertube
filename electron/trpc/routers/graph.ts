@@ -99,8 +99,8 @@ export const graphRouter = createTRPCRouter({
           actions.push({
             id: randomUUID(),
             titleLong: clampText(data.titleLong, 30),
-            titleShort: clampText(data.titleShort, 10),
-            titleTiny: clampText(data.titleTiny, 6),
+            titleShort: clampText(data.titleShort, 16),
+            titleTiny: clampText(data.titleTiny, 18),
             excerpt,
             parentIntId: data.parentIntId,
             responseId: input.responseId,
@@ -133,7 +133,7 @@ export const graphRouter = createTRPCRouter({
       await generateText({
         model: provider(llmModelId),
         system:
-          "You are a graph-builder for a product that builds a clear, easy-to-understand knowledge map during conversation. Only call addInsightNodeTool when the response introduces new, distillable information worth adding to the graph; otherwise, do not call any tools. If you do call the tool, create 1-3 concise insight nodes derived from the response. When there would be many new nodes, you may aggregate them into fewer, higher-level nodes. Each node must quote an exact excerpt from the response text. Titles must be short, clear, and in three sizes: long (<=30 chars), short (<=10 chars), tiny (<=6 chars). You MUST provide parentIntId for every node. Do not add explanations outside tool calls.",
+          "You are a graph-builder for a product that builds a clear, easy-to-understand knowledge map during conversation. Only call addInsightNodeTool when the response introduces new, distillable information worth adding to the graph; otherwise, do not call any tools. If you do call the tool, create 1-3 concise insight nodes derived from the response. When there would be many new nodes, you may aggregate them into fewer, higher-level nodes. Each node must quote an exact excerpt from the response text. Titles must be short, clear, and in three sizes: long (<=30 chars), short (<=16 chars), tiny (<=18 chars). titleTiny can be a short phrase (2-4 words). Use the same language as the response for all titles. You MUST provide parentIntId for every node. Do not add explanations outside tool calls.",
         prompt: `${contextBlock}${graphLines}\n\nResponse:\n${input.responseText}\n\nCreate nodes now.`,
         tools: { addInsightNodeTool },
         stopWhen: stepCountIs(4),
