@@ -1,4 +1,4 @@
-import type { BrowserWindow, WebContentsView } from 'electron'
+import { BrowserWindow, WebContentsView } from 'electron'
 
 interface PreviewBounds {
   x: number

@@ -11,6 +11,8 @@ export const QUESTION_NODE_WIDTH = 360;
 export const QUESTION_NODE_HEIGHT = 190;
 export const SOURCE_NODE_WIDTH = 300;
 export const SOURCE_NODE_HEIGHT = 170;
+export const INSIGHT_NODE_WIDTH = 340;
+export const INSIGHT_NODE_HEIGHT = 180;
 export const QUESTION_FALLBACK_OFFSET_X = 360;
 export const SOURCE_FALLBACK_OFFSET_X = 420;
 export const SOURCE_FALLBACK_SPACING_Y = 170;
@@ -58,6 +60,12 @@ export const getNodeSize = (node: FlowNode | null) => {
     return {
       width: node.width ?? SOURCE_NODE_WIDTH,
       height: SOURCE_NODE_HEIGHT,
+    };
+  }
+  if (node?.type === "insight") {
+    return {
+      width: node.width ?? INSIGHT_NODE_WIDTH,
+      height: INSIGHT_NODE_HEIGHT,
     };
   }
   return {

@@ -12,8 +12,17 @@ export interface SourceNodeData {
   snippet?: string
 }
 
-export type FlowNodeData = QuestionNodeData | SourceNodeData
+export interface InsightNodeData {
+  titleLong: string
+  titleShort: string
+  titleTiny: string
+  excerpt: string
+  responseId: string
+}
+
+export type FlowNodeData = QuestionNodeData | SourceNodeData | InsightNodeData
 export type QuestionNode = Node<QuestionNodeData, 'question'>
 export type SourceNode = Node<SourceNodeData, 'source'>
+export type InsightNode = Node<InsightNodeData, 'insight'>
 export type FlowNode = Node<FlowNodeData>
 export type FlowEdge = Edge

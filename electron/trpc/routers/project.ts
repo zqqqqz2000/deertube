@@ -8,6 +8,7 @@ interface ProjectState {
   version: number
   nodes: unknown[]
   edges: unknown[]
+  chat: unknown[]
   updatedAt: string
 }
 
@@ -84,6 +85,7 @@ async function loadProjectState(projectPath: string): Promise<ProjectState> {
     version: 1,
     nodes: [],
     edges: [],
+    chat: [],
     updatedAt: new Date().toISOString(),
   }
   const state = await readJsonFile(store.statePath, fallback)
@@ -98,6 +100,7 @@ async function saveProjectState(projectPath: string, state: ProjectState) {
   const payload: ProjectState = {
     ...state,
     version: state.version ?? 1,
+    chat: state.chat ?? [],
     updatedAt: new Date().toISOString(),
   }
   await writeJsonFile(store.statePath, payload)
@@ -106,10 +109,10 @@ async function saveProjectState(projectPath: string, state: ProjectState) {
 export const projectRouter = createTRPCRouter({
   listRecent: baseProcedure.query(async () => readRecents()),
   choose: baseProcedure.mutation(async () => {
-    const parentWindow = BrowserWindow.getFocusedWindow() ?? undefined
-    const result = await dialog.showOpenDialog(parentWindow, {
-      properties: ['openDirectory'],
-    })
+    const parentWindow = BrowserWindow.getFocusedWindow()
+    const result = parentWindow
+      ? await dialog.showOpenDialog(parentWindow, { properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory'] })
     if (result.canceled || result.filePaths.length === 0) {
       return null
     }
@@ -134,6 +137,7 @@ export const projectRouter = createTRPCRouter({
           version: z.number().optional(),
           nodes: z.array(z.unknown()),
           edges: z.array(z.unknown()),
+          chat: z.array(z.unknown()).optional(),
         }),
       }),
     )
@@ -142,6 +146,7 @@ export const projectRouter = createTRPCRouter({
         version: input.state.version ?? 1,
         nodes: input.state.nodes,
         edges: input.state.edges,
+        chat: input.state.chat ?? [],
         updatedAt: new Date().toISOString(),
       })
       return { ok: true }

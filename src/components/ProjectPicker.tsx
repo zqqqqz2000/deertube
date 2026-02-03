@@ -9,6 +9,7 @@ export interface ProjectOpenResult {
   state: {
     nodes: unknown[]
     edges: unknown[]
+    chat?: unknown[]
   }
 }
 

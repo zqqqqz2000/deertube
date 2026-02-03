@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -13,6 +13,7 @@ import "reactflow/dist/style.css";
 import { trpc } from "../lib/trpc";
 import QuestionNode from "./nodes/QuestionNode";
 import SourceNode from "./nodes/SourceNode";
+import InsightNode from "./nodes/InsightNode";
 import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
 import { createProfileDraft } from "../lib/settings";
@@ -20,15 +21,16 @@ import FlowHeader from "./flow/FlowHeader";
 import FlowPanelInput from "./flow/FlowPanelInput";
 import type { FlowWorkspaceProps } from "./flow/types";
 import { useAutoLayout } from "./flow/useAutoLayout";
-import { useContextBuilder } from "./flow/useContextBuilder";
 import { useFlowState } from "./flow/useFlowState";
 import { useInitialFit } from "./flow/useInitialFit";
 import { usePanelState } from "./flow/usePanelState";
 import { usePreviewHover } from "./flow/usePreviewHover";
 import { useProfileSettings } from "./flow/useProfileSettings";
-import { useQuestionActions } from "./flow/useQuestionActions";
-import { QuestionActionProvider } from "./flow/QuestionActionContext";
-import FlowContextPanel from "./flow/FlowContextPanel";
+import { useChatActions } from "./flow/useChatActions";
+import { QuestionActionProvider } from "./flow/QuestionActionProvider";
+import ChatHistoryPanel from "./chat/ChatHistoryPanel";
+import type { ChatMessage } from "../types/chat";
+import type { InsightNodeData } from "../types/flow";
 
 function FlowWorkspaceInner({
   project,
@@ -42,9 +44,13 @@ function FlowWorkspaceInner({
   );
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [isDragging, setIsDragging] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(
+    initialState.chat ?? [],
+  );
+  const saveTimer = useRef<number | null>(null);
   const { getNode } = useReactFlow();
   const flowStateOptions = useMemo(
-    () => ({ onInitialRootSelect: setSelectedId }),
+    () => ({ onInitialRootSelect: setSelectedId, autoSave: false }),
     [setSelectedId],
   );
 
@@ -55,7 +61,7 @@ function FlowWorkspaceInner({
     edges,
     setEdges,
     onEdgesChange,
-    lastQuestionId,
+    hydrated,
   } = useFlowState(initialState, project.path, flowStateOptions);
   const {
     profiles,
@@ -65,45 +71,27 @@ function FlowWorkspaceInner({
     activeProfile,
   } = useProfileSettings(project.path);
   const { panelVisible, panelNodeId } = usePanelState(selectedId, isDragging);
-  const { buildContextSummary, buildQaContext, buildContextEdgeIds } =
-    useContextBuilder(
-    nodes,
-    edges,
-  );
-  const qaContext = useMemo(
-    () => (selectedId ? buildQaContext(selectedId) : ""),
-    [buildQaContext, selectedId],
-  );
-  const highlightedEdgeIds = useMemo(
-    () => new Set(selectedId ? buildContextEdgeIds(selectedId) : []),
-    [buildContextEdgeIds, selectedId],
-  );
-  const displayEdges = useMemo(
-    () =>
-      edges.map((edge) => {
-        const baseClassName = edge.className
-          ? edge.className.replace(/\bedge-path-glow\b/g, "").trim()
-          : "";
-        const className = highlightedEdgeIds.has(edge.id)
-          ? [baseClassName, "edge-path-glow"].filter(Boolean).join(" ")
-          : baseClassName || undefined;
-        return className === edge.className ? edge : { ...edge, className };
-      }),
-    [edges, highlightedEdgeIds],
-  );
-  const { prompt, setPrompt, busy, handleAsk, retryQuestion } =
-    useQuestionActions({
+  const displayEdges = useMemo(() => edges, [edges]);
+  const {
+    historyInput,
+    setHistoryInput,
+    panelInput,
+    setPanelInput,
+    busy,
+    chatBusy,
+    handleSendFromHistory,
+    handleSendFromPanel,
+  } = useChatActions({
     projectPath: project.path,
     nodes,
     edges,
     setNodes,
     setEdges,
     selectedId,
-    setSelectedId,
-    lastQuestionId,
     flowInstance,
     activeProfile,
-    buildContextSummary,
+    messages: chatMessages,
+    setMessages: setChatMessages,
   });
   const { isLayouting, handleAutoLayout } = useAutoLayout({
     flowInstance,
@@ -112,13 +100,50 @@ function FlowWorkspaceInner({
     setNodes,
   });
   const { handleNodeEnter, handleNodeLeave } = usePreviewHover();
+  const retryQuestion = useCallback(() => undefined, []);
 
   useInitialFit(flowInstance, nodes.length);
 
   const nodeTypes = useMemo(
-    () => ({ question: QuestionNode, source: SourceNode }),
+    () => ({ question: QuestionNode, source: SourceNode, insight: InsightNode }),
     [],
   );
+
+  const selectedResponseId = useMemo(() => {
+    const selectedNode = nodes.find((node) => node.id === selectedId);
+    if (!selectedNode || selectedNode.type !== "insight") {
+      return null;
+    }
+    const data = selectedNode.data as InsightNodeData;
+    return data.responseId ?? null;
+  }, [nodes, selectedId]);
+
+  useEffect(() => {
+    if (!hydrated.current) {
+      return;
+    }
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+    }
+    saveTimer.current = window.setTimeout(() => {
+      trpc.project.saveState
+        .mutate({
+          path: project.path,
+          state: {
+            nodes,
+            edges,
+            chat: chatMessages,
+            version: 1,
+          },
+        })
+        .catch(() => undefined);
+    }, 500);
+    return () => {
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current);
+      }
+    };
+  }, [chatMessages, edges, nodes, project.path, hydrated]);
 
   const handleExit = () => {
     trpc.preview.hide.mutate().catch(() => undefined);
@@ -150,11 +175,11 @@ function FlowWorkspaceInner({
         left={screenX}
         top={panelTop}
         width={nodeWidth ? nodeWidth * viewport.zoom : undefined}
-        prompt={prompt}
+        prompt={panelInput}
         busy={busy}
-        onPromptChange={setPrompt}
+        onPromptChange={setPanelInput}
         onSend={() => {
-          void handleAsk();
+          void handleSendFromPanel();
         }}
       />
     );
@@ -186,7 +211,7 @@ function FlowWorkspaceInner({
             onMoveEnd={() => setIsDragging(false)}
             onNodeClick={(_, node) => {
               setSelectedId(node.id);
-              setPrompt("");
+              setPanelInput("");
             }}
             selectNodesOnDrag={false}
             onPaneClick={() => setSelectedId(null)}
@@ -225,9 +250,13 @@ function FlowWorkspaceInner({
               pannable
             />
           </ReactFlow>
-          <FlowContextPanel
-            visible={!!selectedId}
-            context={qaContext}
+          <ChatHistoryPanel
+            messages={chatMessages}
+            selectedResponseId={selectedResponseId}
+            input={historyInput}
+            busy={chatBusy}
+            onInputChange={setHistoryInput}
+            onSend={handleSendFromHistory}
           />
           {renderPanelInput()}
         </div>

@@ -1,16 +1,17 @@
 import { useEffect, useRef } from "react";
 import { useEdgesState, useNodesState } from "reactflow";
 import { trpc } from "../../lib/trpc";
-import { QUESTION_NODE_WIDTH } from "../../lib/elkLayout";
+import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
 import type {
   FlowEdge,
   FlowNodeData,
-  QuestionNode as QuestionNodeType,
+  InsightNode as InsightNodeType,
 } from "../../types/flow";
 import type { ProjectState } from "./types";
 
 interface FlowStateOptions {
   onInitialRootSelect?: (rootId: string) => void;
+  autoSave?: boolean;
 }
 
 export function useFlowState(
@@ -31,15 +32,18 @@ export function useFlowState(
   useEffect(() => {
     if (initialState.nodes.length === 0) {
       const rootId = crypto.randomUUID();
-      const rootNode: QuestionNodeType = {
+      const rootNode: InsightNodeType = {
         id: rootId,
-        type: "question",
+        type: "insight",
         position: { x: 0, y: 0 },
         data: {
-          question: "Start here",
-          answer: "Select this node to ask your first question.",
+          titleLong: "Start here",
+          titleShort: "Start",
+          titleTiny: "S",
+          excerpt: "Select a node and ask a question to grow the graph.",
+          responseId: "",
         },
-        width: QUESTION_NODE_WIDTH,
+        width: INSIGHT_NODE_WIDTH,
       };
       setNodes([rootNode]);
       setEdges([]);
@@ -58,10 +62,10 @@ export function useFlowState(
     } else {
       setNodes(initialState.nodes);
       setEdges(initialState.edges);
-      const lastQuestion = [...initialState.nodes]
-        .filter((node) => node.type === "question")
+      const lastInsight = [...initialState.nodes]
+        .filter((node) => node.type === "insight")
         .slice(-1)[0];
-      lastQuestionId.current = lastQuestion?.id ?? null;
+      lastQuestionId.current = lastInsight?.id ?? null;
     }
     hydrated.current = true;
   }, [
@@ -75,6 +79,9 @@ export function useFlowState(
 
   useEffect(() => {
     if (!hydrated.current) {
+      return;
+    }
+    if (options.autoSave === false) {
       return;
     }
     if (saveTimer.current) {
@@ -97,7 +104,7 @@ export function useFlowState(
         window.clearTimeout(saveTimer.current);
       }
     };
-  }, [edges, nodes, projectPath]);
+  }, [edges, nodes, projectPath, options.autoSave]);
 
   return {
     nodes,

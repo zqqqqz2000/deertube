@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { FlowEdge, FlowNode } from './types/flow'
+import type { ChatMessage } from './types/chat'
 import ProjectPicker, { type ProjectOpenResult } from './components/ProjectPicker'
 import FlowWorkspace from './components/FlowWorkspace'
 
@@ -11,6 +12,7 @@ interface ProjectInfo {
 interface ProjectState {
   nodes: FlowNode[]
   edges: FlowEdge[]
+  chat: ChatMessage[]
 }
 
 function App() {
@@ -22,6 +24,7 @@ function App() {
     setProjectState({
       nodes: result.state.nodes as FlowNode[],
       edges: result.state.edges as FlowEdge[],
+      chat: (result.state.chat ?? []) as ChatMessage[],
     })
   }
 

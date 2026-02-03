@@ -2,6 +2,8 @@ import type { FlowNode, SourceNodeData } from "../types/flow";
 import {
   QUESTION_NODE_HEIGHT,
   QUESTION_NODE_WIDTH,
+  INSIGHT_NODE_HEIGHT,
+  INSIGHT_NODE_WIDTH,
   SOURCE_NODE_HEIGHT,
   SOURCE_NODE_WIDTH,
   layoutFlowWithElk,
@@ -29,6 +31,14 @@ interface SourcePlacementInput {
   nodes: FlowNode[];
   edges: { id?: string; source: string; target: string }[];
   sources: { id: string }[];
+}
+
+interface InsightPlacementInput {
+  parentNode: FlowNode | null;
+  parentPosition: Point;
+  nodes: FlowNode[];
+  edges: { id?: string; source: string; target: string }[];
+  insights: { id: string }[];
 }
 
 export const placeQuestionNode = async ({
@@ -155,6 +165,120 @@ export const placeSourceNodes = async ({
       position: resolved,
       data: { title: "", url: "" } satisfies SourceNodeData,
       width: SOURCE_NODE_WIDTH,
+    });
+    return resolved;
+  });
+};
+
+export const placeInsightNodes = async ({
+  parentNode,
+  parentPosition,
+  nodes,
+  edges,
+  insights,
+}: InsightPlacementInput): Promise<Point[]> => {
+  const parentId = parentNode?.id ?? "root";
+  const layoutNodes: FlowNode[] = [
+    ...nodes,
+    ...(parentNode
+      ? []
+      : [
+          {
+            id: parentId,
+            type: "insight",
+            position: parentPosition,
+            data: {
+              titleLong: "",
+              titleShort: "",
+              titleTiny: "",
+              excerpt: "",
+              responseId: "",
+            },
+            width: INSIGHT_NODE_WIDTH,
+          },
+        ]),
+    ...insights.map((insight) => ({
+      id: insight.id,
+      type: "insight",
+      position: parentPosition,
+      data: {
+        titleLong: "",
+        titleShort: "",
+        titleTiny: "",
+        excerpt: "",
+        responseId: "",
+      },
+      width: INSIGHT_NODE_WIDTH,
+    })),
+  ];
+  const layoutEdges = [
+    ...edges,
+    ...insights.map((insight, index) => ({
+      id: `edge-${parentId}-${insight.id}-${index}`,
+      source: parentId,
+      target: insight.id,
+    })),
+  ];
+  const { positions } = await layoutFlowWithElk({
+    nodes: layoutNodes,
+    edges: layoutEdges,
+    direction: "RIGHT",
+    useExistingPositions: true,
+  });
+
+  const basePosition = parentNode?.position ?? parentPosition;
+  const rawPositions = insights.map((insight, index) => {
+    const position = positions[insight.id];
+    if (position) {
+      return position;
+    }
+    return {
+      x: basePosition.x + INSIGHT_NODE_WIDTH,
+      y: basePosition.y + index * INSIGHT_NODE_HEIGHT,
+    };
+  });
+
+  const placedNodes: FlowNode[] = [
+    ...nodes,
+    ...(parentNode
+      ? []
+      : [
+          {
+            id: parentId,
+            type: "insight",
+            position: parentPosition,
+            data: {
+              titleLong: "",
+              titleShort: "",
+              titleTiny: "",
+              excerpt: "",
+              responseId: "",
+            },
+            width: INSIGHT_NODE_WIDTH,
+          },
+        ]),
+  ];
+
+  return rawPositions.map((position, index) => {
+    const resolved = resolveColumnPosition({
+      desired: position,
+      nodes: placedNodes,
+      size: { width: INSIGHT_NODE_WIDTH, height: INSIGHT_NODE_HEIGHT },
+      stepX: 160,
+      stepY: 90,
+    });
+    placedNodes.push({
+      id: `__placed_insight_${index}`,
+      type: "insight",
+      position: resolved,
+      data: {
+        titleLong: "",
+        titleShort: "",
+        titleTiny: "",
+        excerpt: "",
+        responseId: "",
+      },
+      width: INSIGHT_NODE_WIDTH,
     });
     return resolved;
   });

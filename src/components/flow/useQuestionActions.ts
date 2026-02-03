@@ -219,29 +219,29 @@ export function useQuestionActions({
           type: "smoothstep",
         },
       ]);
-    } else if (lastQuestionId.current) {
+    } else {
+      const fallbackSource = lastQuestionId.current;
+      if (fallbackSource) {
       setEdges((prev: FlowEdge[]) => [
         ...prev,
         {
           id: crypto.randomUUID(),
-          source: lastQuestionId.current,
+          source: fallbackSource,
           target: questionId,
           type: "smoothstep",
         },
       ]);
+      }
     }
     lastQuestionId.current = questionId;
     setSelectedId(questionId);
 
     void runQuestion(questionId, questionText, questionPosition, selectedId);
   }, [
-    activeProfile,
-    buildContextSummary,
     busy,
     edges,
     flowInstance,
     nodes,
-    projectPath,
     prompt,
     selectedId,
     setEdges,
@@ -252,7 +252,7 @@ export function useQuestionActions({
   ]);
 
   const retryQuestion = useCallback(
-    async (questionId: string) => {
+    (questionId: string) => {
       if (busy) {
         return;
       }
