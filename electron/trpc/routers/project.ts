@@ -22,6 +22,38 @@ function getRecentsPath() {
   return path.join(app.getPath('userData'), 'recent-projects.json')
 }
 
+function getDefaultProjectsRoot() {
+  return path.join(app.getPath('documents'), 'Deertube Projects')
+}
+
+function sanitizeProjectName(name: string) {
+  return name.replace(/[\\/:*?"<>|]/g, '').trim()
+}
+
+async function ensureUniqueProjectPath(root: string, name: string) {
+  const base = sanitizeProjectName(name)
+  if (!base) {
+    throw new Error('Project name is required')
+  }
+  const exists = async (candidate: string) => {
+    try {
+      await fs.stat(candidate)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const candidate = path.join(root, base)
+  if (!(await exists(candidate))) {
+    return candidate
+  }
+  let suffix = 2
+  while (await exists(`${candidate} ${suffix}`)) {
+    suffix += 1
+  }
+  return `${candidate} ${suffix}`
+}
+
 async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
   try {
     const raw = await fs.readFile(filePath, 'utf-8')
@@ -118,6 +150,21 @@ export const projectRouter = createTRPCRouter({
     }
     return result.filePaths[0]
   }),
+  create: baseProcedure
+    .input(z.object({ name: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const root = getDefaultProjectsRoot()
+      await fs.mkdir(root, { recursive: true })
+      const projectPath = await ensureUniqueProjectPath(root, input.name)
+      await fs.mkdir(projectPath, { recursive: true })
+      await updateRecents(projectPath)
+      const state = await loadProjectState(projectPath)
+      return {
+        path: projectPath,
+        name: path.basename(projectPath),
+        state,
+      }
+    }),
   open: baseProcedure
     .input(z.object({ path: z.string() }))
     .mutation(async ({ input }) => {

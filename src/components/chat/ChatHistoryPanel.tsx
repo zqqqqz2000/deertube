@@ -70,6 +70,7 @@ export default function ChatHistoryPanel({
     mode: "x" | "y" | "both";
   } | null>(null);
   const highlightedId = selectedResponseId;
+  const ignoreHighlightRef = useRef(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [panelPosition, setPanelPosition] = useState({ x: 16, y: 80 });
   const [panelSize, setPanelSize] = useState(() => ({
@@ -127,6 +128,16 @@ export default function ChatHistoryPanel({
     }
     return null;
   }, [selectedNode]);
+  const selectedExcerpt = useMemo(() => {
+    if (!selectedNode || selectedNode.type !== "insight") {
+      return "";
+    }
+    const data = selectedNode.data as InsightNodeData;
+    if (data.responseId === "") {
+      return "";
+    }
+    return data.excerpt ?? "";
+  }, [selectedNode]);
   const handleFocusNode = useCallback(() => {
     if (!selectedSummary?.id || !onFocusNode) {
       return;
@@ -158,7 +169,7 @@ export default function ChatHistoryPanel({
     if (!scrollRef.current) {
       return;
     }
-    if (highlightedId) {
+    if (highlightedId && !ignoreHighlightRef.current) {
       const target = scrollRef.current.querySelector<HTMLElement>(
         `[data-message-id="${highlightedId}"]`,
       );
@@ -167,6 +178,7 @@ export default function ChatHistoryPanel({
       }
       return;
     }
+    ignoreHighlightRef.current = false;
     if (isAtBottom) {
       scrollToBottom("smooth");
     }
@@ -193,6 +205,7 @@ export default function ChatHistoryPanel({
       return;
     }
     setIsAtBottom(true);
+    ignoreHighlightRef.current = true;
     scrollToBottom("smooth");
   }, [scrollToBottomSignal, scrollToBottom]);
 
@@ -423,6 +436,8 @@ export default function ChatHistoryPanel({
                 const isUser = message.role === "user";
                 const isHighlighted = message.id === highlightedId;
                 const isFailed = message.status === "failed";
+                const shouldHighlightExcerpt =
+                  message.id === selectedResponseId && !!selectedExcerpt;
                 const displayContent =
                   !isUser && message.status === "pending" && !message.content
                     ? "Thinking..."
@@ -440,7 +455,9 @@ export default function ChatHistoryPanel({
                     )}
                   >
                     <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
-                      {displayContent}
+                      {shouldHighlightExcerpt
+                        ? renderHighlightedExcerpt(displayContent, selectedExcerpt)
+                        : displayContent}
                     </pre>
                     {!isUser && isFailed && onRetry && (
                       <div className="mt-3 flex items-center gap-2">
@@ -581,4 +598,32 @@ export default function ChatHistoryPanel({
       )}
     </div>
   );
+}
+
+function renderHighlightedExcerpt(content: string | undefined, excerpt: string) {
+  if (!content || !excerpt) {
+    return content ?? "";
+  }
+  const parts: (string | JSX.Element)[] = [];
+  let cursor = 0;
+  let matchIndex = content.indexOf(excerpt, cursor);
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) {
+      parts.push(content.slice(cursor, matchIndex));
+    }
+    parts.push(
+      <mark
+        key={`${matchIndex}-${excerpt.length}`}
+        className="rounded bg-amber-300/30 px-1 text-amber-100"
+      >
+        {excerpt}
+      </mark>,
+    );
+    cursor = matchIndex + excerpt.length;
+    matchIndex = content.indexOf(excerpt, cursor);
+  }
+  if (cursor < content.length) {
+    parts.push(content.slice(cursor));
+  }
+  return parts;
 }

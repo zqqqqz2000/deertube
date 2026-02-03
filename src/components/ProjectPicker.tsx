@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { trpc } from '../lib/trpc'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 
 export interface ProjectOpenResult {
   path: string
@@ -26,6 +27,7 @@ interface ProjectPickerProps {
 export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
   const [recents, setRecents] = useState<RecentProject[]>([])
   const [loading, setLoading] = useState(false)
+  const [projectName, setProjectName] = useState('')
 
   useEffect(() => {
     trpc.project.listRecent.query().then(setRecents).catch(() => setRecents([]))
@@ -65,6 +67,20 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
     }
   }
 
+  const handleCreate = async () => {
+    const name = projectName.trim()
+    if (!name) {
+      return
+    }
+    setLoading(true)
+    try {
+      const result = await trpc.project.create.mutate({ name })
+      onOpen(result)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-12 px-8 py-16">
@@ -79,13 +95,28 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
                 Your knowledge graph and source archives live inside the selected folder.
               </p>
             </div>
-            <Button
-              className="bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-sm font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
-              onClick={handleBrowse}
-              disabled={loading}
-            >
-              {loading ? 'Opening...' : 'Browse for folder'}
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Input
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                placeholder="Project name"
+                className="h-10 w-48 border-white/10 bg-white/5 text-sm text-white placeholder:text-white/40"
+              />
+              <Button
+                className="bg-gradient-to-r from-emerald-400 via-teal-400 to-sky-400 text-sm font-semibold text-slate-900 shadow-lg shadow-emerald-500/30 hover:-translate-y-0.5 hover:shadow-xl"
+                onClick={handleCreate}
+                disabled={loading || !projectName.trim()}
+              >
+                {loading ? 'Creating...' : 'Create project'}
+              </Button>
+              <Button
+                className="bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-sm font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
+                onClick={handleBrowse}
+                disabled={loading}
+              >
+                {loading ? 'Opening...' : 'Browse for folder'}
+              </Button>
+            </div>
           </CardContent>
         </Card>
         <div className="flex flex-col gap-4">

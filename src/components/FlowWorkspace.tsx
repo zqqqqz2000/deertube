@@ -261,7 +261,6 @@ function FlowWorkspaceInner({
         onPromptChange={setPanelInput}
         onSend={() => {
           void handleSendFromPanel();
-          setSelectedId(null);
           setChatPinSignal((prev) => prev + 1);
           setChatScrollSignal((prev) => prev + 1);
         }}
