@@ -9,6 +9,7 @@ const GraphNodeSchema = z.object({
   titleShort: z.string().min(1),
   titleTiny: z.string().min(1),
   excerpt: z.string().min(1),
+  parentIntId: z.number().int(),
 });
 
 const clampText = (input: string, maxChars: number) => {
@@ -36,6 +37,22 @@ export const graphRouter = createTRPCRouter({
         responseText: z.string(),
         selectedNodeId: z.string().optional(),
         selectedNodeSummary: z.string().optional(),
+        graph: z.object({
+          nodes: z.array(
+            z.object({
+              intId: z.number().int(),
+              type: z.string(),
+              label: z.string().optional(),
+              excerpt: z.string().optional(),
+            }),
+          ),
+          edges: z.array(
+            z.object({
+              sourceIntId: z.number().int(),
+              targetIntId: z.number().int(),
+            }),
+          ),
+        }),
         settings: z
           .object({
             llmProvider: z.string().optional(),
@@ -69,6 +86,7 @@ export const graphRouter = createTRPCRouter({
         titleShort: string;
         titleTiny: string;
         excerpt: string;
+        parentIntId: number;
         responseId: string;
       }[] = [];
 
@@ -84,6 +102,7 @@ export const graphRouter = createTRPCRouter({
             titleShort: clampText(data.titleShort, 10),
             titleTiny: clampText(data.titleTiny, 6),
             excerpt,
+            parentIntId: data.parentIntId,
             responseId: input.responseId,
           });
           return { ok: true };
@@ -94,11 +113,28 @@ export const graphRouter = createTRPCRouter({
         ? `Selected node context:\n${input.selectedNodeSummary}\n\n`
         : "";
 
+      const graphLines = [
+        "Graph nodes (intId -> type | label | excerpt):",
+        ...input.graph.nodes.map((node) => {
+          const parts = [
+            `${node.intId}`,
+            node.type,
+            node.label ? `"${node.label}"` : "",
+            node.excerpt ? `"${node.excerpt}"` : "",
+          ].filter(Boolean);
+          return `- ${parts.join(" | ")}`;
+        }),
+        "Graph edges (sourceIntId -> targetIntId):",
+        ...input.graph.edges.map((edge) => `- ${edge.sourceIntId} -> ${edge.targetIntId}`),
+      ]
+        .filter(Boolean)
+        .join("\n");
+
       await generateText({
         model: provider(llmModelId),
         system:
-          "You are a graph-builder. Your job is to call addInsightNodeTool to create 1-3 concise insight nodes derived from the response. Each node must quote an exact excerpt from the response text. Titles must be short, clear, and in three sizes: long (<=30 chars), short (<=10 chars), tiny (<=6 chars). Do not add explanations outside tool calls.",
-        prompt: `${contextBlock}Response:\n${input.responseText}\n\nCreate nodes now.`,
+          "You are a graph-builder for a product that builds a clear, easy-to-understand knowledge map during conversation. Only call addInsightNodeTool when the response introduces new, distillable information worth adding to the graph; otherwise, do not call any tools. If you do call the tool, create 1-3 concise insight nodes derived from the response. When there would be many new nodes, you may aggregate them into fewer, higher-level nodes. Each node must quote an exact excerpt from the response text. Titles must be short, clear, and in three sizes: long (<=30 chars), short (<=10 chars), tiny (<=6 chars). You MUST provide parentIntId for every node. Do not add explanations outside tool calls.",
+        prompt: `${contextBlock}${graphLines}\n\nResponse:\n${input.responseText}\n\nCreate nodes now.`,
         tools: { addInsightNodeTool },
         stopWhen: stepCountIs(4),
       });

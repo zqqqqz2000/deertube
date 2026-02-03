@@ -28,6 +28,17 @@ interface UseChatActionsOptions {
   initialMessages: ChatMessage[];
 }
 
+interface GraphSnapshot {
+  nodes: {
+    intId: number;
+    type: string;
+    label?: string;
+    excerpt?: string;
+  }[];
+  edges: { sourceIntId: number; targetIntId: number }[];
+  intIdToNodeId: Map<number, string>;
+}
+
 const isStartNode = (node: FlowNode | null) => {
   if (!node || node.type !== "insight") {
     return false;
@@ -56,6 +67,43 @@ const buildNodeContext = (node: FlowNode | null) => {
     return `Selected Q/A:\nQ: ${data.question}\nA: ${data.answer}`;
   }
   return "";
+};
+
+const buildGraphSnapshot = (nodes: FlowNode[], edges: FlowEdge[]): GraphSnapshot => {
+  const intIdToNodeId = new Map<number, string>();
+  const nodeIdToIntId = new Map<string, number>();
+  const graphNodes = nodes.map((node, index) => {
+    const intId = index + 1;
+    intIdToNodeId.set(intId, node.id);
+    nodeIdToIntId.set(node.id, intId);
+    const nodeType = node.type ?? "unknown";
+    if (node.type === "question") {
+      const data = node.data as QuestionNodeType["data"];
+      return { intId, type: nodeType, label: data.question, excerpt: data.answer };
+    }
+    if (node.type === "source") {
+      const data = node.data as SourceNodeType["data"];
+      return { intId, type: nodeType, label: data.title, excerpt: data.snippet };
+    }
+    if (node.type === "insight") {
+      const data = node.data as InsightNodeData;
+      return { intId, type: nodeType, label: data.titleLong, excerpt: data.excerpt };
+    }
+    return { intId, type: nodeType };
+  });
+
+  const graphEdges = edges
+    .map((edge) => {
+      const sourceIntId = nodeIdToIntId.get(edge.source);
+      const targetIntId = nodeIdToIntId.get(edge.target);
+      if (!sourceIntId || !targetIntId) {
+        return null;
+      }
+      return { sourceIntId, targetIntId };
+    })
+    .filter((edge): edge is { sourceIntId: number; targetIntId: number } => edge !== null);
+
+  return { nodes: graphNodes, edges: graphEdges, intIdToNodeId };
 };
 
 export function useChatActions({
@@ -98,12 +146,17 @@ export function useChatActions({
       }
       setGraphBusy(true);
       try {
+        const graphSnapshot = buildGraphSnapshot(nodes, edges);
         const result = await trpc.graph.run.mutate({
           projectPath,
           responseId,
           responseText,
           selectedNodeId: selectedId ?? undefined,
           selectedNodeSummary,
+          graph: {
+            nodes: graphSnapshot.nodes,
+            edges: graphSnapshot.edges,
+          },
           settings: activeProfile
             ? {
                 llmProvider: activeProfile.llmProvider.trim() || undefined,
@@ -118,21 +171,63 @@ export function useChatActions({
           return;
         }
 
-        const parentNode = selectedNode ?? null;
-        const parentPosition = parentNode?.position ?? { x: 0, y: 0 };
-        const insightIds = result.nodes.map((node) => ({ id: node.id }));
-        const positions = await placeInsightNodes({
-          parentNode,
-          parentPosition,
-          nodes,
-          edges,
-          insights: insightIds,
+        const intIdToNodeId = graphSnapshot.intIdToNodeId;
+        const workingNodes: FlowNode[] = [...nodes];
+        const workingEdges: FlowEdge[] = [...edges];
+        const positionMap = new Map<string, { x: number; y: number }>();
+        const nodesByParent = new Map<number, { id: string }[]>();
+
+        result.nodes.forEach((node) => {
+          const list = nodesByParent.get(node.parentIntId) ?? [];
+          list.push({ id: node.id });
+          nodesByParent.set(node.parentIntId, list);
         });
 
-        const insightNodes: InsightNodeType[] = result.nodes.map((node, index) => ({
+        for (const [parentIntId, insightIds] of nodesByParent.entries()) {
+          const parentNodeId = intIdToNodeId.get(parentIntId);
+          const parentNode = parentNodeId
+            ? (workingNodes.find((node) => node.id === parentNodeId) ?? null)
+            : null;
+          const parentPosition = parentNode?.position ?? { x: 0, y: 0 };
+          const positions = await placeInsightNodes({
+            parentNode,
+            parentPosition,
+            nodes: workingNodes,
+            edges: workingEdges,
+            insights: insightIds,
+          });
+
+          insightIds.forEach((insight, index) => {
+            const position = positions[index] ?? parentPosition;
+            positionMap.set(insight.id, position);
+            workingNodes.push({
+              id: insight.id,
+              type: "insight",
+              position,
+              data: {
+                titleLong: "",
+                titleShort: "",
+                titleTiny: "",
+                excerpt: "",
+                responseId: "",
+              },
+              width: INSIGHT_NODE_WIDTH,
+            });
+            if (parentNodeId) {
+              workingEdges.push({
+                id: crypto.randomUUID(),
+                source: parentNodeId,
+                target: insight.id,
+                type: "smoothstep",
+              });
+            }
+          });
+        }
+
+        const insightNodes: InsightNodeType[] = result.nodes.map((node) => ({
           id: node.id,
           type: "insight",
-          position: positions[index],
+          position: positionMap.get(node.id) ?? { x: 0, y: 0 },
           data: {
             titleLong: node.titleLong,
             titleShort: node.titleShort,
@@ -144,13 +239,22 @@ export function useChatActions({
         }));
 
         setNodes((prev: FlowNode[]) => [...prev, ...insightNodes]);
-        if (selectedId) {
-          const newEdges: FlowEdge[] = insightNodes.map((node) => ({
-            id: crypto.randomUUID(),
-            source: selectedId,
-            target: node.id,
-            type: "smoothstep",
-          }));
+        const newEdges = result.nodes
+          .map((node, index) => {
+            const parentNodeId = graphSnapshot.intIdToNodeId.get(node.parentIntId);
+            if (!parentNodeId) {
+              return null;
+            }
+            return {
+              id: crypto.randomUUID(),
+              source: parentNodeId,
+              target: insightNodes[index]?.id ?? node.id,
+              type: "smoothstep",
+            };
+          })
+          .filter((edge) => edge !== null) as FlowEdge[];
+
+        if (newEdges.length > 0) {
           setEdges((prev: FlowEdge[]) => [...prev, ...newEdges]);
         }
 
@@ -176,7 +280,6 @@ export function useChatActions({
       nodes,
       projectPath,
       selectedId,
-      selectedNode,
       selectedNodeSummary,
       setEdges,
       setNodes,
