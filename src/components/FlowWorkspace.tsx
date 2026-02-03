@@ -79,6 +79,7 @@ function FlowWorkspaceInner({
     setPanelInput,
     busy,
     chatBusy,
+    graphBusy,
     handleSendFromHistory,
     handleSendFromPanel,
   } = useChatActions({
@@ -255,6 +256,7 @@ function FlowWorkspaceInner({
             selectedResponseId={selectedResponseId}
             input={historyInput}
             busy={chatBusy}
+            graphBusy={graphBusy}
             onInputChange={setHistoryInput}
             onSend={handleSendFromHistory}
           />
