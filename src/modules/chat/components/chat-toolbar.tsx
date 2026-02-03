@@ -1,3 +1,4 @@
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -36,19 +37,50 @@ export function ChatToolbarAddonStart({
 
 export function ChatToolbarTextarea({
   className,
+  onChange,
+  value,
   ...props
 }: React.ComponentProps<typeof Textarea>) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const resize = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) {
+      return;
+    }
+    const maxHeight = 160;
+    el.style.height = "0px";
+    const nextHeight = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, []);
+
+  useLayoutEffect(() => {
+    resize();
+  }, [resize, value]);
+
   return (
-    <div className="row-span-2 grid flex-1">
+    <div className="col-start-2 row-span-2 grid w-full flex-1">
       <Textarea
         id="toolbar-input"
         placeholder="Type your message..."
         className={cn(
-          "h-fit min-h-10 max-h-30 px-1 @md/chat:text-base",
-          "resize-none border-none shadow-none placeholder:whitespace-nowrap focus-visible:border-none focus-visible:ring-0",
+          "h-fit min-h-10 px-1 @md/chat:text-base",
+          "resize-none overflow-y-auto border-none shadow-none placeholder:whitespace-nowrap focus-visible:border-none focus-visible:ring-0",
+          "[&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent",
+          "[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25",
           className
         )}
         rows={1}
+        onChange={(event) => {
+          onChange?.(event);
+          resize();
+        }}
+        ref={textareaRef}
+        style={{
+          scrollbarWidth: "thin",
+          scrollbarColor: "rgba(255,255,255,0.25) transparent",
+        }}
+        value={value}
         {...props}
       />
     </div>

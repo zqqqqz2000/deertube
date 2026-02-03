@@ -29,7 +29,6 @@ import { useProfileSettings } from "./flow/useProfileSettings";
 import { useChatActions } from "./flow/useChatActions";
 import { QuestionActionProvider } from "./flow/QuestionActionProvider";
 import ChatHistoryPanel from "./chat/ChatHistoryPanel";
-import type { ChatMessage } from "../types/chat";
 import type { InsightNodeData } from "../types/flow";
 
 function FlowWorkspaceInner({
@@ -44,15 +43,9 @@ function FlowWorkspaceInner({
   );
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [isDragging, setIsDragging] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(
-    initialState.chat ?? [],
-  );
   const saveTimer = useRef<number | null>(null);
   const { getNode } = useReactFlow();
-  const flowStateOptions = useMemo(
-    () => ({ onInitialRootSelect: setSelectedId, autoSave: false }),
-    [setSelectedId],
-  );
+  const flowStateOptions = useMemo(() => ({ autoSave: false }), []);
 
   const {
     nodes,
@@ -77,6 +70,7 @@ function FlowWorkspaceInner({
     setHistoryInput,
     panelInput,
     setPanelInput,
+    messages: chatMessages,
     busy,
     chatBusy,
     graphBusy,
@@ -92,8 +86,7 @@ function FlowWorkspaceInner({
     selectedId,
     flowInstance,
     activeProfile,
-    messages: chatMessages,
-    setMessages: setChatMessages,
+    initialMessages: initialState.chat ?? [],
   });
   const { isLayouting, handleAutoLayout } = useAutoLayout({
     flowInstance,
@@ -119,6 +112,10 @@ function FlowWorkspaceInner({
     const data = selectedNode.data as InsightNodeData;
     return data.responseId ?? null;
   }, [nodes, selectedId]);
+  const selectedNode = useMemo(
+    () => nodes.find((node) => node.id === selectedId) ?? null,
+    [nodes, selectedId],
+  );
 
   useEffect(() => {
     if (!hydrated.current) {
@@ -151,6 +148,35 @@ function FlowWorkspaceInner({
     trpc.preview.hide.mutate().catch(() => undefined);
     onExit();
   };
+
+  const handleFocusNode = useCallback(
+    (nodeId: string) => {
+      if (!flowInstance) {
+        return;
+      }
+      const internalNode = getNode(nodeId);
+      const node = internalNode ?? nodes.find((item) => item.id === nodeId) ?? null;
+      if (!node) {
+        return;
+      }
+      const position =
+        "positionAbsolute" in node && node.positionAbsolute
+          ? node.positionAbsolute
+          : node.position;
+      const width = "width" in node ? node.width ?? 0 : 0;
+      const height = "height" in node ? node.height ?? 0 : 0;
+      const centerX = position.x + width / 2;
+      const centerY = position.y + height / 2;
+      requestAnimationFrame(() => {
+        flowInstance.setCenter(centerX, centerY, {
+          zoom: Math.max(flowInstance.getZoom(), 1.05),
+          duration: 400,
+        });
+      });
+      setSelectedId(nodeId);
+    },
+    [flowInstance, getNode, nodes, setSelectedId],
+  );
 
   const renderPanelInput = () => {
     if (!panelNodeId || !flowInstance) {
@@ -255,6 +281,8 @@ function FlowWorkspaceInner({
           <ChatHistoryPanel
             messages={chatMessages}
             selectedResponseId={selectedResponseId}
+            selectedNode={selectedNode}
+            onFocusNode={handleFocusNode}
             input={historyInput}
             busy={chatBusy}
             graphBusy={graphBusy}

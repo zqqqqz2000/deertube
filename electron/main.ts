@@ -41,7 +41,7 @@ function createWindow() {
   createIPCHandler({
     router: appRouter,
     windows: [win],
-    createContext: async ({ event }) => createTRPCContext({ event }),
+    createContext: ({ event }) => Promise.resolve(createTRPCContext({ event })),
   })
 
   if (VITE_DEV_SERVER_URL) {

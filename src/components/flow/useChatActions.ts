@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ReactFlowInstance } from "reactflow";
 import { trpc } from "../../lib/trpc";
 import type {
@@ -13,6 +13,8 @@ import type { ProviderProfile } from "../../lib/settings";
 import type { ChatMessage } from "../../types/chat";
 import { placeInsightNodes } from "../../lib/flowPlacement";
 import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
+import { useChat } from "@/lib/chat/use-electron-chat";
+import type { DeertubeUIMessage } from "@/modules/ai/tools";
 
 interface UseChatActionsOptions {
   projectPath: string;
@@ -23,12 +25,22 @@ interface UseChatActionsOptions {
   selectedId: string | null;
   flowInstance: ReactFlowInstance | null;
   activeProfile: ProviderProfile | null;
-  messages: ChatMessage[];
-  setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+  initialMessages: ChatMessage[];
 }
+
+const isStartNode = (node: FlowNode | null) => {
+  if (!node || node.type !== "insight") {
+    return false;
+  }
+  const data = node.data as InsightNodeData;
+  return data.responseId === "" && data.titleShort === "Start";
+};
 
 const buildNodeContext = (node: FlowNode | null) => {
   if (!node) {
+    return "";
+  }
+  if (isStartNode(node)) {
     return "";
   }
   if (node.type === "insight") {
@@ -55,29 +67,28 @@ export function useChatActions({
   selectedId,
   flowInstance,
   activeProfile,
-  messages,
-  setMessages,
+  initialMessages,
 }: UseChatActionsOptions) {
   const [historyInput, setHistoryInput] = useState("");
   const [panelInput, setPanelInput] = useState("");
-  const [chatBusy, setChatBusy] = useState(false);
   const [graphBusy, setGraphBusy] = useState(false);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedId) ?? null,
     [nodes, selectedId],
   );
-
-  const buildPrompt = useCallback(
-    (prompt: string) => {
-      const base = prompt.trim();
-      if (!base) {
-        return "";
-      }
-      const context = buildNodeContext(selectedNode);
-      return context ? `${base}\n\n${context}` : base;
-    },
+  const selectedNodeForContext = useMemo(
+    () => (isStartNode(selectedNode) ? null : selectedNode),
     [selectedNode],
+  );
+  const selectedNodeSummary = useMemo(
+    () => buildNodeContext(selectedNodeForContext) || undefined,
+    [selectedNodeForContext],
+  );
+
+  const initialUiMessages = useMemo(
+    () => initialMessages.map(mapChatToUiMessage),
+    [initialMessages],
   );
 
   const runGraphTools = useCallback(
@@ -92,7 +103,7 @@ export function useChatActions({
           responseId,
           responseText,
           selectedNodeId: selectedId ?? undefined,
-          selectedNodeSummary: buildNodeContext(selectedNode),
+          selectedNodeSummary,
           settings: activeProfile
             ? {
                 llmProvider: activeProfile.llmProvider.trim() || undefined,
@@ -166,151 +177,64 @@ export function useChatActions({
       projectPath,
       selectedId,
       selectedNode,
+      selectedNodeSummary,
       setEdges,
       setNodes,
     ],
   );
 
-  const sendPrompt = useCallback(
-    async (rawPrompt: string, reset: () => void) => {
-      if (chatBusy || !rawPrompt.trim()) {
-        return;
-      }
-      const prompt = buildPrompt(rawPrompt);
-      if (!prompt) {
-        return;
-      }
-      reset();
-
-      const now = new Date().toISOString();
-      const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: prompt,
-        createdAt: now,
-      };
-      const responseId = crypto.randomUUID();
-      const assistantMessage: ChatMessage = {
-        id: responseId,
-        role: "assistant",
-        content: "",
-        createdAt: new Date().toISOString(),
-        status: "pending",
-        requestText: prompt,
-      };
-
-      setMessages((prev) => [...prev, userMessage, assistantMessage]);
-      setChatBusy(true);
-
-      try {
-        const response = await trpc.chat.send.mutate({
-          projectPath,
-          messages: [...messages, userMessage].map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-          settings: activeProfile
-            ? {
-                llmProvider: activeProfile.llmProvider.trim() || undefined,
-                llmModelId: activeProfile.llmModelId.trim() || undefined,
-                llmApiKey: activeProfile.llmApiKey.trim() || undefined,
-                llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
-              }
-            : undefined,
-        });
-
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.id === responseId
-              ? { ...message, content: response.text, status: "complete" }
-              : message,
-          ),
-        );
-
-        void runGraphTools(responseId, response.text);
-      } catch {
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.id === responseId
-              ? {
-                  ...message,
-                  content: "Request failed. Please try again.",
-                  status: "failed",
-                  error: "Request failed",
-                }
-              : message,
-          ),
-        );
-      } finally {
-        setChatBusy(false);
-      }
+  const { messages, sendMessage, regenerate, status, error, stop } =
+    useChat<DeertubeUIMessage>({
+    messages: initialUiMessages,
+    context: {
+      projectPath,
+      selectedNodeSummary,
+      settings: activeProfile
+        ? {
+            llmProvider: activeProfile.llmProvider.trim() || undefined,
+            llmModelId: activeProfile.llmModelId.trim() || undefined,
+            llmApiKey: activeProfile.llmApiKey.trim() || undefined,
+            llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
+          }
+        : undefined,
     },
-    [activeProfile, buildPrompt, chatBusy, messages, projectPath, runGraphTools, setMessages],
+    onFinish: ({ message }: { message?: DeertubeUIMessage }) => {
+      if (!message || message.role !== "assistant") {
+        return;
+      }
+      const text = extractUiMessageText(message);
+      if (!text.trim()) {
+        return;
+      }
+      void runGraphTools(message.id, text);
+    },
+  });
+
+  const derivedMessages = useMemo(
+    () => mapUiMessagesToChat(messages, status, error),
+    [messages, status, error],
+  );
+
+  const sendPrompt = useCallback(
+    (rawPrompt: string, reset: () => void) => {
+      if (!rawPrompt.trim()) {
+        return;
+      }
+      const prompt = rawPrompt.trim();
+      reset();
+      if (status === "streaming" || status === "submitted") {
+        void stop();
+      }
+      void sendMessage({ text: prompt });
+    },
+    [sendMessage, status, stop],
   );
 
   const retryMessage = useCallback(
-    (messageId: string) => {
-      const target = messages.find((message) => message.id === messageId);
-      if (!target || target.role !== "assistant" || !target.requestText) {
-        return;
-      }
-      const requestText = target.requestText;
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === messageId
-            ? { ...message, content: "", status: "pending", error: undefined }
-            : message,
-        ),
-      );
-      void (async () => {
-        setChatBusy(true);
-        try {
-          const response = await trpc.chat.send.mutate({
-            projectPath,
-            messages: messages
-              .filter((message) => message.role !== "assistant" || message.id !== messageId)
-              .map((message) => ({
-                role: message.role,
-                content: message.content,
-              }))
-              .concat({ role: "user", content: requestText }),
-            settings: activeProfile
-              ? {
-                  llmProvider: activeProfile.llmProvider.trim() || undefined,
-                  llmModelId: activeProfile.llmModelId.trim() || undefined,
-                  llmApiKey: activeProfile.llmApiKey.trim() || undefined,
-                  llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
-                }
-              : undefined,
-          });
-
-          setMessages((prev) =>
-            prev.map((message) =>
-              message.id === messageId
-                ? { ...message, content: response.text, status: "complete" }
-                : message,
-            ),
-          );
-          void runGraphTools(messageId, response.text);
-        } catch {
-          setMessages((prev) =>
-            prev.map((message) =>
-              message.id === messageId
-                ? {
-                    ...message,
-                    content: "Request failed. Please try again.",
-                    status: "failed",
-                    error: "Request failed",
-                  }
-                : message,
-            ),
-          );
-        } finally {
-          setChatBusy(false);
-        }
-      })();
+    (_messageId: string) => {
+      void regenerate();
     },
-    [activeProfile, messages, projectPath, runGraphTools, setMessages],
+    [regenerate],
   );
 
   const handleSendFromHistory = useCallback(() => {
@@ -321,7 +245,7 @@ export function useChatActions({
     void sendPrompt(panelInput, () => setPanelInput(""));
   }, [panelInput, sendPrompt]);
 
-  const busy = chatBusy;
+  const busy = status === "streaming" || status === "submitted";
 
   return {
     historyInput,
@@ -329,11 +253,88 @@ export function useChatActions({
     panelInput,
     setPanelInput,
     busy,
-    chatBusy,
+    chatBusy: busy,
     graphBusy,
     handleSendFromHistory,
     handleSendFromPanel,
     retryMessage,
     selectedNode,
+    messages: derivedMessages,
   };
+}
+
+function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    parts: message.content
+      ? [
+          {
+            type: "text",
+            text: message.content,
+          },
+        ]
+      : [],
+  };
+}
+
+function extractUiMessageText(message: DeertubeUIMessage): string {
+  if ("content" in message && typeof message.content === "string") {
+    return message.content;
+  }
+  if (!("parts" in message) || !Array.isArray(message.parts)) {
+    return "";
+  }
+  return message.parts
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        typeof part === "object" &&
+        part !== null &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part,
+    )
+    .map((part) => part.text)
+    .join("");
+}
+
+function mapUiMessagesToChat(
+  messages: DeertubeUIMessage[],
+  status: string,
+  error: Error | undefined,
+): ChatMessage[] {
+  const mapped: ChatMessage[] = messages.map((message) => {
+    const content = extractUiMessageText(message);
+    const createdAt =
+      "createdAt" in message && message.createdAt
+        ? message.createdAt instanceof Date
+          ? message.createdAt.toISOString()
+          : String(message.createdAt)
+        : new Date().toISOString();
+    return {
+      id: message.id,
+      role: message.role as ChatMessage["role"],
+      content,
+      createdAt,
+    };
+  });
+
+  const lastAssistantIndex = [...mapped]
+    .map((message, index) => ({ message, index }))
+    .filter((item) => item.message.role === "assistant")
+    .slice(-1)[0]?.index;
+
+  if (lastAssistantIndex !== undefined) {
+    const lastAssistant = mapped[lastAssistantIndex];
+    if (status === "streaming" || status === "submitted") {
+      lastAssistant.status = "pending";
+    } else if (status === "error") {
+      lastAssistant.status = "failed";
+      lastAssistant.error = error?.message ?? "Request failed";
+    } else {
+      lastAssistant.status = "complete";
+    }
+  }
+
+  return mapped;
 }

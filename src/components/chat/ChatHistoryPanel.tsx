@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "../../types/chat";
+import type {
+  FlowNode,
+  InsightNodeData,
+  QuestionNodeData,
+  SourceNodeData,
+} from "../../types/flow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Chat } from "@/modules/chat/components/chat";
@@ -23,6 +29,8 @@ import {
 interface ChatHistoryPanelProps {
   messages: ChatMessage[];
   selectedResponseId: string | null;
+  selectedNode?: FlowNode | null;
+  onFocusNode?: (nodeId: string) => void;
   input: string;
   busy: boolean;
   graphBusy?: boolean;
@@ -34,6 +42,8 @@ interface ChatHistoryPanelProps {
 export default function ChatHistoryPanel({
   messages,
   selectedResponseId,
+  selectedNode,
+  onFocusNode,
   input,
   busy,
   graphBusy = false,
@@ -43,8 +53,22 @@ export default function ChatHistoryPanel({
 }: ChatHistoryPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragOffset = useRef<{ x: number; y: number } | null>(null);
+  const resizeOffset = useRef<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    mode: "x" | "y" | "both";
+  } | null>(null);
   const highlightedId = selectedResponseId;
   const [panelPosition, setPanelPosition] = useState({ x: 16, y: 80 });
+  const [panelSize, setPanelSize] = useState(() => ({
+    width: 380,
+    height:
+      typeof window === "undefined"
+        ? 560
+        : Math.round(window.innerHeight * 0.78),
+  }));
   const sortedMessages = useMemo(
     () =>
       [...messages].sort(
@@ -53,6 +77,48 @@ export default function ChatHistoryPanel({
       ),
     [messages],
   );
+  const selectedSummary = useMemo(() => {
+    if (!selectedNode) {
+      return null;
+    }
+    if (selectedNode.type === "insight") {
+      const data = selectedNode.data as InsightNodeData;
+      if (data.responseId === "" && data.titleShort === "Start") {
+        return null;
+      }
+      return {
+        id: selectedNode.id,
+        title: data.titleShort || data.titleLong,
+        subtitle: data.excerpt,
+        kind: "Insight",
+      };
+    }
+    if (selectedNode.type === "source") {
+      const data = selectedNode.data as SourceNodeData;
+      return {
+        id: selectedNode.id,
+        title: data.title,
+        subtitle: data.snippet ?? data.url,
+        kind: "Source",
+      };
+    }
+    if (selectedNode.type === "question") {
+      const data = selectedNode.data as QuestionNodeData;
+      return {
+        id: selectedNode.id,
+        title: data.question,
+        subtitle: data.answer,
+        kind: "Q/A",
+      };
+    }
+    return null;
+  }, [selectedNode]);
+  const handleFocusNode = useCallback(() => {
+    if (!selectedSummary?.id || !onFocusNode) {
+      return;
+    }
+    onFocusNode(selectedSummary.id);
+  }, [onFocusNode, selectedSummary]);
 
   useEffect(() => {
     if (!scrollRef.current) {
@@ -91,6 +157,57 @@ export default function ChatHistoryPanel({
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     dragOffset.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const handleResizePointerDown =
+    (mode: "x" | "y" | "both") => (event: React.PointerEvent<HTMLDivElement>) => {
+      event.stopPropagation();
+      resizeOffset.current = {
+        x: event.clientX,
+        y: event.clientY,
+        width: panelSize.width,
+        height: panelSize.height,
+        mode,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    };
+
+  const handleResizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeOffset.current) {
+      return;
+    }
+    const maxWidth =
+      typeof window === "undefined"
+        ? 720
+        : Math.max(360, window.innerWidth - 40);
+    const maxHeight =
+      typeof window === "undefined"
+        ? 760
+        : Math.max(320, Math.round(window.innerHeight * 0.9));
+    const minWidth = 320;
+    const minHeight = 320;
+    const deltaX = event.clientX - resizeOffset.current.x;
+    const deltaY = event.clientY - resizeOffset.current.y;
+    const nextWidth =
+      resizeOffset.current.mode === "y"
+        ? resizeOffset.current.width
+        : Math.min(
+            maxWidth,
+            Math.max(minWidth, resizeOffset.current.width + deltaX),
+          );
+    const nextHeight =
+      resizeOffset.current.mode === "x"
+        ? resizeOffset.current.height
+        : Math.min(
+            maxHeight,
+            Math.max(minHeight, resizeOffset.current.height + deltaY),
+          );
+    setPanelSize({ width: nextWidth, height: nextHeight });
+  };
+
+  const handleResizePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    resizeOffset.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
@@ -142,21 +259,44 @@ export default function ChatHistoryPanel({
 
   return (
     <div
-      className="pointer-events-auto absolute z-20 w-[380px]"
-      style={{ left: panelPosition.x, top: panelPosition.y }}
+      className="pointer-events-auto absolute z-20"
+      style={{ left: panelPosition.x, top: panelPosition.y, width: panelSize.width }}
     >
-      <div className="flex h-[78vh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/90 shadow-2xl shadow-black/40 backdrop-blur">
+      <div
+        className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/90 shadow-2xl shadow-black/40 backdrop-blur"
+        style={{ height: panelSize.height }}
+      >
         <div
           className="flex cursor-move items-center justify-between border-b border-border px-4 py-3 text-[11px] uppercase tracking-[0.25em] text-muted-foreground"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
-          <span>History</span>
+          <span>Explore</span>
           <span className="text-[10px] font-semibold text-muted-foreground/70">
             {messages.length} MSG
           </span>
         </div>
+        {selectedSummary && (
+          <button
+            type="button"
+            className="mx-3 mt-3 flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left transition hover:border-white/25 hover:bg-white/10"
+            onClick={handleFocusNode}
+          >
+            <div className="mt-1 h-2.5 w-2.5 rounded-full bg-amber-400/80 shadow-[0_0_12px_rgba(251,191,36,0.45)]" />
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground/70">
+                Selected {selectedSummary.kind}
+              </div>
+              <div className="truncate text-sm font-semibold text-foreground">
+                {selectedSummary.title}
+              </div>
+              <div className="line-clamp-2 text-xs text-muted-foreground">
+                {selectedSummary.subtitle}
+              </div>
+            </div>
+          </button>
+        )}
         <Chat>
           <ChatMessages ref={scrollRef} className="gap-2 px-2">
             {messages.length === 0 ? (
@@ -174,7 +314,7 @@ export default function ChatHistoryPanel({
                 const isHighlighted = message.id === highlightedId;
                 const isFailed = message.status === "failed";
                 const displayContent =
-                  !isUser && message.status === "pending"
+                  !isUser && message.status === "pending" && !message.content
                     ? "Thinking..."
                     : message.content;
                 const content = (
@@ -287,6 +427,24 @@ export default function ChatHistoryPanel({
           </ChatToolbar>
         </Chat>
       </div>
+      <div
+        className="absolute right-0 top-10 h-[calc(100%-40px)] w-1 cursor-ew-resize"
+        onPointerDown={handleResizePointerDown("x")}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerUp}
+      />
+      <div
+        className="absolute bottom-0 left-6 h-1 w-[calc(100%-24px)] cursor-ns-resize"
+        onPointerDown={handleResizePointerDown("y")}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerUp}
+      />
+      <div
+        className="absolute bottom-1 right-1 h-4 w-4 cursor-se-resize rounded-full border border-white/30 bg-white/10"
+        onPointerDown={handleResizePointerDown("both")}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerUp}
+      />
     </div>
   );
 }
