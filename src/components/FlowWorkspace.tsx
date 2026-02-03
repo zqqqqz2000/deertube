@@ -43,6 +43,7 @@ function FlowWorkspaceInner({
   );
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [isDragging, setIsDragging] = useState(false);
+  const [chatCollapseSignal, setChatCollapseSignal] = useState(0);
   const saveTimer = useRef<number | null>(null);
   const { getNode } = useReactFlow();
   const flowStateOptions = useMemo(() => ({ autoSave: false }), []);
@@ -265,7 +266,10 @@ function FlowWorkspaceInner({
               setPanelInput("");
             }}
             selectNodesOnDrag={false}
-            onPaneClick={() => setSelectedId(null)}
+            onPaneClick={() => {
+              setSelectedId(null);
+              setChatCollapseSignal((prev) => prev + 1);
+            }}
             onNodeDragStart={() => setIsDragging(true)}
             onNodeDragStop={() => setIsDragging(false)}
             onNodeMouseEnter={handleNodeEnter}
@@ -307,6 +311,7 @@ function FlowWorkspaceInner({
             selectedResponseId={selectedResponseId}
             selectedNode={selectedNode}
             onFocusNode={handleFocusNode}
+            collapseSignal={chatCollapseSignal}
             input={historyInput}
             busy={chatBusy}
             graphBusy={graphBusy}

@@ -15,7 +15,7 @@ export function AdditionalMessage({
   timestamp: number;
 }) {
   return (
-    <ChatEvent className="group hover:bg-accent">
+    <ChatEvent className="group">
       <ChatEventAddon>
         <ChatEventDescription className="invisible text-right text-[8px] group-hover:visible @md/chat:text-[10px]">
           {new Intl.DateTimeFormat("en-US", {

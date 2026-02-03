@@ -31,6 +31,7 @@ interface ChatHistoryPanelProps {
   selectedResponseId: string | null;
   selectedNode?: FlowNode | null;
   onFocusNode?: (nodeId: string) => void;
+  collapseSignal?: number;
   input: string;
   busy: boolean;
   graphBusy?: boolean;
@@ -44,6 +45,7 @@ export default function ChatHistoryPanel({
   selectedResponseId,
   selectedNode,
   onFocusNode,
+  collapseSignal = 0,
   input,
   busy,
   graphBusy = false,
@@ -69,6 +71,10 @@ export default function ChatHistoryPanel({
         ? 560
         : Math.round(window.innerHeight * 0.78),
   }));
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isPinned, setIsPinned] = useState(true);
+  const collapsedSize = useMemo(() => ({ width: 170, height: 56 }), []);
+  const expandedSize = panelSize;
   const sortedMessages = useMemo(
     () =>
       [...messages].sort(
@@ -136,6 +142,14 @@ export default function ChatHistoryPanel({
     }
   }, [highlightedId, sortedMessages.length]);
 
+  useEffect(() => {
+    if (collapseSignal === 0) {
+      return;
+    }
+    setIsPinned(false);
+    setIsCollapsed(true);
+  }, [collapseSignal]);
+
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
     dragOffset.current = {
@@ -162,6 +176,9 @@ export default function ChatHistoryPanel({
 
   const handleResizePointerDown =
     (mode: "x" | "y" | "both") => (event: React.PointerEvent<HTMLDivElement>) => {
+      if (isCollapsed) {
+        return;
+      }
       event.stopPropagation();
       resizeOffset.current = {
         x: event.clientX,
@@ -209,6 +226,27 @@ export default function ChatHistoryPanel({
   const handleResizePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     resizeOffset.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const handlePanelMouseEnter = () => {
+    if (!isPinned && isCollapsed) {
+      setIsCollapsed(false);
+    }
+  };
+
+  const handlePanelMouseLeave = () => {
+    if (!isPinned) {
+      setIsCollapsed(true);
+    }
+  };
+
+  const handlePanelInteract = () => {
+    if (!isPinned) {
+      setIsPinned(true);
+    }
+    if (isCollapsed) {
+      setIsCollapsed(false);
+    }
   };
 
   const chatItems = useMemo(() => {
@@ -259,13 +297,31 @@ export default function ChatHistoryPanel({
 
   return (
     <div
-      className="pointer-events-auto absolute z-20"
-      style={{ left: panelPosition.x, top: panelPosition.y, width: panelSize.width }}
+      className="pointer-events-auto absolute z-20 transition-[width,height] duration-200"
+      style={{
+        left: panelPosition.x,
+        top: panelPosition.y,
+        width: isCollapsed ? collapsedSize.width : expandedSize.width,
+        height: isCollapsed ? collapsedSize.height : expandedSize.height,
+      }}
+      onMouseEnter={handlePanelMouseEnter}
+      onMouseLeave={handlePanelMouseLeave}
     >
       <div
-        className="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/90 shadow-2xl shadow-black/40 backdrop-blur"
-        style={{ height: panelSize.height }}
+        className="flex h-full w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/90 shadow-2xl shadow-black/40 backdrop-blur transition-[width,height] duration-200"
+        onPointerDown={handlePanelInteract}
+        onWheel={handlePanelInteract}
+        onFocusCapture={handlePanelInteract}
       >
+        {isCollapsed ? (
+          <div className="flex h-full items-center justify-between px-4 text-[11px] uppercase tracking-[0.3em] text-muted-foreground">
+            <span>Chat</span>
+            <span className="text-[10px] font-semibold text-muted-foreground/70">
+              {messages.length}
+            </span>
+          </div>
+        ) : (
+          <>
         <div
           className="flex cursor-move items-center justify-between border-b border-border px-4 py-3 text-[11px] uppercase tracking-[0.25em] text-muted-foreground"
           onPointerDown={handlePointerDown}
@@ -426,25 +482,33 @@ export default function ChatHistoryPanel({
             </ChatToolbarAddonEnd>
           </ChatToolbar>
         </Chat>
+          </>
+        )}
       </div>
+      {!isCollapsed && (
       <div
         className="absolute right-0 top-10 h-[calc(100%-40px)] w-1 cursor-ew-resize"
         onPointerDown={handleResizePointerDown("x")}
         onPointerMove={handleResizePointerMove}
         onPointerUp={handleResizePointerUp}
       />
+      )}
+      {!isCollapsed && (
       <div
         className="absolute bottom-0 left-6 h-1 w-[calc(100%-24px)] cursor-ns-resize"
         onPointerDown={handleResizePointerDown("y")}
         onPointerMove={handleResizePointerMove}
         onPointerUp={handleResizePointerUp}
       />
+      )}
+      {!isCollapsed && (
       <div
         className="absolute bottom-1 right-1 h-4 w-4 cursor-se-resize rounded-full border border-white/30 bg-white/10"
         onPointerDown={handleResizePointerDown("both")}
         onPointerMove={handleResizePointerMove}
         onPointerUp={handleResizePointerUp}
       />
+      )}
     </div>
   );
 }
