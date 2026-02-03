@@ -5,4 +5,7 @@ export interface ChatMessage {
   role: ChatRole
   content: string
   createdAt: string
+  status?: 'pending' | 'complete' | 'failed'
+  error?: string
+  requestText?: string
 }

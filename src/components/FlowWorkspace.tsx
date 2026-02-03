@@ -80,6 +80,7 @@ function FlowWorkspaceInner({
     busy,
     chatBusy,
     graphBusy,
+    retryMessage,
     handleSendFromHistory,
     handleSendFromPanel,
   } = useChatActions({
@@ -259,6 +260,7 @@ function FlowWorkspaceInner({
             graphBusy={graphBusy}
             onInputChange={setHistoryInput}
             onSend={handleSendFromHistory}
+            onRetry={retryMessage}
           />
           {renderPanelInput()}
         </div>

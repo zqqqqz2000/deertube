@@ -195,6 +195,8 @@ export function useChatActions({
         role: "assistant",
         content: "",
         createdAt: new Date().toISOString(),
+        status: "pending",
+        requestText: prompt,
       };
 
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
@@ -220,7 +222,7 @@ export function useChatActions({
         setMessages((prev) =>
           prev.map((message) =>
             message.id === responseId
-              ? { ...message, content: response.text }
+              ? { ...message, content: response.text, status: "complete" }
               : message,
           ),
         );
@@ -230,7 +232,12 @@ export function useChatActions({
         setMessages((prev) =>
           prev.map((message) =>
             message.id === responseId
-              ? { ...message, content: "Request failed. Please try again." }
+              ? {
+                  ...message,
+                  content: "Request failed. Please try again.",
+                  status: "failed",
+                  error: "Request failed",
+                }
               : message,
           ),
         );
@@ -239,6 +246,71 @@ export function useChatActions({
       }
     },
     [activeProfile, buildPrompt, chatBusy, messages, projectPath, runGraphTools, setMessages],
+  );
+
+  const retryMessage = useCallback(
+    (messageId: string) => {
+      const target = messages.find((message) => message.id === messageId);
+      if (!target || target.role !== "assistant" || !target.requestText) {
+        return;
+      }
+      const requestText = target.requestText;
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === messageId
+            ? { ...message, content: "", status: "pending", error: undefined }
+            : message,
+        ),
+      );
+      void (async () => {
+        setChatBusy(true);
+        try {
+          const response = await trpc.chat.send.mutate({
+            projectPath,
+            messages: messages
+              .filter((message) => message.role !== "assistant" || message.id !== messageId)
+              .map((message) => ({
+                role: message.role,
+                content: message.content,
+              }))
+              .concat({ role: "user", content: requestText }),
+            settings: activeProfile
+              ? {
+                  llmProvider: activeProfile.llmProvider.trim() || undefined,
+                  llmModelId: activeProfile.llmModelId.trim() || undefined,
+                  llmApiKey: activeProfile.llmApiKey.trim() || undefined,
+                  llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
+                }
+              : undefined,
+          });
+
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === messageId
+                ? { ...message, content: response.text, status: "complete" }
+                : message,
+            ),
+          );
+          void runGraphTools(messageId, response.text);
+        } catch {
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    content: "Request failed. Please try again.",
+                    status: "failed",
+                    error: "Request failed",
+                  }
+                : message,
+            ),
+          );
+        } finally {
+          setChatBusy(false);
+        }
+      })();
+    },
+    [activeProfile, messages, projectPath, runGraphTools, setMessages],
   );
 
   const handleSendFromHistory = useCallback(() => {
@@ -261,6 +333,7 @@ export function useChatActions({
     graphBusy,
     handleSendFromHistory,
     handleSendFromPanel,
+    retryMessage,
     selectedNode,
   };
 }
