@@ -48,6 +48,7 @@ function FlowWorkspaceInner({
   const [chatScrollSignal, setChatScrollSignal] = useState(0);
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
+  const nodeZoomRef = useRef<Viewport | null>(null);
   const { getNode } = useReactFlow();
   const flowStateOptions = useMemo(() => ({ autoSave: false }), []);
 
@@ -187,6 +188,9 @@ function FlowWorkspaceInner({
       if (!flowInstance) {
         return;
       }
+      if (!nodeZoomRef.current) {
+        nodeZoomRef.current = flowInstance.getViewport();
+      }
       const internalNode = getNode(node.id);
       const position =
         internalNode?.positionAbsolute ?? internalNode?.position ?? { x: 0, y: 0 };
@@ -304,6 +308,13 @@ function FlowWorkspaceInner({
               if (flowInstance && inputZoomRef.current) {
                 const { viewport } = inputZoomRef.current;
                 inputZoomRef.current = null;
+                requestAnimationFrame(() => {
+                  flowInstance.setViewport(viewport, { duration: 350 });
+                });
+              }
+              if (flowInstance && nodeZoomRef.current) {
+                const viewport = nodeZoomRef.current;
+                nodeZoomRef.current = null;
                 requestAnimationFrame(() => {
                   flowInstance.setViewport(viewport, { duration: 350 });
                 });

@@ -13,12 +13,12 @@ export default function InsightNode({ data, selected }: InsightNodeProps) {
   if (isMicro) {
     return (
       <Card
-        className={`relative w-[220px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 ${
-          selected ? "ring-1 ring-white/20" : ""
+        className={`relative w-[220px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
+          selected ? "ring-1 ring-white/20 after:opacity-100" : ""
         }`}
       >
         <CardContent className="flex items-center justify-center px-4 py-5">
-          <div className="text-center text-base font-semibold tracking-wide text-white/90">
+          <div className="text-center text-xl font-semibold tracking-wide text-white/95">
             {data.titleTiny || data.titleShort || data.titleLong || "Node"}
           </div>
         </CardContent>
@@ -31,13 +31,12 @@ export default function InsightNode({ data, selected }: InsightNodeProps) {
   if (isCompact) {
     return (
       <Card
-        className={`relative w-[280px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 ${
-          selected ? "ring-1 ring-white/20" : ""
+        className={`relative w-[280px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
+          selected ? "ring-1 ring-white/20 after:opacity-100" : ""
         }`}
       >
         <CardContent className="p-4">
-          <div className="text-[0.6rem] tracking-[0.25em] text-white/50">Insight</div>
-          <div className="mt-2 text-sm font-semibold text-white">
+          <div className="text-lg font-semibold text-white">
             {data.titleShort || data.titleLong}
           </div>
         </CardContent>
