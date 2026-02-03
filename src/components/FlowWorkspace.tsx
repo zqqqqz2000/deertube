@@ -44,7 +44,10 @@ function FlowWorkspaceInner({
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [isDragging, setIsDragging] = useState(false);
   const [chatCollapseSignal, setChatCollapseSignal] = useState(0);
+  const [chatPinSignal, setChatPinSignal] = useState(0);
+  const [chatScrollSignal, setChatScrollSignal] = useState(0);
   const saveTimer = useRef<number | null>(null);
+  const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const { getNode } = useReactFlow();
   const flowStateOptions = useMemo(() => ({ autoSave: false }), []);
 
@@ -220,19 +223,49 @@ function FlowWorkspaceInner({
     const screenX = position.x * viewport.zoom + viewport.x;
     const screenY = position.y * viewport.zoom + viewport.y;
     const panelTop = screenY + nodeHeight * viewport.zoom + 10 * viewport.zoom;
+    const isMicro = viewport.zoom <= 0.55;
+    const isCompact = !isMicro && viewport.zoom <= 0.85;
+    const minWidth = isMicro ? 160 : isCompact ? 200 : 240;
+    const nodeScreenWidth = nodeWidth * viewport.zoom;
+    const resolvedWidth = Math.max(nodeScreenWidth || minWidth, minWidth);
+    const centerX = screenX + nodeScreenWidth / 2;
+    const panelLeft = Math.max(0, centerX - resolvedWidth / 2);
+
+    const handleInputFocusZoom = (focusInput: () => void) => {
+      if (!flowInstance) {
+        return;
+      }
+      if (!inputZoomRef.current) {
+        inputZoomRef.current = { viewport: flowInstance.getViewport(), nodeId: selectedNode.id };
+      }
+      const centerX = position.x + nodeWidth / 2;
+      const centerY = position.y + nodeHeight / 2;
+      requestAnimationFrame(() => {
+        flowInstance.setCenter(centerX, centerY, {
+          zoom: Math.max(flowInstance.getZoom(), 1.6),
+          duration: 350,
+        });
+        focusInput();
+      });
+    };
 
     return (
       <FlowPanelInput
         visible={panelVisible}
-        left={screenX}
+        left={panelLeft}
         top={panelTop}
-        width={nodeWidth ? nodeWidth * viewport.zoom : undefined}
+        width={resolvedWidth}
+        zoom={viewport.zoom}
         prompt={panelInput}
         busy={busy}
         onPromptChange={setPanelInput}
         onSend={() => {
           void handleSendFromPanel();
+          setSelectedId(null);
+          setChatPinSignal((prev) => prev + 1);
+          setChatScrollSignal((prev) => prev + 1);
         }}
+        onFocusZoom={handleInputFocusZoom}
       />
     );
   };
@@ -269,12 +302,20 @@ function FlowWorkspaceInner({
             onPaneClick={() => {
               setSelectedId(null);
               setChatCollapseSignal((prev) => prev + 1);
+              if (flowInstance && inputZoomRef.current) {
+                const { viewport } = inputZoomRef.current;
+                inputZoomRef.current = null;
+                requestAnimationFrame(() => {
+                  flowInstance.setViewport(viewport, { duration: 350 });
+                });
+              }
             }}
             onNodeDragStart={() => setIsDragging(true)}
             onNodeDragStop={() => setIsDragging(false)}
             onNodeMouseEnter={handleNodeEnter}
             onNodeMouseLeave={handleNodeLeave}
             onNodeDoubleClick={handleNodeDoubleClick}
+            zoomOnDoubleClick={false}
             defaultEdgeOptions={{
               type: "smoothstep",
               style: { stroke: "rgba(255,255,255,0.35)", strokeWidth: 1.6 },
@@ -312,6 +353,9 @@ function FlowWorkspaceInner({
             selectedNode={selectedNode}
             onFocusNode={handleFocusNode}
             collapseSignal={chatCollapseSignal}
+            pinSignal={chatPinSignal}
+            scrollToBottomSignal={chatScrollSignal}
+            onRequestClearSelection={() => setSelectedId(null)}
             input={historyInput}
             busy={chatBusy}
             graphBusy={graphBusy}

@@ -25,6 +25,7 @@ import {
   ChatToolbarAddonEnd,
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
+import { ArrowDown } from "lucide-react";
 
 interface ChatHistoryPanelProps {
   messages: ChatMessage[];
@@ -32,6 +33,9 @@ interface ChatHistoryPanelProps {
   selectedNode?: FlowNode | null;
   onFocusNode?: (nodeId: string) => void;
   collapseSignal?: number;
+  pinSignal?: number;
+  scrollToBottomSignal?: number;
+  onRequestClearSelection?: () => void;
   input: string;
   busy: boolean;
   graphBusy?: boolean;
@@ -46,6 +50,9 @@ export default function ChatHistoryPanel({
   selectedNode,
   onFocusNode,
   collapseSignal = 0,
+  pinSignal = 0,
+  scrollToBottomSignal = 0,
+  onRequestClearSelection,
   input,
   busy,
   graphBusy = false,
@@ -63,6 +70,7 @@ export default function ChatHistoryPanel({
     mode: "x" | "y" | "both";
   } | null>(null);
   const highlightedId = selectedResponseId;
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const [panelPosition, setPanelPosition] = useState({ x: 16, y: 80 });
   const [panelSize, setPanelSize] = useState(() => ({
     width: 380,
@@ -73,7 +81,7 @@ export default function ChatHistoryPanel({
   }));
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isPinned, setIsPinned] = useState(true);
-  const collapsedSize = useMemo(() => ({ width: 170, height: 56 }), []);
+  const collapsedSize = useMemo(() => ({ width: 200, height: 70 }), []);
   const expandedSize = panelSize;
   const sortedMessages = useMemo(
     () =>
@@ -126,21 +134,43 @@ export default function ChatHistoryPanel({
     onFocusNode(selectedSummary.id);
   }, [onFocusNode, selectedSummary]);
 
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    if (!scrollRef.current) {
+      return;
+    }
+    scrollRef.current.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior,
+    });
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    if (!scrollRef.current) {
+      return;
+    }
+    const el = scrollRef.current;
+    const threshold = 24;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    setIsAtBottom(atBottom);
+  }, []);
+
   useEffect(() => {
     if (!scrollRef.current) {
       return;
     }
-    if (!highlightedId) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (highlightedId) {
+      const target = scrollRef.current.querySelector<HTMLElement>(
+        `[data-message-id="${highlightedId}"]`,
+      );
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
       return;
     }
-    const target = scrollRef.current.querySelector<HTMLElement>(
-      `[data-message-id="${highlightedId}"]`,
-    );
-    if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (isAtBottom) {
+      scrollToBottom("smooth");
     }
-  }, [highlightedId, sortedMessages.length]);
+  }, [highlightedId, sortedMessages.length, isAtBottom, scrollToBottom]);
 
   useEffect(() => {
     if (collapseSignal === 0) {
@@ -149,6 +179,26 @@ export default function ChatHistoryPanel({
     setIsPinned(false);
     setIsCollapsed(true);
   }, [collapseSignal]);
+
+  useEffect(() => {
+    if (pinSignal === 0) {
+      return;
+    }
+    setIsPinned(true);
+    setIsCollapsed(false);
+  }, [pinSignal]);
+
+  useEffect(() => {
+    if (scrollToBottomSignal === 0) {
+      return;
+    }
+    setIsAtBottom(true);
+    scrollToBottom("smooth");
+  }, [scrollToBottomSignal, scrollToBottom]);
+
+  useEffect(() => {
+    handleScroll();
+  }, [handleScroll, sortedMessages.length, busy, graphBusy]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
@@ -314,9 +364,9 @@ export default function ChatHistoryPanel({
         onFocusCapture={handlePanelInteract}
       >
         {isCollapsed ? (
-          <div className="flex h-full items-center justify-between px-4 text-[11px] uppercase tracking-[0.3em] text-muted-foreground">
+          <div className="flex h-full items-center justify-between rounded-2xl border border-sky-400/60 bg-slate-950/95 px-4 text-[11px] uppercase tracking-[0.3em] text-sky-200 shadow-[0_0_24px_rgba(56,189,248,0.35)]">
             <span>Chat</span>
-            <span className="text-[10px] font-semibold text-muted-foreground/70">
+            <span className="text-[10px] font-semibold text-sky-200/80">
               {messages.length}
             </span>
           </div>
@@ -354,7 +404,11 @@ export default function ChatHistoryPanel({
           </button>
         )}
         <Chat>
-          <ChatMessages ref={scrollRef} className="gap-2 px-2">
+          <ChatMessages
+            ref={scrollRef}
+            className="gap-2 px-2"
+            onScroll={handleScroll}
+          >
             {messages.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
                 Ask a question to build the conversation.
@@ -457,6 +511,22 @@ export default function ChatHistoryPanel({
               />
             )}
           </ChatMessages>
+          {!isAtBottom && (
+            <div className="absolute bottom-20 left-1/2 -translate-x-1/2">
+              <Button
+                size="icon"
+                variant="outline"
+                className="rounded-full shadow-lg"
+                onClick={() => {
+                  onRequestClearSelection?.();
+                  setIsAtBottom(true);
+                  scrollToBottom("smooth");
+                }}
+              >
+                <ArrowDown className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
           <ChatToolbar>
             <ChatToolbarTextarea
               value={input}
