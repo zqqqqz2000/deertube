@@ -28,7 +28,7 @@ export function PrimaryMessage({
   className?: string;
 }) {
   return (
-    <ChatEvent className={cn("group hover:bg-accent", className)}>
+    <ChatEvent className={cn("group hover:bg-accent py-2", className)}>
       <ChatEventAddon>
         <Avatar className="mx-auto size-8 rounded-full @md/chat:size-10">
           <AvatarImage src={avatarSrc} alt={avatarAlt} />
@@ -36,7 +36,7 @@ export function PrimaryMessage({
         </Avatar>
       </ChatEventAddon>
       <ChatEventBody>
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2 mb-2">
           <ChatEventTitle>{senderName}</ChatEventTitle>
           <ChatEventDescription>
             {new Intl.DateTimeFormat("en-US", {

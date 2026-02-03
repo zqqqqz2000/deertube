@@ -48,7 +48,8 @@ export default function ChatHistoryPanel({
   const sortedMessages = useMemo(
     () =>
       [...messages].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
       ),
     [messages],
   );
@@ -94,11 +95,11 @@ export default function ChatHistoryPanel({
   };
 
   const chatItems = useMemo(() => {
-    const items: Array<
+    const items: (
       | { kind: "date"; id: string; timestamp: number }
       | { kind: "primary"; id: string; message: ChatMessage }
       | { kind: "additional"; id: string; message: ChatMessage }
-    > = [];
+    )[] = [];
     let lastDateKey = "";
     let lastRole: ChatMessage["role"] | null = null;
 
@@ -130,6 +131,14 @@ export default function ChatHistoryPanel({
 
     return items;
   }, [sortedMessages]);
+  const hasPendingAssistant = useMemo(
+    () =>
+      messages.some(
+        (message) =>
+          message.role === "assistant" && message.status === "pending",
+      ),
+    [messages],
+  );
 
   return (
     <div
@@ -164,17 +173,24 @@ export default function ChatHistoryPanel({
                 const isUser = message.role === "user";
                 const isHighlighted = message.id === highlightedId;
                 const isFailed = message.status === "failed";
+                const displayContent =
+                  !isUser && message.status === "pending"
+                    ? "Thinking..."
+                    : message.content;
                 const content = (
                   <div
                     className={cn(
                       "rounded-md px-3 py-2",
-                      isUser ? "bg-muted text-foreground" : "bg-secondary text-foreground",
-                      isFailed && "border border-destructive/40 bg-destructive/10 text-destructive",
-                      isHighlighted && "ring-2 ring-amber-400/60"
+                      isUser
+                        ? "bg-muted text-foreground"
+                        : "bg-secondary text-foreground",
+                      isFailed &&
+                        "border border-destructive/40 bg-destructive/10 text-destructive",
+                      isHighlighted && "ring-2 ring-amber-400/60",
                     )}
                   >
                     <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
-                      {message.content}
+                      {displayContent}
                     </pre>
                     {!isUser && isFailed && onRetry && (
                       <div className="mt-3 flex items-center gap-2">
@@ -207,7 +223,10 @@ export default function ChatHistoryPanel({
                 }
                 return (
                   <div key={item.id} data-message-id={message.id}>
-                    <AdditionalMessage content={content} timestamp={timestamp} />
+                    <AdditionalMessage
+                      content={content}
+                      timestamp={timestamp}
+                    />
                   </div>
                 );
               })
@@ -223,11 +242,13 @@ export default function ChatHistoryPanel({
                       graph.run()
                     </div>
                   </ChatEventContent>
-                  <ChatEventDescription>Applying graph updates</ChatEventDescription>
+                  <ChatEventDescription>
+                    Applying graph updates
+                  </ChatEventDescription>
                 </ChatEventBody>
               </ChatEvent>
             )}
-            {busy && (
+            {busy && !hasPendingAssistant && (
               <PrimaryMessage
                 senderName="Assistant"
                 avatarFallback="A"
