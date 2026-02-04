@@ -46,6 +46,7 @@ function FlowWorkspaceInner({
   const [chatCollapseSignal, setChatCollapseSignal] = useState(0);
   const [chatPinSignal, setChatPinSignal] = useState(0);
   const [chatScrollSignal, setChatScrollSignal] = useState(0);
+  const [chatFocusSignal, setChatFocusSignal] = useState(0);
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
@@ -186,6 +187,7 @@ function FlowWorkspaceInner({
         });
       });
       setSelectedId(nodeId);
+      setChatFocusSignal((prev) => prev + 1);
     },
     [flowInstance, getNode, nodes, setNodes, setSelectedId],
   );
@@ -212,6 +214,7 @@ function FlowWorkspaceInner({
         });
       });
       setSelectedId(node.id);
+      setChatFocusSignal((prev) => prev + 1);
     },
     [flowInstance, getNode, setSelectedId],
   );
@@ -307,6 +310,7 @@ function FlowWorkspaceInner({
             onNodeClick={(_, node) => {
               setSelectedId(node.id);
               setPanelInput("");
+              setChatFocusSignal((prev) => prev + 1);
             }}
             selectNodesOnDrag={false}
             onPaneClick={() => {
@@ -373,6 +377,7 @@ function FlowWorkspaceInner({
             collapseSignal={chatCollapseSignal}
             pinSignal={chatPinSignal}
             scrollToBottomSignal={chatScrollSignal}
+            focusSignal={chatFocusSignal}
             onRequestClearSelection={() => setSelectedId(null)}
             input={historyInput}
             busy={chatBusy}

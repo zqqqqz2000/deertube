@@ -38,6 +38,7 @@ interface ChatHistoryPanelProps {
   collapseSignal?: number;
   pinSignal?: number;
   scrollToBottomSignal?: number;
+  focusSignal?: number;
   onRequestClearSelection?: () => void;
   input: string;
   busy: boolean;
@@ -57,6 +58,7 @@ export default function ChatHistoryPanel({
   collapseSignal = 0,
   pinSignal = 0,
   scrollToBottomSignal = 0,
+  focusSignal = 0,
   onRequestClearSelection,
   input,
   busy,
@@ -260,7 +262,13 @@ export default function ChatHistoryPanel({
         `[data-message-id="${highlightedId}"]`,
       );
       if (target) {
-        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        const excerpt = target.querySelector<HTMLElement>(
+          'mark[data-highlight-excerpt="true"]',
+        );
+        (excerpt ?? target).scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
       }
       return;
     }
@@ -268,7 +276,13 @@ export default function ChatHistoryPanel({
     if (isAtBottom) {
       scrollToBottom("smooth");
     }
-  }, [highlightedId, sortedMessages.length, isAtBottom, scrollToBottom]);
+  }, [
+    highlightedId,
+    focusSignal,
+    sortedMessages.length,
+    isAtBottom,
+    scrollToBottom,
+  ]);
 
   useEffect(() => {
     if (collapseSignal === 0) {
