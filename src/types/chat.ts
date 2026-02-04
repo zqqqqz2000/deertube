@@ -9,3 +9,13 @@ export interface ChatMessage {
   error?: string
   requestText?: string
 }
+
+export interface GraphEvent {
+  id: string
+  status: 'running' | 'complete' | 'failed'
+  createdAt: string
+  endedAt?: string
+  responseId: string
+  nodesAdded?: number
+  error?: string
+}

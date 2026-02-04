@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatMessage } from "../../types/chat";
+import type { ChatMessage, GraphEvent } from "../../types/chat";
 import type {
   FlowNode,
   InsightNodeData,
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Chat } from "@/modules/chat/components/chat";
 import { ChatMessages } from "@/modules/chat/components/chat-messages";
+import { MarkdownRenderer } from "@/components/markdown/renderer";
 import {
   ChatEvent,
   ChatEventBody,
@@ -29,6 +30,7 @@ import { ArrowDown } from "lucide-react";
 
 interface ChatHistoryPanelProps {
   messages: ChatMessage[];
+  graphEvents?: GraphEvent[];
   selectedResponseId: string | null;
   selectedNode?: FlowNode | null;
   onFocusNode?: (nodeId: string) => void;
@@ -46,6 +48,7 @@ interface ChatHistoryPanelProps {
 
 export default function ChatHistoryPanel({
   messages,
+  graphEvents = [],
   selectedResponseId,
   selectedNode,
   onFocusNode,
@@ -317,28 +320,49 @@ export default function ChatHistoryPanel({
       | { kind: "date"; id: string; timestamp: number }
       | { kind: "primary"; id: string; message: ChatMessage }
       | { kind: "additional"; id: string; message: ChatMessage }
+      | { kind: "graph"; id: string; event: GraphEvent }
     )[] = [];
+
+    const timeline = [
+      ...sortedMessages.map((message) => ({
+        kind: "message" as const,
+        timestamp: new Date(message.createdAt).getTime(),
+        message,
+      })),
+      ...graphEvents.map((event) => ({
+        kind: "graph" as const,
+        timestamp: new Date(event.createdAt).getTime(),
+        event,
+      })),
+    ].sort((a, b) => a.timestamp - b.timestamp);
+
     let lastDateKey = "";
     let lastRole: ChatMessage["role"] | null = null;
 
-    sortedMessages.forEach((message) => {
-      const timestamp = new Date(message.createdAt).getTime();
+    timeline.forEach((entry) => {
       const dateKey = new Intl.DateTimeFormat("en-US", {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-      }).format(timestamp);
+      }).format(entry.timestamp);
 
       if (dateKey !== lastDateKey) {
         items.push({
           kind: "date",
           id: `date-${dateKey}`,
-          timestamp,
+          timestamp: entry.timestamp,
         });
         lastDateKey = dateKey;
         lastRole = null;
       }
 
+      if (entry.kind === "graph") {
+        items.push({ kind: "graph", id: entry.event.id, event: entry.event });
+        lastRole = null;
+        return;
+      }
+
+      const message = entry.message;
       if (lastRole === message.role) {
         items.push({ kind: "additional", id: message.id, message });
       } else {
@@ -348,7 +372,7 @@ export default function ChatHistoryPanel({
     });
 
     return items;
-  }, [sortedMessages]);
+  }, [sortedMessages, graphEvents]);
   const hasPendingAssistant = useMemo(
     () =>
       messages.some(
@@ -431,6 +455,34 @@ export default function ChatHistoryPanel({
                 if (item.kind === "date") {
                   return <DateItem key={item.id} timestamp={item.timestamp} />;
                 }
+                if (item.kind === "graph") {
+                  const { event } = item;
+                  const statusLabel =
+                    event.status === "running"
+                      ? "Running"
+                      : event.status === "failed"
+                        ? "Failed"
+                        : event.nodesAdded
+                          ? `${event.nodesAdded} node(s)`
+                          : "No changes";
+                  return (
+                    <ChatEvent key={item.id} className="items-start gap-2 px-2">
+                      <ChatEventBody>
+                        <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                          Function Call
+                        </ChatEventTitle>
+                        <ChatEventContent>
+                          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                            graph.run()
+                          </div>
+                        </ChatEventContent>
+                        <ChatEventDescription>
+                          {event.error ? event.error : statusLabel}
+                        </ChatEventDescription>
+                      </ChatEventBody>
+                    </ChatEvent>
+                  );
+                }
                 const message = item.message;
                 const timestamp = new Date(message.createdAt).getTime();
                 const isUser = message.role === "user";
@@ -454,11 +506,12 @@ export default function ChatHistoryPanel({
                       isHighlighted && "ring-2 ring-amber-400/60",
                     )}
                   >
-                    <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
-                      {shouldHighlightExcerpt
-                        ? renderHighlightedExcerpt(displayContent, selectedExcerpt)
-                        : displayContent}
-                    </pre>
+                    <MarkdownRenderer
+                      source={displayContent ?? ""}
+                      highlightExcerpt={
+                        shouldHighlightExcerpt ? selectedExcerpt : undefined
+                      }
+                    />
                     {!isUser && isFailed && onRetry && (
                       <div className="mt-3 flex items-center gap-2">
                         <Button
@@ -497,23 +550,6 @@ export default function ChatHistoryPanel({
                   </div>
                 );
               })
-            )}
-            {graphBusy && (
-              <ChatEvent className="items-start gap-2 px-2">
-                <ChatEventBody>
-                  <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                    Function Call
-                  </ChatEventTitle>
-                  <ChatEventContent>
-                    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-                      graph.run()
-                    </div>
-                  </ChatEventContent>
-                  <ChatEventDescription>
-                    Applying graph updates
-                  </ChatEventDescription>
-                </ChatEventBody>
-              </ChatEvent>
             )}
             {busy && !hasPendingAssistant && (
               <PrimaryMessage
@@ -598,32 +634,4 @@ export default function ChatHistoryPanel({
       )}
     </div>
   );
-}
-
-function renderHighlightedExcerpt(content: string | undefined, excerpt: string) {
-  if (!content || !excerpt) {
-    return content ?? "";
-  }
-  const parts: (string | JSX.Element)[] = [];
-  let cursor = 0;
-  let matchIndex = content.indexOf(excerpt, cursor);
-  while (matchIndex !== -1) {
-    if (matchIndex > cursor) {
-      parts.push(content.slice(cursor, matchIndex));
-    }
-    parts.push(
-      <mark
-        key={`${matchIndex}-${excerpt.length}`}
-        className="rounded bg-amber-300/30 px-1 text-amber-100"
-      >
-        {excerpt}
-      </mark>,
-    );
-    cursor = matchIndex + excerpt.length;
-    matchIndex = content.indexOf(excerpt, cursor);
-  }
-  if (cursor < content.length) {
-    parts.push(content.slice(cursor));
-  }
-  return parts;
 }

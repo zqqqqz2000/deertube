@@ -10,7 +10,7 @@ import type {
   SourceNode as SourceNodeType,
 } from "../../types/flow";
 import type { ProviderProfile } from "../../lib/settings";
-import type { ChatMessage } from "../../types/chat";
+import type { ChatMessage, GraphEvent } from "../../types/chat";
 import { placeInsightNodes } from "../../lib/flowPlacement";
 import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
 import { useChat } from "@/lib/chat/use-electron-chat";
@@ -120,6 +120,7 @@ export function useChatActions({
   const [historyInput, setHistoryInput] = useState("");
   const [panelInput, setPanelInput] = useState("");
   const [graphBusy, setGraphBusy] = useState(false);
+  const [graphEvents, setGraphEvents] = useState<GraphEvent[]>([]);
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedId) ?? null,
@@ -144,6 +145,17 @@ export function useChatActions({
       if (!responseText.trim()) {
         return;
       }
+      const eventId = crypto.randomUUID();
+      const startedAt = new Date().toISOString();
+      setGraphEvents((prev) => [
+        ...prev,
+        {
+          id: eventId,
+          status: "running",
+          createdAt: startedAt,
+          responseId,
+        },
+      ]);
       setGraphBusy(true);
       try {
         const graphSnapshot = buildGraphSnapshot(nodes, edges);
@@ -167,7 +179,21 @@ export function useChatActions({
             : undefined,
         });
 
-        if (!result.nodes.length) {
+        const nodesAdded = result.nodes.length;
+        setGraphEvents((prev) =>
+          prev.map((event) =>
+            event.id === eventId
+              ? {
+                  ...event,
+                  status: "complete",
+                  endedAt: new Date().toISOString(),
+                  nodesAdded,
+                }
+              : event,
+          ),
+        );
+
+        if (!nodesAdded) {
           return;
         }
 
@@ -269,6 +295,21 @@ export function useChatActions({
             });
           });
         }
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Graph tool failed";
+        setGraphEvents((prev) =>
+          prev.map((event) =>
+            event.id === eventId
+              ? {
+                  ...event,
+                  status: "failed",
+                  endedAt: new Date().toISOString(),
+                  error: errorMessage,
+                }
+              : event,
+          ),
+        );
       } finally {
         setGraphBusy(false);
       }
@@ -358,6 +399,7 @@ export function useChatActions({
     busy,
     chatBusy: busy,
     graphBusy,
+    graphEvents,
     handleSendFromHistory,
     handleSendFromPanel,
     retryMessage,

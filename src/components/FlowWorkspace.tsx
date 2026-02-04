@@ -79,6 +79,7 @@ function FlowWorkspaceInner({
     busy,
     chatBusy,
     graphBusy,
+    graphEvents,
     retryMessage,
     handleSendFromHistory,
     handleSendFromPanel,
@@ -369,6 +370,7 @@ function FlowWorkspaceInner({
             input={historyInput}
             busy={chatBusy}
             graphBusy={graphBusy}
+            graphEvents={graphEvents}
             onInputChange={setHistoryInput}
             onSend={handleSendFromHistory}
             onRetry={retryMessage}
