@@ -76,6 +76,19 @@
 }
 
 .markdown-body mark[data-highlight-excerpt="true"] {
-  background-color: rgba(56, 189, 248, 0.25);
+  background-color: rgba(56, 189, 248, 0.4);
   color: rgb(240, 249, 255);
+}
+
+.markdown-body .node-ref-link {
+  color: rgb(186, 230, 253);
+  text-decoration-line: underline;
+  text-decoration-color: rgba(125, 211, 252, 0.8);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.markdown-body .node-ref-link:hover {
+  color: rgb(240, 249, 255);
+  text-decoration-color: rgba(125, 211, 252, 1);
 }

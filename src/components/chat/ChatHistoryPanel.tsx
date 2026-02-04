@@ -157,6 +157,17 @@ export default function ChatHistoryPanel({
     }
     return data.excerpt ?? "";
   }, [selectedNode]);
+  const nodeExcerptRefs = useMemo(
+    () =>
+      nodes
+        .filter((node) => node.type === "insight")
+        .map((node) => {
+          const data = node.data as InsightNodeData;
+          return { id: node.id, text: data.excerpt ?? "" };
+        })
+        .filter((item) => item.text.trim().length > 0),
+    [nodes],
+  );
   const handleFocusNode = useCallback(() => {
     if (!selectedSummary?.id || !onFocusNode) {
       return;
@@ -615,6 +626,7 @@ export default function ChatHistoryPanel({
                         }
                         onNodeLinkClick={handleNodeLinkClick}
                         resolveNodeLabel={resolveNodeLabel}
+                        nodeExcerptRefs={nodeExcerptRefs}
                       />
                     )}
                     {!isUser && isFailed && onRetry && (

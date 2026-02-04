@@ -18,6 +18,7 @@ interface MarkdownRendererProps {
   highlightExcerpt?: string;
   onNodeLinkClick?: (nodeId: string) => void;
   resolveNodeLabel?: (nodeId: string) => string | undefined;
+  nodeExcerptRefs?: { id: string; text: string }[];
 }
 
 export const MarkdownRenderer = memo(
@@ -27,6 +28,7 @@ export const MarkdownRenderer = memo(
     highlightExcerpt,
     onNodeLinkClick,
     resolveNodeLabel,
+    nodeExcerptRefs = [],
   }: MarkdownRendererProps) => {
     const containerRef = useRef<HTMLElement | null>(null);
     const remarkPlugins = useMemo<Pluggable[]>(() => [remarkGfm, remarkMath], []);
@@ -132,12 +134,11 @@ export const MarkdownRenderer = memo(
               <button
                 type="button"
                 onClick={() => onNodeLinkClick?.(nodeId)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-sky-300/30 bg-slate-900/70 px-2.5 py-0.5 text-[11px] font-semibold text-sky-200 shadow-sm shadow-black/20 transition hover:-translate-y-0.5 hover:border-sky-200/60 hover:bg-slate-800/80 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline text-sky-200 underline decoration-sky-300/80 underline-offset-4 transition hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
                 title={`Focus node ${label}`}
                 disabled={!onNodeLinkClick}
               >
-                <span className="h-1.5 w-1.5 rounded-full bg-sky-300/80 shadow-[0_0_8px_rgba(125,211,252,0.7)]" />
-                <span className="max-w-[240px] truncate">{label}</span>
+                {label}
               </button>
             );
           }
@@ -173,6 +174,17 @@ export const MarkdownRenderer = memo(
           parent.normalize();
         });
       };
+      const unwrapNodeRefs = () => {
+        const refs = container.querySelectorAll('span[data-node-ref]');
+        refs.forEach((ref) => {
+          const parent = ref.parentNode;
+          if (!parent) {
+            return;
+          }
+          parent.replaceChild(document.createTextNode(ref.textContent ?? ""), ref);
+          parent.normalize();
+        });
+      };
 
       const shouldSkip = (node: Node) => {
         const parent = node.parentElement;
@@ -180,10 +192,19 @@ export const MarkdownRenderer = memo(
           return false;
         }
         const tag = parent.tagName;
-        return tag === "CODE" || tag === "PRE" || tag === "MARK";
+        return (
+          tag === "CODE" ||
+          tag === "PRE" ||
+          tag === "MARK" ||
+          tag === "BUTTON" ||
+          parent.hasAttribute("data-node-ref")
+        );
       };
 
-      const highlightText = (needle: string) => {
+      const wrapText = (
+        needle: string,
+        wrapper: (text: string) => HTMLElement,
+      ) => {
         const textNodes: { node: Text; start: number; end: number }[] = [];
         let cursor = 0;
         const walker = document.createTreeWalker(
@@ -234,12 +255,8 @@ export const MarkdownRenderer = memo(
             const sliceEnd = Math.min(nodeText.length, matchEnd - item.start);
 
             if (sliceStart === 0 && sliceEnd === nodeText.length) {
-              const mark = document.createElement("mark");
-              mark.setAttribute("data-highlight-excerpt", "true");
-              mark.className =
-                "rounded bg-sky-400/25 px-1 text-sky-50 shadow-[0_0_12px_rgba(56,189,248,0.65)]";
-              mark.textContent = nodeText;
-              node.parentNode?.replaceChild(mark, node);
+              const wrapped = wrapper(nodeText);
+              node.parentNode?.replaceChild(wrapped, node);
               return;
             }
 
@@ -252,12 +269,7 @@ export const MarkdownRenderer = memo(
               fragment.appendChild(document.createTextNode(before));
             }
             if (middle) {
-              const mark = document.createElement("mark");
-              mark.setAttribute("data-highlight-excerpt", "true");
-              mark.className =
-                "rounded bg-sky-400/25 px-1 text-sky-50 shadow-[0_0_12px_rgba(56,189,248,0.65)]";
-              mark.textContent = middle;
-              fragment.appendChild(mark);
+              fragment.appendChild(wrapper(middle));
             }
             if (after) {
               fragment.appendChild(document.createTextNode(after));
@@ -271,10 +283,58 @@ export const MarkdownRenderer = memo(
       };
 
       unwrapMarks();
+      unwrapNodeRefs();
       if (highlightExcerpt) {
-        highlightText(highlightExcerpt);
+        wrapText(highlightExcerpt, (text) => {
+          const mark = document.createElement("mark");
+          mark.setAttribute("data-highlight-excerpt", "true");
+          mark.className = "rounded bg-sky-400/25 px-1 text-sky-50";
+          mark.textContent = text;
+          return mark;
+        });
       }
-    }, [highlightExcerpt, source]);
+      const focusNeedle = highlightExcerpt?.trim();
+      const refItems = nodeExcerptRefs
+        .map((item) => ({ ...item, text: item.text.trim() }))
+        .filter((item) => item.text.length > 0 && item.text !== focusNeedle);
+      refItems.forEach((item) => {
+        wrapText(item.text, (text) => {
+          const span = document.createElement("span");
+          span.setAttribute("data-node-ref", item.id);
+          span.className = "node-ref-link";
+          span.textContent = text;
+          return span;
+        });
+      });
+    }, [highlightExcerpt, source, nodeExcerptRefs]);
+
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container || !onNodeLinkClick) {
+        return;
+      }
+
+      const handleClick = (event: MouseEvent) => {
+        const target = event.target as HTMLElement | null;
+        if (!target) {
+          return;
+        }
+        const ref = target.closest<HTMLElement>("[data-node-ref]");
+        if (!ref) {
+          return;
+        }
+        const nodeId = ref.dataset.nodeRef;
+        if (!nodeId) {
+          return;
+        }
+        onNodeLinkClick(nodeId);
+      };
+
+      container.addEventListener("click", handleClick);
+      return () => {
+        container.removeEventListener("click", handleClick);
+      };
+    }, [onNodeLinkClick, nodeExcerptRefs]);
 
     return (
       <article
