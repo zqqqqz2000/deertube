@@ -74,3 +74,8 @@
 .subheading-anchor:hover {
   text-decoration: underline;
 }
+
+.markdown-body mark[data-highlight-excerpt="true"] {
+  background-color: rgba(56, 189, 248, 0.25);
+  color: rgb(240, 249, 255);
+}

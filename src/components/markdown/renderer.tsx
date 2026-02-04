@@ -236,7 +236,8 @@ export const MarkdownRenderer = memo(
             if (sliceStart === 0 && sliceEnd === nodeText.length) {
               const mark = document.createElement("mark");
               mark.setAttribute("data-highlight-excerpt", "true");
-              mark.className = "rounded bg-amber-300/30 px-1 text-amber-100";
+              mark.className =
+                "rounded bg-sky-400/25 px-1 text-sky-50 shadow-[0_0_12px_rgba(56,189,248,0.65)]";
               mark.textContent = nodeText;
               node.parentNode?.replaceChild(mark, node);
               return;
@@ -253,7 +254,8 @@ export const MarkdownRenderer = memo(
             if (middle) {
               const mark = document.createElement("mark");
               mark.setAttribute("data-highlight-excerpt", "true");
-              mark.className = "rounded bg-amber-300/30 px-1 text-amber-100";
+              mark.className =
+                "rounded bg-sky-400/25 px-1 text-sky-50 shadow-[0_0_12px_rgba(56,189,248,0.65)]";
               mark.textContent = middle;
               fragment.appendChild(mark);
             }

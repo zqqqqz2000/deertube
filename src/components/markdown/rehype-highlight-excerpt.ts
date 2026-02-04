@@ -3,9 +3,9 @@ import { SKIP, visit } from "unist-util-visit";
 
 const highlightClasses = [
   "rounded",
-  "bg-amber-300/30",
+  "bg-sky-400/25",
   "px-1",
-  "text-amber-100",
+  "text-sky-50",
 ];
 
 const ignoredParents = new Set(["code", "pre"]);
