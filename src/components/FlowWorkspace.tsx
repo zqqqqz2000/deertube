@@ -160,6 +160,12 @@ function FlowWorkspaceInner({
       if (!flowInstance) {
         return;
       }
+      setNodes((prev) =>
+        prev.map((node) => ({
+          ...node,
+          selected: node.id === nodeId,
+        })),
+      );
       const internalNode = getNode(nodeId);
       const node = internalNode ?? nodes.find((item) => item.id === nodeId) ?? null;
       if (!node) {
@@ -181,7 +187,7 @@ function FlowWorkspaceInner({
       });
       setSelectedId(nodeId);
     },
-    [flowInstance, getNode, nodes, setSelectedId],
+    [flowInstance, getNode, nodes, setNodes, setSelectedId],
   );
 
   const handleNodeDoubleClick = useCallback(
@@ -362,6 +368,7 @@ function FlowWorkspaceInner({
             messages={chatMessages}
             selectedResponseId={selectedResponseId}
             selectedNode={selectedNode}
+            nodes={nodes}
             onFocusNode={handleFocusNode}
             collapseSignal={chatCollapseSignal}
             pinSignal={chatPinSignal}

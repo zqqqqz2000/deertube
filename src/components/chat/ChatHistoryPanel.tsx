@@ -33,6 +33,7 @@ interface ChatHistoryPanelProps {
   graphEvents?: GraphEvent[];
   selectedResponseId: string | null;
   selectedNode?: FlowNode | null;
+  nodes?: FlowNode[];
   onFocusNode?: (nodeId: string) => void;
   collapseSignal?: number;
   pinSignal?: number;
@@ -51,6 +52,7 @@ export default function ChatHistoryPanel({
   graphEvents = [],
   selectedResponseId,
   selectedNode,
+  nodes = [],
   onFocusNode,
   collapseSignal = 0,
   pinSignal = 0,
@@ -74,6 +76,11 @@ export default function ChatHistoryPanel({
   } | null>(null);
   const highlightedId = selectedResponseId;
   const ignoreHighlightRef = useRef(false);
+  const nodeLookup = useMemo(() => {
+    const map = new Map<string, FlowNode>();
+    nodes.forEach((node) => map.set(node.id, node));
+    return map;
+  }, [nodes]);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [panelPosition, setPanelPosition] = useState({ x: 16, y: 80 });
   const [panelSize, setPanelSize] = useState(() => ({
@@ -95,6 +102,13 @@ export default function ChatHistoryPanel({
       ),
     [messages],
   );
+  if (process.env.NODE_ENV !== "production") {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (lastUser && lastUser.requestText !== (window as { __lastRequestText?: string }).__lastRequestText) {
+      (window as { __lastRequestText?: string }).__lastRequestText = lastUser.requestText;
+      console.log("[ChatHistoryPanel] last user message", lastUser);
+    }
+  }
   const selectedSummary = useMemo(() => {
     if (!selectedNode) {
       return null;
@@ -147,6 +161,75 @@ export default function ChatHistoryPanel({
     }
     onFocusNode(selectedSummary.id);
   }, [onFocusNode, selectedSummary]);
+  const handleNodeLinkClick = useCallback(
+    (nodeId: string) => {
+      if (!onFocusNode) {
+        return;
+      }
+      onFocusNode(nodeId);
+    },
+    [onFocusNode],
+  );
+  const resolveNodeLabel = useCallback(
+    (nodeId: string) => {
+      const node = nodeLookup.get(nodeId);
+      if (!node) {
+        return undefined;
+      }
+      if (node.type === "question") {
+        const data = node.data as QuestionNodeData;
+        return data.question;
+      }
+      if (node.type === "source") {
+        const data = node.data as SourceNodeData;
+        return data.title ?? data.url;
+      }
+      if (node.type === "insight") {
+        const data = node.data as InsightNodeData;
+        return data.titleShort ?? data.titleLong ?? data.titleTiny;
+      }
+      return undefined;
+    },
+    [nodeLookup],
+  );
+  const renderUserContent = useCallback(
+    (text: string) => {
+      const parts: React.ReactNode[] = [];
+      const regex = /\[\[node:([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+      let lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(text)) !== null) {
+        const [raw, nodeId, label] = match;
+        const start = match.index;
+        if (start > lastIndex) {
+          parts.push(text.slice(lastIndex, start));
+        }
+        const cleanedLabel = label?.trim();
+        const resolvedLabel =
+          cleanedLabel ??
+          resolveNodeLabel(nodeId) ??
+          `Node ${nodeId.slice(0, 6)}`;
+        parts.push(
+          <button
+            key={`node-${nodeId}-${start}`}
+            type="button"
+            onClick={() => handleNodeLinkClick(nodeId)}
+            className="mx-1 inline-flex items-center gap-1.5 rounded-full border border-sky-300/30 bg-slate-900/70 px-2.5 py-0.5 text-[11px] font-semibold text-sky-200 shadow-sm shadow-black/20 transition hover:-translate-y-0.5 hover:border-sky-200/60 hover:bg-slate-800/80 hover:text-sky-100"
+            title={`Focus node ${resolvedLabel}`}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-sky-300/80 shadow-[0_0_8px_rgba(125,211,252,0.7)]" />
+            <span className="max-w-[240px] truncate">{resolvedLabel}</span>
+          </button>,
+        );
+        lastIndex = start + raw.length;
+      }
+      if (lastIndex < text.length) {
+        parts.push(text.slice(lastIndex));
+      }
+      return parts.length > 0 ? parts : text;
+    },
+    [handleNodeLinkClick, resolveNodeLabel],
+  );
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     if (!scrollRef.current) {
@@ -506,12 +589,20 @@ export default function ChatHistoryPanel({
                       isHighlighted && "ring-2 ring-amber-400/60",
                     )}
                   >
-                    <MarkdownRenderer
-                      source={displayContent ?? ""}
-                      highlightExcerpt={
-                        shouldHighlightExcerpt ? selectedExcerpt : undefined
-                      }
-                    />
+                    {isUser ? (
+                      <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                        {renderUserContent(displayContent ?? "")}
+                      </div>
+                    ) : (
+                      <MarkdownRenderer
+                        source={displayContent ?? ""}
+                        highlightExcerpt={
+                          shouldHighlightExcerpt ? selectedExcerpt : undefined
+                        }
+                        onNodeLinkClick={handleNodeLinkClick}
+                        resolveNodeLabel={resolveNodeLabel}
+                      />
+                    )}
                     {!isUser && isFailed && onRetry && (
                       <div className="mt-3 flex items-center gap-2">
                         <Button

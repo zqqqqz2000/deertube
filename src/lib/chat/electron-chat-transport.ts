@@ -5,6 +5,7 @@ import type { DeertubeUIMessage } from "@/modules/ai/tools";
 export interface ChatContext {
   projectPath: string;
   selectedNodeSummary?: string;
+  selectedPathSummary?: string;
   settings?: {
     llmProvider?: string;
     llmModelId?: string;
@@ -42,6 +43,7 @@ export class ElectronChatTransport implements ChatTransport<DeertubeUIMessage> {
             settings: context?.settings,
             context: {
               selectedNodeSummary: context?.selectedNodeSummary,
+              selectedPathSummary: context?.selectedPathSummary,
             },
           },
           {

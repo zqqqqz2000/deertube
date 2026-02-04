@@ -15,6 +15,7 @@ import { placeInsightNodes } from "../../lib/flowPlacement";
 import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
 import { useChat } from "@/lib/chat/use-electron-chat";
 import type { DeertubeUIMessage } from "@/modules/ai/tools";
+import { useContextBuilder } from "./useContextBuilder";
 
 interface UseChatActionsOptions {
   projectPath: string;
@@ -106,6 +107,39 @@ const buildGraphSnapshot = (nodes: FlowNode[], edges: FlowEdge[]): GraphSnapshot
   return { nodes: graphNodes, edges: graphEdges, intIdToNodeId };
 };
 
+const hasNodeQuote = (text: string) =>
+  /\[\[node:[^\]]+\]\]|\(node:[^)]+\)|node:\/\/[^\s)]+|deertube:\/\/node\/[^\s)]+/i.test(
+    text,
+  );
+
+const resolveNodeLabel = (node: FlowNode | null) => {
+  if (!node) {
+    return "Node";
+  }
+  if (node.type === "question") {
+    const data = node.data as QuestionNodeType["data"];
+    return data.question || "Question";
+  }
+  if (node.type === "source") {
+    const data = node.data as SourceNodeType["data"];
+    return data.title || data.url || "Source";
+  }
+  if (node.type === "insight") {
+    const data = node.data as InsightNodeData;
+    return data.titleShort || data.titleLong || data.titleTiny || "Insight";
+  }
+  return "Node";
+};
+
+const buildNodeQuote = (node: FlowNode | null) => {
+  if (!node) {
+    return "";
+  }
+  const rawLabel = resolveNodeLabel(node);
+  const label = rawLabel.length > 64 ? `${rawLabel.slice(0, 64)}…` : rawLabel;
+  return `[[node:${node.id}|${label}]]`;
+};
+
 export function useChatActions({
   projectPath,
   nodes,
@@ -133,6 +167,21 @@ export function useChatActions({
   const selectedNodeSummary = useMemo(
     () => buildNodeContext(selectedNodeForContext) || undefined,
     [selectedNodeForContext],
+  );
+  const { buildContextSummary } = useContextBuilder(nodes, edges);
+  const selectedPathSummary = useMemo(
+    () => {
+      if (!selectedId) {
+        return undefined;
+      }
+      const summary = buildContextSummary(selectedId).trim();
+      return summary.length > 0 ? summary : undefined;
+    },
+    [buildContextSummary, selectedId],
+  );
+  const selectedNodeForQuote = useMemo(
+    () => (selectedId ? nodes.find((node) => node.id === selectedId) ?? null : null),
+    [nodes, selectedId],
   );
 
   const initialUiMessages = useMemo(
@@ -333,6 +382,7 @@ export function useChatActions({
     context: {
       projectPath,
       selectedNodeSummary,
+      selectedPathSummary,
       settings: activeProfile
         ? {
             llmProvider: activeProfile.llmProvider.trim() || undefined,
@@ -365,13 +415,26 @@ export function useChatActions({
         return;
       }
       const prompt = rawPrompt.trim();
+      const quotePrefix =
+        selectedNodeForQuote && !hasNodeQuote(prompt)
+          ? `${buildNodeQuote(selectedNodeForQuote)} `
+          : "";
+      const finalPrompt = `${quotePrefix}${prompt}`;
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[useChatActions] sendPrompt", {
+          prompt,
+          finalPrompt,
+          selectedId,
+          selectedNodeForQuote: selectedNodeForQuote?.id ?? null,
+        });
+      }
       reset();
       if (status === "streaming" || status === "submitted") {
         void stop();
       }
-      void sendMessage({ text: prompt });
+      void sendMessage({ text: finalPrompt });
     },
-    [sendMessage, status, stop],
+    [selectedId, selectedNodeForQuote, sendMessage, status, stop],
   );
 
   const retryMessage = useCallback(

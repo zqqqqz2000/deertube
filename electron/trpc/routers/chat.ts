@@ -14,6 +14,7 @@ export const chatRouter = createTRPCRouter({
         context: z
           .object({
             selectedNodeSummary: z.string().optional(),
+            selectedPathSummary: z.string().optional(),
           })
           .optional(),
         settings: z
@@ -47,6 +48,11 @@ export const chatRouter = createTRPCRouter({
       if (input.context?.selectedNodeSummary) {
         contextLines.push(input.context.selectedNodeSummary);
       }
+      if (input.context?.selectedPathSummary) {
+        contextLines.push(
+          `Root-to-selected context:\n${input.context.selectedPathSummary}`,
+        );
+      }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
         ...contextLines,
@@ -72,6 +78,7 @@ export const chatRouter = createTRPCRouter({
         context: z
           .object({
             selectedNodeSummary: z.string().optional(),
+            selectedPathSummary: z.string().optional(),
           })
           .optional(),
         settings: z
@@ -104,6 +111,11 @@ export const chatRouter = createTRPCRouter({
       const contextLines: string[] = [];
       if (input.context?.selectedNodeSummary) {
         contextLines.push(input.context.selectedNodeSummary);
+      }
+      if (input.context?.selectedPathSummary) {
+        contextLines.push(
+          `Root-to-selected context:\n${input.context.selectedPathSummary}`,
+        );
       }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",

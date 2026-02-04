@@ -1,7 +1,8 @@
 import "katex/dist/katex.min.css";
 import "@/assets/github-markdown.css";
 import "@/assets/mdx-renderer.css";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import type { Pluggable } from "unified";
 import { MarkdownHooks } from "react-markdown";
 import rehypeKatex from "rehype-katex";
@@ -15,10 +16,18 @@ interface MarkdownRendererProps {
   source: string;
   className?: string;
   highlightExcerpt?: string;
+  onNodeLinkClick?: (nodeId: string) => void;
+  resolveNodeLabel?: (nodeId: string) => string | undefined;
 }
 
 export const MarkdownRenderer = memo(
-  ({ source, className, highlightExcerpt }: MarkdownRendererProps) => {
+  ({
+    source,
+    className,
+    highlightExcerpt,
+    onNodeLinkClick,
+    resolveNodeLabel,
+  }: MarkdownRendererProps) => {
     const containerRef = useRef<HTMLElement | null>(null);
     const remarkPlugins = useMemo<Pluggable[]>(() => [remarkGfm, remarkMath], []);
     const rehypePlugins = useMemo<Pluggable[]>(() => {
@@ -26,6 +35,124 @@ export const MarkdownRenderer = memo(
       plugins.push(rehypeKatex, [rehypePrettyCode, { theme: "vitesse-dark", keepBackground: false }]);
       return plugins;
     }, []);
+    const urlTransform = useCallback((href: string) => href, []);
+    const resolvedSource = useMemo(() => {
+      if (!source) {
+        return source;
+      }
+      return source.replace(
+        /\[\[node:([^\]|]+)(?:\|([^\]]+))?\]\]/g,
+        (_match, nodeId, label) => {
+          const nodeIdText = String(nodeId);
+          const fallback =
+            (resolveNodeLabel ? resolveNodeLabel(nodeIdText) : undefined) ??
+            `Node ${nodeIdText.slice(0, 6)}`;
+          const labelText =
+            label !== undefined && label !== null ? String(label).trim() : "";
+          const text = labelText || fallback;
+          return `[${text}](node:${nodeIdText})`;
+        },
+      );
+    }, [resolveNodeLabel, source]);
+    const components = useMemo(() => {
+      const parseNodeHref = (href?: string | null) => {
+        if (!href) {
+          return null;
+        }
+        const trimmed = href.trim();
+        if (trimmed.startsWith("node://")) {
+          return trimmed.slice("node://".length);
+        }
+        if (trimmed.startsWith("node:")) {
+          return trimmed.slice("node:".length);
+        }
+        if (trimmed.startsWith("deertube://node/")) {
+          return trimmed.slice("deertube://node/".length);
+        }
+        return null;
+      };
+      const flattenText = (children: ReactNode): string => {
+        if (typeof children === "string") {
+          return children;
+        }
+        if (Array.isArray(children)) {
+          return children
+            .map((child) => flattenText(child as ReactNode))
+            .join("");
+        }
+        if (children && typeof children === "object" && "props" in children) {
+          const childProps = (children as { props?: { children?: ReactNode } })
+            .props;
+          return childProps?.children
+            ? flattenText(childProps.children as ReactNode)
+            : "";
+        }
+        return "";
+      };
+      return {
+        ...mdxComponents,
+        a: (
+          props: AnchorHTMLAttributes<HTMLAnchorElement> & { node?: unknown },
+        ) => {
+          const nodeProp = props.node;
+          const rawHref =
+            props.href ??
+            (nodeProp && typeof nodeProp === "object" && "url" in nodeProp
+              ? String((nodeProp as { url?: string }).url ?? "")
+              : undefined) ??
+            (nodeProp &&
+            typeof nodeProp === "object" &&
+            "properties" in nodeProp &&
+            (nodeProp as { properties?: { href?: string } }).properties?.href
+              ? String(
+                  (nodeProp as { properties?: { href?: string } }).properties?.href,
+                )
+              : undefined);
+          if (process.env.NODE_ENV !== "production") {
+            if (!props.href && rawHref && rawHref !== props.href) {
+              console.log("[MarkdownRenderer] resolved node href", {
+                rawHref,
+                propsHref: props.href,
+                node: props.node,
+              });
+            } else if (!props.href && !rawHref) {
+              console.log("[MarkdownRenderer] anchor without href", {
+                props,
+              });
+            }
+          }
+          const nodeId = parseNodeHref(rawHref);
+          if (nodeId) {
+            const labelText = flattenText(props.children);
+            const label =
+              (labelText.length > 0 ? labelText : undefined) ??
+              (resolveNodeLabel ? resolveNodeLabel(nodeId) : undefined) ??
+              `Node ${nodeId.slice(0, 6)}`;
+            return (
+              <button
+                type="button"
+                onClick={() => onNodeLinkClick?.(nodeId)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-sky-300/30 bg-slate-900/70 px-2.5 py-0.5 text-[11px] font-semibold text-sky-200 shadow-sm shadow-black/20 transition hover:-translate-y-0.5 hover:border-sky-200/60 hover:bg-slate-800/80 hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                title={`Focus node ${label}`}
+                disabled={!onNodeLinkClick}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-sky-300/80 shadow-[0_0_8px_rgba(125,211,252,0.7)]" />
+                <span className="max-w-[240px] truncate">{label}</span>
+              </button>
+            );
+          }
+          const { node: _node, ...restProps } = props;
+          return (
+            <a
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sky-300 underline-offset-4 hover:underline"
+              {...restProps}
+            />
+          );
+        },
+      };
+    }, [onNodeLinkClick, resolveNodeLabel]);
 
     useEffect(() => {
       const container = containerRef.current;
@@ -155,9 +282,10 @@ export const MarkdownRenderer = memo(
         <MarkdownHooks
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
-          components={mdxComponents}
+          urlTransform={urlTransform}
+          components={components}
         >
-          {source.trimStart()}
+          {resolvedSource.trimStart()}
         </MarkdownHooks>
       </article>
     );
