@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { UIMessage } from "ai";
 import type { ReactFlowInstance } from "reactflow";
 import { trpc } from "../../lib/trpc";
 import type {
@@ -466,6 +467,9 @@ export function useChatActions({
             llmModelId: activeProfile.llmModelId.trim() || undefined,
             llmApiKey: activeProfile.llmApiKey.trim() || undefined,
             llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
+            tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
+            jinaReaderBaseUrl: activeProfile.jinaReaderBaseUrl.trim() || undefined,
+            jinaReaderApiKey: activeProfile.jinaReaderApiKey.trim() || undefined,
           }
         : undefined,
     },
@@ -483,10 +487,14 @@ export function useChatActions({
 
   const derivedMessages = useMemo(() => {
     const mapped = mapUiMessagesToChat(messages, status, error);
-    if (!graphEventMessages.length) {
-      return mapped;
+    const withGraphEvents = graphEventMessages.length
+      ? mergeGraphEvents(mapped, graphEventMessages)
+      : mapped;
+    const subagentEvents = buildSubagentEvents(messages, status);
+    if (!subagentEvents.length) {
+      return withGraphEvents;
     }
-    return mergeGraphEvents(mapped, graphEventMessages);
+    return mergeSubagentEvents(withGraphEvents, subagentEvents);
   }, [messages, status, error, graphEventMessages]);
 
   const sendPrompt = useCallback(
@@ -557,6 +565,26 @@ function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
   };
 }
 
+type SubagentStreamPayload = {
+  toolCallId: string;
+  toolName?: string;
+  messages: UIMessage[];
+};
+
+const isSubagentDataPart = (
+  part: unknown,
+): part is {
+  type: "data-subagent-stream";
+  data: SubagentStreamPayload;
+} => {
+  return (
+    typeof part === "object" &&
+    part !== null &&
+    (part as { type?: string }).type === "data-subagent-stream" &&
+    "data" in part
+  );
+};
+
 function extractUiMessageText(message: DeertubeUIMessage): string {
   if ("content" in message && typeof message.content === "string") {
     return message.content;
@@ -575,6 +603,55 @@ function extractUiMessageText(message: DeertubeUIMessage): string {
     )
     .map((part) => part.text)
     .join("");
+}
+
+function buildSubagentEvents(
+  messages: DeertubeUIMessage[],
+  status: string,
+): ChatMessage[] {
+  const byToolCall = new Map<
+    string,
+    { payload: SubagentStreamPayload; parentMessageId: string; createdAt: string }
+  >();
+  const isRunning = status === "streaming" || status === "submitted";
+
+  messages.forEach((message) => {
+    if (!Array.isArray(message.parts)) {
+      return;
+    }
+    message.parts.forEach((part) => {
+      if (!isSubagentDataPart(part)) {
+        return;
+      }
+      const payload = part.data;
+      if (!payload || typeof payload.toolCallId !== "string") {
+        return;
+      }
+      const createdAt =
+        "createdAt" in message && message.createdAt
+          ? message.createdAt instanceof Date
+            ? message.createdAt.toISOString()
+            : String(message.createdAt)
+          : new Date().toISOString();
+      byToolCall.set(payload.toolCallId, {
+        payload,
+        parentMessageId: message.id,
+        createdAt,
+      });
+    });
+  });
+
+  return Array.from(byToolCall.values()).map(({ payload, parentMessageId, createdAt }) => ({
+    id: `subagent-${payload.toolCallId}`,
+    role: "assistant",
+    content: "",
+    createdAt,
+    kind: "subagent-event",
+    toolName: payload.toolName,
+    toolInput: { responseId: parentMessageId, toolCallId: payload.toolCallId },
+    toolOutput: payload,
+    toolStatus: isRunning ? "running" : "complete",
+  }));
 }
 
 function mapUiMessagesToChat(
@@ -659,8 +736,63 @@ function mergeGraphEvents(
   return merged;
 }
 
+function mergeSubagentEvents(
+  messages: ChatMessage[],
+  subagentEvents: ChatMessage[],
+): ChatMessage[] {
+  if (subagentEvents.length === 0) {
+    return messages;
+  }
+  const byResponseId = new Map<string, ChatMessage[]>();
+  const unattached: ChatMessage[] = [];
+
+  subagentEvents.forEach((event) => {
+    const responseId = getSubagentEventResponseId(event);
+    if (!responseId) {
+      unattached.push(event);
+      return;
+    }
+    const list = byResponseId.get(responseId) ?? [];
+    list.push(event);
+    byResponseId.set(responseId, list);
+  });
+
+  const merged: ChatMessage[] = [];
+  messages.forEach((message) => {
+    merged.push(message);
+    const events = byResponseId.get(message.id);
+    if (events && events.length > 0) {
+      merged.push(...events);
+      byResponseId.delete(message.id);
+    }
+  });
+
+  if (byResponseId.size > 0) {
+    byResponseId.forEach((events) => merged.push(...events));
+  }
+  if (unattached.length > 0) {
+    merged.push(...unattached);
+  }
+
+  return merged;
+}
+
 function getGraphEventResponseId(event: ChatMessage): string | null {
   if (event.kind !== "graph-event") {
+    return null;
+  }
+  if (!event.toolInput || typeof event.toolInput !== "object") {
+    return null;
+  }
+  if (!("responseId" in event.toolInput)) {
+    return null;
+  }
+  const responseId = (event.toolInput as { responseId?: unknown }).responseId;
+  return typeof responseId === "string" ? responseId : null;
+}
+
+function getSubagentEventResponseId(event: ChatMessage): string | null {
+  if (event.kind !== "subagent-event") {
     return null;
   }
   if (!event.toolInput || typeof event.toolInput !== "object") {

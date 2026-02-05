@@ -110,66 +110,104 @@ const hasTabset = (layout: FlexLayoutNode | undefined, tabsetId: string): boolea
   return Boolean(node && node.type === "tabset");
 };
 
-const createDefaultLayoutModel = (): IJsonModel => ({
-  global: {
+const normalizeLayoutModel = (model: IJsonModel): IJsonModel => {
+  const next = JSON.parse(JSON.stringify(model)) as IJsonModel;
+  next.global = {
+    ...next.global,
     tabEnableFloat: false,
     tabEnableClose: true,
+    tabEnableRenderOnDemand: false,
+    tabSetAutoSelectTab: true,
     tabSetEnableClose: false,
     tabSetEnableDeleteWhenEmpty: true,
     tabSetMinWidth: 100,
     tabSetMinHeight: 100,
     borderMinSize: 100,
-  },
-  borders: [],
-  layout: {
-    type: "row",
-    weight: TOTAL_LAYOUT_WEIGHT,
-    children: [
-      {
-        type: "tabset",
-        id: CHAT_TABSET_ID,
-        weight: CHAT_DEFAULT_WEIGHT,
-        selected: 0,
-        enableClose: false,
-        enableDeleteWhenEmpty: true,
-        children: [
-          {
-            type: "tab",
-            id: CHAT_TAB_ID,
-            name: "Chat",
-            component: "chat",
-            enableClose: true,
-          },
-        ],
-      },
-      {
-        type: "tabset",
-        id: GRAPH_TABSET_ID,
-        weight: TOTAL_LAYOUT_WEIGHT - CHAT_DEFAULT_WEIGHT,
-        selected: 0,
-        enableClose: false,
-        enableDeleteWhenEmpty: true,
-        children: [
-          {
-            type: "tab",
-            id: GRAPH_TAB_ID,
-            name: "Graph",
-            component: "graph",
-            enableClose: true,
-          },
-        ],
-      },
-    ],
-  },
-});
+  };
+
+  const ensureSelected = (node: FlexLayoutNode | undefined) => {
+    if (!node || !node.children) {
+      return;
+    }
+    if (node.type === "tabset" && node.children.length > 0) {
+      const selected =
+        typeof (node as { selected?: unknown }).selected === "number"
+          ? (node as { selected?: number }).selected
+          : undefined;
+      if (selected === undefined || selected < 0) {
+        (node as { selected?: number }).selected = 0;
+      }
+    }
+    node.children.forEach((child) => ensureSelected(child));
+  };
+
+  ensureSelected(next.layout as FlexLayoutNode);
+  return next;
+};
+
+const createDefaultLayoutModel = (): IJsonModel =>
+  normalizeLayoutModel({
+    global: {
+      tabEnableFloat: false,
+      tabEnableClose: true,
+      tabEnableRenderOnDemand: false,
+      tabSetEnableClose: false,
+      tabSetEnableDeleteWhenEmpty: true,
+      tabSetMinWidth: 100,
+      tabSetMinHeight: 100,
+      borderMinSize: 100,
+    },
+    borders: [],
+    layout: {
+      type: "row",
+      weight: TOTAL_LAYOUT_WEIGHT,
+      children: [
+        {
+          type: "tabset",
+          id: CHAT_TABSET_ID,
+          weight: CHAT_DEFAULT_WEIGHT,
+          selected: 0,
+          enableClose: false,
+          enableDeleteWhenEmpty: true,
+          children: [
+            {
+              type: "tab",
+              id: CHAT_TAB_ID,
+              name: "Chat",
+              component: "chat",
+              enableClose: true,
+            },
+          ],
+        },
+        {
+          type: "tabset",
+          id: GRAPH_TABSET_ID,
+          weight: TOTAL_LAYOUT_WEIGHT - CHAT_DEFAULT_WEIGHT,
+          selected: 0,
+          enableClose: false,
+          enableDeleteWhenEmpty: true,
+          children: [
+            {
+              type: "tab",
+              id: GRAPH_TAB_ID,
+              name: "Graph",
+              component: "graph",
+              enableClose: true,
+            },
+          ],
+        },
+      ],
+    },
+  });
 
 const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
   const tabId = tabKind === "chat" ? CHAT_TAB_ID : GRAPH_TAB_ID;
   const tabsetId = tabKind === "chat" ? CHAT_TABSET_ID : GRAPH_TABSET_ID;
-  return {
+  return normalizeLayoutModel({
     global: {
       tabEnableFloat: false,
       tabEnableClose: true,
+      tabEnableRenderOnDemand: false,
       tabSetEnableClose: false,
       tabSetEnableDeleteWhenEmpty: true,
       tabSetMinWidth: 100,
@@ -200,7 +238,7 @@ const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
         },
       ],
     },
-  };
+  });
 };
 
 function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
@@ -375,7 +413,7 @@ function FlowWorkspaceInner({
   );
 
   const handleLayoutChange = useCallback((nextModel: IJsonModel) => {
-    setLayoutModel(nextModel);
+    setLayoutModel(normalizeLayoutModel(nextModel));
   }, []);
 
   const openOrFocusTab = useCallback(
