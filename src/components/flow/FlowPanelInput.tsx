@@ -64,13 +64,13 @@ export default function FlowPanelInput({
 
   return (
     <div
-      className={`pointer-events-auto absolute z-10 text-white transition-all duration-300 ${
+      className={`pointer-events-auto absolute z-10 text-foreground transition-all duration-300 ${
         visible ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
       }`}
       style={{ left, top, width: resolvedWidth }}
     >
       <div
-        className={`flex items-center gap-2 rounded-xl border border-white/10 bg-slate-950/70 shadow-lg shadow-black/30 ${
+        className={`flex items-center gap-2 rounded-xl border border-border/70 bg-card/80 shadow-lg shadow-black/20 ${
           isMicro ? "px-1.5 py-1" : isCompact ? "px-2 py-1" : "px-2 py-1.5"
         }`}
       >
@@ -92,12 +92,12 @@ export default function FlowPanelInput({
             onFocus={handleFocus}
             ref={textareaRef}
             rows={1}
-            className={`resize-none overflow-y-auto border-transparent bg-transparent text-white placeholder:text-white/40 focus-visible:ring-0 min-h-8 text-xs [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25`}
+            className={`resize-none overflow-y-auto border-transparent bg-transparent text-foreground placeholder:text-muted-foreground focus-visible:ring-0 min-h-8 text-xs [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted/60 hover:[&::-webkit-scrollbar-thumb]:bg-muted`}
             style={{
               maxHeight: "160px",
               overflowY: "auto",
               scrollbarWidth: "thin",
-              scrollbarColor: "rgba(255,255,255,0.25) transparent",
+              scrollbarColor: "var(--muted-foreground) transparent",
             }}
           />
         ) : (
@@ -113,7 +113,7 @@ export default function FlowPanelInput({
             }}
             disabled={busy}
             onFocus={handleFocus}
-            className={`border-transparent bg-transparent text-white placeholder:text-white/40 focus-visible:ring-0 ${
+            className={`border-transparent bg-transparent text-foreground placeholder:text-muted-foreground focus-visible:ring-0 ${
               isMicro ? "h-6 text-[10px]" : "h-7 text-[11px]"
             }`}
           />

@@ -195,6 +195,8 @@ const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
 function FlowWorkspaceInner({
   project,
   initialState,
+  theme,
+  onToggleTheme,
   onExit,
 }: FlowWorkspaceProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -560,17 +562,17 @@ function FlowWorkspaceInner({
             zoomOnDoubleClick={false}
             defaultEdgeOptions={{
               type: "smoothstep",
-              style: { stroke: "rgba(255,255,255,0.35)", strokeWidth: 1.6 },
+              style: { stroke: "var(--flow-edge)", strokeWidth: 1.6 },
             }}
             className="h-full w-full"
             fitView
           >
-            <Background gap={20} size={1} color="rgba(255,255,255,0.08)" />
+            <Background gap={20} size={1} color="var(--flow-grid)" />
             <Panel position="top-right" className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
-                className="border-white/15 bg-slate-900/80 text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+                className="border-border/70 bg-card/80 text-xs uppercase tracking-[0.2em] text-muted-foreground hover:border-border hover:bg-accent/40 hover:text-foreground"
                 onClick={() => {
                   void handleAutoLayout();
                 }}
@@ -581,10 +583,10 @@ function FlowWorkspaceInner({
             </Panel>
             <Controls
               showInteractive={false}
-              className="rounded-xl border border-white/10 bg-slate-900/80 text-white"
+              className="rounded-xl border border-border/70 bg-card/80 text-foreground shadow-md"
             />
             <MiniMap
-              className="rounded-xl border border-white/10 bg-slate-900/70"
+              className="rounded-xl border border-border/70 bg-card/70"
               zoomable
               pannable
             />
@@ -619,7 +621,7 @@ function FlowWorkspaceInner({
 
   return (
     <QuestionActionProvider value={{ retryQuestion, busy }}>
-      <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+      <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-[var(--surface-1)] via-[var(--surface-2)] to-[var(--surface-3)] text-foreground">
         <FlowHeader
           projectName={project.name}
           projectPath={project.path}
@@ -627,6 +629,8 @@ function FlowWorkspaceInner({
           onOpenSettings={() => setSettingsOpen(true)}
           onFocusChat={() => openOrFocusTab("chat")}
           onFocusGraph={() => openOrFocusTab("graph")}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
           onExit={handleExit}
         />
         <div className="relative flex-1">

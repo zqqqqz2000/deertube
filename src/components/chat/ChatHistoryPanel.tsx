@@ -238,10 +238,10 @@ export default function ChatHistoryPanel({
             key={`node-${nodeId}-${start}`}
             type="button"
             onClick={() => handleNodeLinkClick(nodeId)}
-            className="mx-1 inline-flex items-center gap-1.5 rounded-full border border-sky-300/30 bg-slate-900/70 px-2.5 py-0.5 text-[11px] font-semibold text-sky-200 shadow-sm shadow-black/20 transition hover:-translate-y-0.5 hover:border-sky-200/60 hover:bg-slate-800/80 hover:text-sky-100"
+            className="mx-1 inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-[11px] font-semibold text-primary shadow-sm shadow-black/20 transition hover:-translate-y-0.5 hover:border-primary/60 hover:bg-primary/15"
             title={`Focus node ${resolvedLabel}`}
           >
-            <span className="h-1.5 w-1.5 rounded-full bg-sky-300/80 shadow-[0_0_8px_rgba(125,211,252,0.7)]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-primary/70 shadow-[0_0_8px_rgba(14,165,233,0.6)]" />
             <span className="max-w-[240px] truncate">{resolvedLabel}</span>
           </button>,
         );
@@ -374,11 +374,11 @@ export default function ChatHistoryPanel({
   );
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/90 shadow-2xl shadow-black/40 backdrop-blur">
+    <div className="relative flex h-full w-full flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/85 shadow-2xl shadow-black/25 backdrop-blur">
       {selectedSummary && (
         <button
           type="button"
-          className="mx-3 mt-3 flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left transition hover:border-white/25 hover:bg-white/10"
+          className="mx-3 mt-3 flex items-start gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2 text-left transition hover:border-border hover:bg-card/80"
           onClick={handleFocusNode}
         >
           <div className="mt-1 h-2.5 w-2.5 rounded-full bg-amber-400/80 shadow-[0_0_12px_rgba(251,191,36,0.45)]" />
@@ -579,7 +579,7 @@ export default function ChatHistoryPanel({
                                       <button
                                         key={nodeId || `${item.id}-${index}`}
                                         type="button"
-                                        className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-left text-xs transition hover:border-white/25 hover:bg-white/10"
+                                        className="w-full rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
                                         onClick={() => {
                                           if (nodeId && onFocusNode) {
                                             onFocusNode(nodeId);

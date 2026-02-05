@@ -1,5 +1,6 @@
 import type { FlowEdge, FlowNode } from "../../types/flow";
 import type { ChatMessage } from "../../types/chat";
+import type { Theme } from "../../lib/theme";
 
 export interface ProjectState {
   nodes: FlowNode[];
@@ -15,5 +16,7 @@ export interface ProjectInfo {
 export interface FlowWorkspaceProps {
   project: ProjectInfo;
   initialState: ProjectState;
+  theme: Theme;
+  onToggleTheme: () => void;
   onExit: () => void;
 }

@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FlowEdge, FlowNode } from './types/flow'
 import type { ChatMessage } from './types/chat'
 import ProjectPicker, { type ProjectOpenResult } from './components/ProjectPicker'
 import FlowWorkspace from './components/FlowWorkspace'
+import { applyTheme, getInitialTheme, THEME_STORAGE_KEY, type Theme } from './lib/theme'
 
 interface ProjectInfo {
   path: string
@@ -18,6 +19,12 @@ interface ProjectState {
 function App() {
   const [project, setProject] = useState<ProjectInfo | null>(null)
   const [projectState, setProjectState] = useState<ProjectState | null>(null)
+  const [theme, setTheme] = useState<Theme>(() => getInitialTheme())
+
+  useEffect(() => {
+    applyTheme(theme)
+    localStorage.setItem(THEME_STORAGE_KEY, theme)
+  }, [theme])
 
   const handleOpen = (result: ProjectOpenResult) => {
     setProject({ path: result.path, name: result.name })
@@ -34,6 +41,10 @@ function App() {
         <FlowWorkspace
           project={project}
           initialState={projectState}
+          theme={theme}
+          onToggleTheme={() =>
+            setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+          }
           onExit={() => {
             setProject(null)
             setProjectState(null)

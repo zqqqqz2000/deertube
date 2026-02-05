@@ -45,11 +45,11 @@ export default function SettingsPanel({
     <Sheet open={open} onOpenChange={(value) => (!value ? onClose() : undefined)}>
       <SheetContent
         side="right"
-        className="flex h-full w-full max-w-none flex-col gap-0 border-white/10 bg-slate-950/95 text-white sm:max-w-[760px] md:max-w-[900px] lg:max-w-[1040px]"
+        className="flex h-full w-full max-w-none flex-col gap-0 border-border/70 bg-card/95 text-foreground sm:max-w-[760px] md:max-w-[900px] lg:max-w-[1040px]"
       >
-        <SheetHeader className="border-b border-white/10 pb-4">
-          <SheetTitle className="text-white">Providers & Graph</SheetTitle>
-          <SheetDescription className="text-white/60">
+        <SheetHeader className="border-b border-border/70 pb-4">
+          <SheetTitle className="text-foreground">Providers & Graph</SheetTitle>
+          <SheetDescription className="text-muted-foreground">
             Configure Jina, Tavily, and LLM settings. Profiles are stored in localStorage.
           </SheetDescription>
         </SheetHeader>
@@ -57,23 +57,25 @@ export default function SettingsPanel({
           <div className="px-2 py-6 sm:px-6">
             <div className="space-y-3">
               <div>
-                <div className="text-sm uppercase tracking-[0.3em] text-white/60">Graph settings</div>
-                <div className="mt-1 text-sm text-white/60">
+                <div className="text-sm uppercase tracking-[0.3em] text-muted-foreground">
+                  Graph settings
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
                   Choose the active profile for this graph.
                 </div>
               </div>
               <div className="grid gap-2">
-                <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                   Active profile
                 </Label>
                 <Select
                   value={activeProfileId ?? ''}
                   onValueChange={(value) => onActiveProfileChange(value)}
                 >
-                  <SelectTrigger className="h-10 border-white/10 bg-slate-900/70 text-white">
+                  <SelectTrigger className="h-10 border-border/70 bg-background/80 text-foreground">
                     <SelectValue placeholder="Choose profile" />
                   </SelectTrigger>
-                  <SelectContent className="border-white/10 bg-slate-900 text-white">
+                  <SelectContent className="border-border/70 bg-card text-foreground">
                     {profiles.length === 0 ? (
                       <SelectItem value="" disabled>
                         No profiles yet
@@ -90,12 +92,14 @@ export default function SettingsPanel({
               </div>
             </div>
 
-            <Separator className="my-6 bg-white/10" />
+            <Separator className="my-6 bg-border/70" />
 
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.3em] text-white/50">Profiles</div>
-                <div className="mt-1 text-sm text-white/70">
+                <div className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                  Profiles
+                </div>
+                <div className="mt-1 text-sm text-muted-foreground">
                   Configure provider and model details.
                 </div>
               </div>
@@ -116,7 +120,7 @@ export default function SettingsPanel({
                       {activeProfileId === profile.id && (
                         <Badge
                           variant="secondary"
-                          className="ml-2 border border-emerald-400/40 bg-emerald-500/10 text-emerald-200"
+                          className="ml-2 border border-emerald-400/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-200"
                         >
                           Active
                         </Badge>
@@ -125,7 +129,7 @@ export default function SettingsPanel({
                     <Button
                       variant="outline"
                       size="sm"
-                      className="border-red-400/40 text-red-200 hover:bg-red-500/10 hover:text-red-200"
+                      className="border-destructive/40 text-destructive hover:bg-destructive/10"
                       onClick={() => onProfileDelete(profile.id)}
                       disabled={profiles.length <= 1}
                     >
@@ -134,24 +138,28 @@ export default function SettingsPanel({
                   </div>
 
                   <div className="grid gap-2">
-                    <Label className="text-xs uppercase tracking-[0.2em] text-white/50">Name</Label>
+                    <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      Name
+                    </Label>
                     <Input
-                      className="border-white/10 bg-white/5 text-white"
+                      className="border-border/70 bg-background/70 text-foreground"
                       value={profile.name}
                       onChange={(event) => onProfileChange(profile.id, { name: event.target.value })}
                     />
                   </div>
 
-                  <Separator className="bg-white/10" />
+                  <Separator className="bg-border/70" />
 
                   <div className="space-y-3">
-                    <div className="text-xs uppercase tracking-[0.3em] text-white/50">Jina</div>
+                    <div className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                      Jina
+                    </div>
                     <div className="grid gap-2">
-                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                         Reader Base URL
                       </Label>
                       <Input
-                        className="border-white/10 bg-white/5 text-white"
+                        className="border-border/70 bg-background/70 text-foreground"
                         value={profile.jinaReaderBaseUrl}
                         onChange={(event) =>
                           onProfileChange(profile.id, { jinaReaderBaseUrl: event.target.value })
@@ -160,11 +168,11 @@ export default function SettingsPanel({
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                         Reader Token (optional)
                       </Label>
                       <Input
-                        className="border-white/10 bg-white/5 text-white"
+                        className="border-border/70 bg-background/70 text-foreground"
                         value={profile.jinaReaderApiKey}
                         onChange={(event) =>
                           onProfileChange(profile.id, { jinaReaderApiKey: event.target.value })
@@ -174,16 +182,18 @@ export default function SettingsPanel({
                     </div>
                   </div>
 
-                  <Separator className="bg-white/10" />
+                  <Separator className="bg-border/70" />
 
                   <div className="space-y-3">
-                    <div className="text-xs uppercase tracking-[0.3em] text-white/50">Tavily</div>
+                    <div className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                      Tavily
+                    </div>
                     <div className="grid gap-2">
-                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                         API Key
                       </Label>
                       <Input
-                        className="border-white/10 bg-white/5 text-white"
+                        className="border-border/70 bg-background/70 text-foreground"
                         value={profile.tavilyApiKey}
                         onChange={(event) =>
                           onProfileChange(profile.id, { tavilyApiKey: event.target.value })
@@ -193,16 +203,18 @@ export default function SettingsPanel({
                     </div>
                   </div>
 
-                  <Separator className="bg-white/10" />
+                  <Separator className="bg-border/70" />
 
                   <div className="space-y-3">
-                    <div className="text-xs uppercase tracking-[0.3em] text-white/50">LLM</div>
+                    <div className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                      LLM
+                    </div>
                     <div className="grid gap-2">
-                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                         Provider
                       </Label>
                       <Input
-                        className="border-white/10 bg-white/5 text-white"
+                        className="border-border/70 bg-background/70 text-foreground"
                         value={profile.llmProvider}
                         onChange={(event) =>
                           onProfileChange(profile.id, { llmProvider: event.target.value })
@@ -211,11 +223,11 @@ export default function SettingsPanel({
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                         Model ID
                       </Label>
                       <Input
-                        className="border-white/10 bg-white/5 text-white"
+                        className="border-border/70 bg-background/70 text-foreground"
                         value={profile.llmModelId}
                         onChange={(event) =>
                           onProfileChange(profile.id, { llmModelId: event.target.value })
@@ -224,11 +236,11 @@ export default function SettingsPanel({
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                         API Key (optional)
                       </Label>
                       <Input
-                        className="border-white/10 bg-white/5 text-white"
+                        className="border-border/70 bg-background/70 text-foreground"
                         value={profile.llmApiKey}
                         onChange={(event) =>
                           onProfileChange(profile.id, { llmApiKey: event.target.value })
@@ -237,11 +249,11 @@ export default function SettingsPanel({
                       />
                     </div>
                     <div className="grid gap-2">
-                      <Label className="text-xs uppercase tracking-[0.2em] text-white/50">
+                      <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
                         Base URL
                       </Label>
                       <Input
-                        className="border-white/10 bg-white/5 text-white"
+                        className="border-border/70 bg-background/70 text-foreground"
                         value={profile.llmBaseUrl}
                         onChange={(event) =>
                           onProfileChange(profile.id, { llmBaseUrl: event.target.value })

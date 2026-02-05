@@ -1,4 +1,6 @@
 import { Button } from "@/components/ui/button";
+import { FolderOpen, MessageSquare, Moon, Network, Settings, Sun } from "lucide-react";
+import type { Theme } from "@/lib/theme";
 
 interface FlowHeaderProps {
   projectName: string;
@@ -8,6 +10,8 @@ interface FlowHeaderProps {
   onExit: () => void;
   onFocusChat: () => void;
   onFocusGraph: () => void;
+  theme: Theme;
+  onToggleTheme: () => void;
 }
 
 export default function FlowHeader({
@@ -18,42 +22,67 @@ export default function FlowHeader({
   onExit,
   onFocusChat,
   onFocusGraph,
+  theme,
+  onToggleTheme,
 }: FlowHeaderProps) {
+  const ToggleIcon = theme === "dark" ? Sun : Moon;
   return (
-    <header className="flex flex-wrap items-center justify-between gap-6 border-b border-white/10 bg-slate-950/80 px-8 py-5 backdrop-blur">
+    <header className="flex flex-wrap items-center justify-between gap-6 border-b border-border/60 bg-background/70 px-6 py-4 backdrop-blur-xl">
       <div>
-        <div className="text-lg font-semibold text-white">{projectName}</div>
-        <div className="text-xs text-white/50">{projectPath}</div>
+        <div className="text-lg font-semibold text-foreground">{projectName}</div>
+        <div className="text-xs text-muted-foreground">{projectPath}</div>
       </div>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
-          variant="outline"
-          className="border-white/15 bg-transparent text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 rounded-full border border-border/60 bg-background/60 text-foreground/80 shadow-sm hover:bg-accent hover:text-accent-foreground"
           onClick={onFocusChat}
+          aria-label="Focus chat"
+          title="Focus chat"
         >
-          Chat
+          <MessageSquare />
         </Button>
         <Button
-          variant="outline"
-          className="border-white/15 bg-transparent text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 rounded-full border border-border/60 bg-background/60 text-foreground/80 shadow-sm hover:bg-accent hover:text-accent-foreground"
           onClick={onFocusGraph}
+          aria-label="Focus graph"
+          title="Focus graph"
         >
-          Graph
+          <Network />
         </Button>
         <Button
-          variant="outline"
-          className="border-white/15 bg-transparent text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 rounded-full border border-border/60 bg-background/60 text-foreground/80 shadow-sm hover:bg-accent hover:text-accent-foreground"
           onClick={onOpenSettings}
+          aria-label="Open settings"
+          title="Open settings"
         >
-          Settings
+          <Settings />
         </Button>
         <Button
-          variant="outline"
-          className="border-white/15 bg-transparent text-xs uppercase tracking-[0.2em] text-white/80 hover:border-white/30 hover:bg-white/5"
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 rounded-full border border-border/60 bg-background/60 text-foreground/80 shadow-sm hover:bg-accent hover:text-accent-foreground"
+          onClick={onToggleTheme}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        >
+          <ToggleIcon />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9 rounded-full border border-border/60 bg-background/60 text-foreground/80 shadow-sm hover:bg-accent hover:text-accent-foreground"
           onClick={onExit}
           disabled={busy}
+          aria-label="Switch project"
+          title="Switch project"
         >
-          Switch project
+          <FolderOpen />
         </Button>
       </div>
     </header>

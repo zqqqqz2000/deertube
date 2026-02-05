@@ -13,12 +13,12 @@ export default function InsightNode({ data, selected }: InsightNodeProps) {
   if (isMicro) {
     return (
       <Card
-        className={`relative w-[220px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
-          selected ? "ring-1 ring-white/20 after:opacity-100" : ""
+        className={`relative w-[220px] border-border/70 bg-card/90 text-foreground shadow-xl shadow-black/25 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
+          selected ? "ring-1 ring-primary/40 after:opacity-100" : ""
         }`}
       >
         <CardContent className="flex items-center justify-center px-4 py-5">
-          <div className="text-center text-xl font-semibold tracking-wide text-white/95">
+          <div className="text-center text-xl font-semibold tracking-wide text-foreground">
             {data.titleTiny || data.titleShort || data.titleLong || "Node"}
           </div>
         </CardContent>
@@ -31,12 +31,12 @@ export default function InsightNode({ data, selected }: InsightNodeProps) {
   if (isCompact) {
     return (
       <Card
-        className={`relative w-[280px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
-          selected ? "ring-1 ring-white/20 after:opacity-100" : ""
+        className={`relative w-[280px] border-border/70 bg-card/90 text-foreground shadow-xl shadow-black/25 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
+          selected ? "ring-1 ring-primary/40 after:opacity-100" : ""
         }`}
       >
         <CardContent className="p-4">
-          <div className="text-lg font-semibold text-white">
+          <div className="text-lg font-semibold text-foreground">
             {data.titleShort || data.titleLong}
           </div>
         </CardContent>
@@ -48,27 +48,27 @@ export default function InsightNode({ data, selected }: InsightNodeProps) {
 
   return (
     <Card
-      className={`relative w-[340px] border-white/10 bg-slate-950/90 text-white shadow-xl shadow-black/40 transition-[box-shadow,transform] duration-200 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
-        selected ? "ring-1 ring-white/20 after:opacity-100" : ""
+      className={`relative w-[340px] border-border/70 bg-card/90 text-foreground shadow-xl shadow-black/25 transition-[box-shadow,transform] duration-200 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
+        selected ? "ring-1 ring-primary/40 after:opacity-100" : ""
       }`}
     >
       <CardContent className="p-4">
-        <div className="flex items-center justify-between text-[0.65rem] uppercase tracking-[0.25em] text-white/50">
+        <div className="flex items-center justify-between text-[0.65rem] uppercase tracking-[0.25em] text-muted-foreground">
           <span>Insight</span>
           <Badge
             variant="secondary"
-            className="border border-white/10 bg-white/5 text-[0.65rem] font-semibold tracking-wide text-white/70"
+            className="border border-border/70 bg-background/70 text-[0.65rem] font-semibold tracking-wide text-muted-foreground"
           >
             {data.titleTiny || "Node"}
           </Badge>
         </div>
-        <div className="mt-2 text-sm font-semibold text-white">
+        <div className="mt-2 text-sm font-semibold text-foreground">
           {data.titleLong || data.titleShort}
         </div>
-        <div className="mt-3 text-xs uppercase tracking-[0.2em] text-white/40">
+        <div className="mt-3 text-xs uppercase tracking-[0.2em] text-muted-foreground">
           Excerpt
         </div>
-        <div className="mt-2 text-xs leading-relaxed text-white/80">
+        <div className="mt-2 text-xs leading-relaxed text-foreground/80">
           {data.excerpt}
         </div>
       </CardContent>

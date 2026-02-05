@@ -82,16 +82,18 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+    <div className="min-h-screen bg-gradient-to-br from-[var(--surface-1)] via-[var(--surface-2)] to-[var(--surface-3)] text-foreground">
       <div className="mx-auto flex max-w-6xl flex-col gap-12 px-8 py-16">
-        <Card className="border-white/10 bg-white/5 text-white shadow-2xl shadow-black/40 backdrop-blur">
+        <Card className="border-border/60 bg-card/80 text-foreground shadow-2xl shadow-black/20 backdrop-blur">
           <CardContent className="flex flex-wrap items-center justify-between gap-10 p-10">
             <div className="max-w-2xl">
-              <p className="text-xs uppercase tracking-[0.3em] text-white/60">DeepSearch Workspace</p>
-              <h1 className="mt-3 text-3xl font-semibold text-white md:text-4xl">
+              <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                DeepSearch Workspace
+              </p>
+              <h1 className="mt-3 text-3xl font-semibold text-foreground md:text-4xl">
                 Choose a project directory
               </h1>
-              <p className="mt-4 text-sm text-white/70 md:text-base">
+              <p className="mt-4 text-sm text-muted-foreground md:text-base">
                 Your knowledge graph and source archives live inside the selected folder.
               </p>
             </div>
@@ -100,17 +102,17 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
                 placeholder="Project name"
-                className="h-10 w-48 border-white/10 bg-white/5 text-sm text-white placeholder:text-white/40"
+                className="h-10 w-48 border-border/70 bg-background/70 text-sm text-foreground placeholder:text-muted-foreground"
               />
               <Button
-                className="bg-gradient-to-r from-emerald-400 via-teal-400 to-sky-400 text-sm font-semibold text-slate-900 shadow-lg shadow-emerald-500/30 hover:-translate-y-0.5 hover:shadow-xl"
+                className="bg-gradient-to-r from-emerald-400 via-teal-400 to-sky-400 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 hover:-translate-y-0.5 hover:shadow-xl"
                 onClick={handleCreate}
                 disabled={loading || !projectName.trim()}
               >
                 {loading ? 'Creating...' : 'Create project'}
               </Button>
               <Button
-                className="bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-sm font-semibold text-slate-900 shadow-lg shadow-orange-500/30 hover:-translate-y-0.5 hover:shadow-xl"
+                className="bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-sm font-semibold text-slate-950 shadow-lg shadow-orange-500/20 hover:-translate-y-0.5 hover:shadow-xl"
                 onClick={handleBrowse}
                 disabled={loading}
               >
@@ -120,9 +122,11 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
           </CardContent>
         </Card>
         <div className="flex flex-col gap-4">
-          <div className="text-xs uppercase tracking-[0.3em] text-white/50">Recent projects</div>
+          <div className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+            Recent projects
+          </div>
           {recents.length === 0 ? (
-            <Card className="border-dashed border-white/10 bg-white/5 text-white/60">
+            <Card className="border-dashed border-border/60 bg-card/60 text-muted-foreground">
               <CardContent className="p-6 text-sm">No recent projects yet.</CardContent>
             </Card>
           ) : (
@@ -130,7 +134,7 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
               {recents.map((project) => (
                 <Card
                   key={project.path}
-                  className="border-white/10 bg-slate-900/70 text-left text-white shadow-lg shadow-black/40"
+                  className="border-border/70 bg-card/80 text-left text-foreground shadow-lg shadow-black/20"
                 >
                   <CardContent className="flex h-full flex-col gap-3 p-5">
                     <Button
@@ -141,8 +145,8 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
                     >
                       <div>
                         <div className="text-lg font-semibold">{project.name}</div>
-                        <div className="text-xs text-white/60">{project.path}</div>
-                        <div className="text-xs text-white/40">
+                        <div className="text-xs text-muted-foreground">{project.path}</div>
+                        <div className="text-xs text-muted-foreground/70">
                           {new Date(project.lastOpened).toLocaleString()}
                         </div>
                       </div>
@@ -151,7 +155,7 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
                       <Button
                         variant="outline"
                         size="sm"
-                        className="border-red-400/40 text-[0.65rem] uppercase tracking-[0.2em] text-red-200 hover:bg-red-500/10 hover:text-red-200"
+                        className="border-destructive/40 text-[0.65rem] uppercase tracking-[0.2em] text-destructive hover:bg-destructive/10"
                         onClick={() => handleDelete(project.path)}
                         disabled={loading}
                       >

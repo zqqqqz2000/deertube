@@ -25,7 +25,7 @@
 }
 
 .dark .flexlayout__layout {
-  --color-tab-selected-background: #101010;
+  --color-tab-selected-background: var(--background);
 }
 
 .flexlayout__layout {
