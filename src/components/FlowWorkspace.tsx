@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { createProfileDraft } from "../lib/settings";
 import FlowHeader from "./flow/FlowHeader";
 import FlowPanelInput from "./flow/FlowPanelInput";
-import type { FlowWorkspaceProps } from "./flow/types";
+import type { FlowWorkspaceProps, ProjectState } from "./flow/types";
 import { useAutoLayout } from "./flow/useAutoLayout";
 import { useFlowState } from "./flow/useFlowState";
 import { useInitialFit } from "./flow/useInitialFit";
@@ -31,7 +31,8 @@ import { useProfileSettings } from "./flow/useProfileSettings";
 import { useChatActions } from "./flow/useChatActions";
 import { QuestionActionProvider } from "./flow/QuestionActionProvider";
 import ChatHistoryPanel from "./chat/ChatHistoryPanel";
-import type { InsightNodeData } from "../types/flow";
+import type { FlowEdge, FlowNode, InsightNodeData } from "../types/flow";
+import type { ChatMessage } from "../types/chat";
 import { FlowFlexLayout } from "./flow/FlowFlexLayout";
 
 const CHAT_TABSET_ID = "chat-tabset";
@@ -40,6 +41,16 @@ const CHAT_TAB_ID = "chat-tab";
 const GRAPH_TAB_ID = "graph-tab";
 const CHAT_DEFAULT_WEIGHT = 26;
 const TOTAL_LAYOUT_WEIGHT = 100;
+
+const coerceProjectState = (state: {
+  nodes: unknown[];
+  edges: unknown[];
+  chat?: unknown[];
+}): ProjectState => ({
+  nodes: state.nodes as FlowNode[],
+  edges: state.edges as FlowEdge[],
+  chat: (state.chat ?? []) as ChatMessage[],
+});
 
 interface FlexLayoutNode {
   id?: string;
@@ -192,12 +203,87 @@ const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
   };
 };
 
+function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
+  const [loadedState, setLoadedState] = useState<ProjectState | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const lastPathRef = useRef<string | null>(null);
+  const saveEnabled = props.saveEnabled ?? true;
+
+  useEffect(() => {
+    let cancelled = false;
+    const samePath = lastPathRef.current === props.project.path;
+    lastPathRef.current = props.project.path;
+    setLoading(true);
+    if (!samePath) {
+      setLoadedState(null);
+    }
+    trpc.project.open
+      .mutate({ path: props.project.path })
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        setLoadedState(coerceProjectState(result.state));
+        setReloadKey((prev) => prev + 1);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setLoadedState((prev) => prev ?? props.initialState);
+      })
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.initialState, props.project.path]);
+
+  if (loading && !loadedState) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-gradient-to-br from-[var(--surface-1)] via-[var(--surface-2)] to-[var(--surface-3)] text-foreground">
+        <div className="rounded-xl border border-border/70 bg-card/80 px-6 py-4 text-xs uppercase tracking-[0.3em] text-muted-foreground shadow-lg">
+          Reloading project...
+        </div>
+      </div>
+    );
+  }
+
+  if (!loadedState) {
+    return null;
+  }
+
+  return (
+    <div className="relative h-screen w-screen">
+      <FlowWorkspaceInner
+        key={reloadKey}
+        {...props}
+        initialState={loadedState}
+        saveEnabled={saveEnabled && !loading}
+      />
+      {loading ? (
+        <div className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm">
+          <div className="rounded-xl border border-border/70 bg-card/90 px-5 py-3 text-xs uppercase tracking-[0.3em] text-muted-foreground shadow-lg">
+            Reloading project...
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function FlowWorkspaceInner({
   project,
   initialState,
   theme,
   onToggleTheme,
   onExit,
+  saveEnabled = true,
 }: FlowWorkspaceProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -337,6 +423,9 @@ function FlowWorkspaceInner({
   );
 
   useEffect(() => {
+    if (!saveEnabled) {
+      return;
+    }
     if (!hydrated.current) {
       return;
     }
@@ -361,7 +450,7 @@ function FlowWorkspaceInner({
         window.clearTimeout(saveTimer.current);
       }
     };
-  }, [chatMessages, edges, nodes, project.path, hydrated]);
+  }, [chatMessages, edges, nodes, project.path, hydrated, saveEnabled]);
 
   const handleExit = () => {
     trpc.preview.hide.mutate().catch(() => undefined);
@@ -678,7 +767,7 @@ function FlowWorkspaceInner({
 export default function FlowWorkspace(props: FlowWorkspaceProps) {
   return (
     <ReactFlowProvider>
-      <FlowWorkspaceInner {...props} />
+      <FlowWorkspaceLoader {...props} />
     </ReactFlowProvider>
   );
 }

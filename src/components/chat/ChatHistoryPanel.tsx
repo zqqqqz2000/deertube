@@ -71,10 +71,15 @@ const parseGraphToolInput = (value: unknown): GraphToolInput | null => {
       ? input.selectedNodeId
       : undefined;
   const selectedNodeSummary =
-    typeof input.selectedNodeSummary === "string" || input.selectedNodeSummary === null
+    typeof input.selectedNodeSummary === "string" ||
+    input.selectedNodeSummary === null
       ? input.selectedNodeSummary
       : undefined;
-  if (!responseId && selectedNodeId === undefined && selectedNodeSummary === undefined) {
+  if (
+    !responseId &&
+    selectedNodeId === undefined &&
+    selectedNodeSummary === undefined
+  ) {
     return null;
   }
   return { responseId, selectedNodeId, selectedNodeSummary };
@@ -255,15 +260,18 @@ export default function ChatHistoryPanel({
     [handleNodeLinkClick, resolveNodeLabel],
   );
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
-    if (!scrollRef.current) {
-      return;
-    }
-    scrollRef.current.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior,
-    });
-  }, [scrollRef]);
+  const scrollToBottom = useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      if (!scrollRef.current) {
+        return;
+      }
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior,
+      });
+    },
+    [scrollRef],
+  );
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) {
@@ -271,7 +279,8 @@ export default function ChatHistoryPanel({
     }
     const el = scrollRef.current;
     const threshold = 24;
-    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    const atBottom =
+      el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
     setIsAtBottom(atBottom);
   }, [scrollRef]);
 
@@ -485,9 +494,12 @@ export default function ChatHistoryPanel({
                   typeof outputPayload?.explanation === "string"
                     ? outputPayload.explanation
                     : undefined;
-                const graphToolInput = parseGraphToolInput(eventMessage.toolInput);
+                const graphToolInput = parseGraphToolInput(
+                  eventMessage.toolInput,
+                );
                 const responseId = graphToolInput?.responseId;
-                const selectedNodeId = graphToolInput?.selectedNodeId ?? undefined;
+                const selectedNodeId =
+                  graphToolInput?.selectedNodeId ?? undefined;
                 const resolvedLabel = selectedNodeId
                   ? resolveNodeLabel(selectedNodeId)
                   : undefined;
@@ -535,7 +547,9 @@ export default function ChatHistoryPanel({
                           )}
                         </div>
                         <ChatEventDescription>
-                          {eventMessage.error ? eventMessage.error : statusLabel}
+                          {eventMessage.error
+                            ? eventMessage.error
+                            : statusLabel}
                         </ChatEventDescription>
                         {hasDetails && (
                           <CollapsibleContent className="mt-2">
@@ -564,7 +578,9 @@ export default function ChatHistoryPanel({
                                 <div className="space-y-2">
                                   {nodesFromOutput.map((node, index) => {
                                     const nodeId =
-                                      typeof node.id === "string" ? node.id : "";
+                                      typeof node.id === "string"
+                                        ? node.id
+                                        : "";
                                     const title =
                                       typeof node.titleShort === "string"
                                         ? node.titleShort
@@ -628,7 +644,9 @@ export default function ChatHistoryPanel({
                 <div
                   className={cn(
                     "rounded-md px-3 py-2",
-                    isUser ? "bg-muted text-foreground" : "bg-secondary text-foreground",
+                    isUser
+                      ? "bg-muted text-foreground"
+                      : "bg-secondary text-foreground",
                     isFailed &&
                       "border border-destructive/40 bg-destructive/10 text-destructive",
                     isHighlighted && "ring-2 ring-amber-400/60",

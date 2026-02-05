@@ -19,4 +19,5 @@ export interface FlowWorkspaceProps {
   theme: Theme;
   onToggleTheme: () => void;
   onExit: () => void;
+  saveEnabled?: boolean;
 }

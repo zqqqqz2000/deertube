@@ -1,6 +1,7 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import inspector from 'node:inspector'
 import { createIPCHandler } from 'electron-trpc-experimental/main'
 import { createTRPCContext } from './trpc/init'
 import { appRouter } from './trpc/routers/_app'
@@ -25,8 +26,82 @@ export const MAIN_DIST = path.join(process.env.APP_ROOT, 'dist-electron')
 export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
+const isDev = Boolean(VITE_DEV_SERVER_URL)
+const MAIN_INSPECT_PORT = 9229
 
 let win: BrowserWindow | null
+let mainDevtoolsWindow: BrowserWindow | null = null
+let isQuitting = false
+
+app.once('before-quit', () => {
+  isQuitting = true
+})
+
+const openMainDevTools = () => {
+  if (!isDev) {
+    return
+  }
+  if (!inspector.url()) {
+    inspector.open(MAIN_INSPECT_PORT)
+  }
+  const wsUrl = inspector.url()
+  if (!wsUrl) {
+    console.warn('Inspector is not active. Please run with --inspect.')
+    return
+  }
+
+  if (mainDevtoolsWindow && !mainDevtoolsWindow.isDestroyed()) {
+    mainDevtoolsWindow.show()
+    mainDevtoolsWindow.focus()
+    return
+  }
+
+  const rawURL = new URL(wsUrl)
+  const socketURL = `${rawURL.host}${rawURL.pathname}`
+  const devtoolsUrl =
+    `devtools://devtools/bundled/inspector.html?experiments=true&v8only=true&ws=` +
+    socketURL
+
+  mainDevtoolsWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  })
+
+  void mainDevtoolsWindow.loadURL(devtoolsUrl)
+  mainDevtoolsWindow.once('ready-to-show', () => {
+    mainDevtoolsWindow?.show()
+  })
+  mainDevtoolsWindow.on('close', (event) => {
+    if (isQuitting) {
+      return
+    }
+    event.preventDefault()
+    mainDevtoolsWindow?.hide()
+  })
+  mainDevtoolsWindow.on('closed', () => {
+    mainDevtoolsWindow = null
+  })
+}
+
+const registerDevDockMenu = () => {
+  if (!isDev || process.platform !== 'darwin') {
+    return
+  }
+  const menu = Menu.buildFromTemplate([
+    {
+      label: 'Open Main DevTools',
+      click: () => {
+        openMainDevTools()
+      },
+    },
+  ])
+  app.dock.setMenu(menu)
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -70,4 +145,7 @@ app.on('activate', () => {
   }
 })
 
-void app.whenReady().then(createWindow)
+void app.whenReady().then(() => {
+  registerDevDockMenu()
+  createWindow()
+})
