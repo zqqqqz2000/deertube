@@ -92,3 +92,7 @@
   color: rgb(240, 249, 255);
   text-decoration-color: rgba(125, 211, 252, 1);
 }
+
+.markdown-body {
+  background-color: transparent;
+}

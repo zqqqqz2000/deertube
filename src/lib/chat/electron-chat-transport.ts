@@ -36,7 +36,7 @@ export class ElectronChatTransport implements ChatTransport<DeertubeUIMessage> {
     return Promise.resolve(
       new ReadableStream({
         start(controller) {
-          const subscription = trpcClient.chat.stream.subscribe(
+        const subscription = trpcClient.chat.stream.subscribe(
           {
             projectPath: context?.projectPath ?? "",
             messages: options.messages,

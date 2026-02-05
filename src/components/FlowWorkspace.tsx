@@ -10,6 +10,8 @@ import ReactFlow, {
   useReactFlow,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import type { IJsonModel, IJsonTabNode } from "@massbug/flexlayout-react";
+import { Actions, DockLocation, Model } from "@massbug/flexlayout-react";
 import { trpc } from "../lib/trpc";
 import QuestionNode from "./nodes/QuestionNode";
 import SourceNode from "./nodes/SourceNode";
@@ -30,6 +32,165 @@ import { useChatActions } from "./flow/useChatActions";
 import { QuestionActionProvider } from "./flow/QuestionActionProvider";
 import ChatHistoryPanel from "./chat/ChatHistoryPanel";
 import type { InsightNodeData } from "../types/flow";
+import { FlowFlexLayout } from "./flow/FlowFlexLayout";
+
+const CHAT_TABSET_ID = "chat-tabset";
+const GRAPH_TABSET_ID = "graph-tabset";
+const CHAT_TAB_ID = "chat-tab";
+const GRAPH_TAB_ID = "graph-tab";
+const CHAT_DEFAULT_WEIGHT = 26;
+const TOTAL_LAYOUT_WEIGHT = 100;
+
+interface FlexLayoutNode {
+  id?: string;
+  type?: string;
+  weight?: number;
+  children?: FlexLayoutNode[];
+}
+
+const findLayoutNode = (
+  node: FlexLayoutNode | undefined,
+  id: string,
+): FlexLayoutNode | null => {
+  if (!node) {
+    return null;
+  }
+  if (node.id === id) {
+    return node;
+  }
+  if (!node.children) {
+    return null;
+  }
+  for (const child of node.children) {
+    const found = findLayoutNode(child, id);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+};
+
+const findFirstTabsetId = (node: FlexLayoutNode | undefined): string | null => {
+  if (!node) {
+    return null;
+  }
+  if (node.type === "tabset" && node.id) {
+    return node.id;
+  }
+  if (!node.children) {
+    return null;
+  }
+  for (const child of node.children) {
+    const found = findFirstTabsetId(child);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+};
+
+const hasTab = (layout: FlexLayoutNode | undefined, tabId: string): boolean => {
+  const node = findLayoutNode(layout, tabId);
+  return Boolean(node && node.type === "tab");
+};
+
+const hasTabset = (layout: FlexLayoutNode | undefined, tabsetId: string): boolean => {
+  const node = findLayoutNode(layout, tabsetId);
+  return Boolean(node && node.type === "tabset");
+};
+
+const createDefaultLayoutModel = (): IJsonModel => ({
+  global: {
+    tabEnableFloat: false,
+    tabEnableClose: true,
+    tabSetEnableClose: false,
+    tabSetEnableDeleteWhenEmpty: true,
+    tabSetMinWidth: 100,
+    tabSetMinHeight: 100,
+    borderMinSize: 100,
+  },
+  borders: [],
+  layout: {
+    type: "row",
+    weight: TOTAL_LAYOUT_WEIGHT,
+    children: [
+      {
+        type: "tabset",
+        id: CHAT_TABSET_ID,
+        weight: CHAT_DEFAULT_WEIGHT,
+        selected: 0,
+        enableClose: false,
+        enableDeleteWhenEmpty: true,
+        children: [
+          {
+            type: "tab",
+            id: CHAT_TAB_ID,
+            name: "Chat",
+            component: "chat",
+            enableClose: true,
+          },
+        ],
+      },
+      {
+        type: "tabset",
+        id: GRAPH_TABSET_ID,
+        weight: TOTAL_LAYOUT_WEIGHT - CHAT_DEFAULT_WEIGHT,
+        selected: 0,
+        enableClose: false,
+        enableDeleteWhenEmpty: true,
+        children: [
+          {
+            type: "tab",
+            id: GRAPH_TAB_ID,
+            name: "Graph",
+            component: "graph",
+            enableClose: true,
+          },
+        ],
+      },
+    ],
+  },
+});
+
+const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
+  const tabId = tabKind === "chat" ? CHAT_TAB_ID : GRAPH_TAB_ID;
+  const tabsetId = tabKind === "chat" ? CHAT_TABSET_ID : GRAPH_TABSET_ID;
+  return {
+    global: {
+      tabEnableFloat: false,
+      tabEnableClose: true,
+      tabSetEnableClose: false,
+      tabSetEnableDeleteWhenEmpty: true,
+      tabSetMinWidth: 100,
+      tabSetMinHeight: 100,
+      borderMinSize: 100,
+    },
+    borders: [],
+    layout: {
+      type: "row",
+      weight: TOTAL_LAYOUT_WEIGHT,
+      children: [
+        {
+          type: "tabset",
+          id: tabsetId,
+          weight: TOTAL_LAYOUT_WEIGHT,
+          selected: 0,
+          enableClose: false,
+          enableDeleteWhenEmpty: true,
+          children: [
+            {
+              type: "tab",
+              id: tabId,
+              name: tabKind === "chat" ? "Chat" : "Graph",
+              component: tabKind,
+              enableClose: true,
+            },
+          ],
+        },
+      ],
+    },
+  };
+};
 
 function FlowWorkspaceInner({
   project,
@@ -43,10 +204,11 @@ function FlowWorkspaceInner({
   );
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [isDragging, setIsDragging] = useState(false);
-  const [chatCollapseSignal, setChatCollapseSignal] = useState(0);
-  const [chatPinSignal, setChatPinSignal] = useState(0);
   const [chatScrollSignal, setChatScrollSignal] = useState(0);
   const [chatFocusSignal, setChatFocusSignal] = useState(0);
+  const [layoutModel, setLayoutModel] = useState<IJsonModel>(
+    () => createDefaultLayoutModel(),
+  );
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
@@ -121,6 +283,55 @@ function FlowWorkspaceInner({
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedId) ?? null,
     [nodes, selectedId],
+  );
+
+  const handleLayoutChange = useCallback((nextModel: IJsonModel) => {
+    setLayoutModel(nextModel);
+  }, []);
+
+  const openOrFocusTab = useCallback(
+    (tabKind: "chat" | "graph") => {
+      const tabId = tabKind === "chat" ? CHAT_TAB_ID : GRAPH_TAB_ID;
+      const tabsetId = tabKind === "chat" ? CHAT_TABSET_ID : GRAPH_TABSET_ID;
+      const targetDock =
+        tabKind === "chat" ? DockLocation.LEFT : DockLocation.RIGHT;
+
+      const jsonModel = layoutModel;
+      const layout = jsonModel.layout as FlexLayoutNode | undefined;
+      const model = Model.fromJson(jsonModel);
+
+      if (hasTab(layout, tabId)) {
+        model.doAction(Actions.selectTab(tabId));
+        handleLayoutChange(model.toJson());
+        return;
+      }
+
+      const tab: IJsonTabNode = {
+        type: "tab",
+        id: tabId,
+        name: tabKind === "chat" ? "Chat" : "Graph",
+        component: tabKind,
+        enableClose: true,
+      };
+
+      if (hasTabset(layout, tabsetId)) {
+        model.doAction(
+          Actions.addNode(tab, tabsetId, DockLocation.CENTER, -1, true),
+        );
+        handleLayoutChange(model.toJson());
+        return;
+      }
+
+      const fallbackTabset = findFirstTabsetId(layout);
+      if (!fallbackTabset) {
+        handleLayoutChange(createSingleTabLayoutModel(tabKind));
+        return;
+      }
+
+      model.doAction(Actions.addNode(tab, fallbackTabset, targetDock, -1, true));
+      handleLayoutChange(model.toJson());
+    },
+    [handleLayoutChange, layoutModel],
   );
 
   useEffect(() => {
@@ -274,7 +485,6 @@ function FlowWorkspaceInner({
         onPromptChange={setPanelInput}
         onSend={() => {
           void handleSendFromPanel();
-          setChatPinSignal((prev) => prev + 1);
           setChatScrollSignal((prev) => prev + 1);
         }}
         onFocusZoom={handleInputFocusZoom}
@@ -282,17 +492,30 @@ function FlowWorkspaceInner({
     );
   };
 
-  return (
-    <QuestionActionProvider value={{ retryQuestion, busy }}>
-      <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
-        <FlowHeader
-          projectName={project.name}
-          projectPath={project.path}
-          busy={busy}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onExit={handleExit}
+  const renderTab = (tabId: string) => {
+    if (tabId === "chat" || tabId === CHAT_TAB_ID) {
+      return (
+        <ChatHistoryPanel
+          messages={chatMessages}
+          selectedResponseId={selectedResponseId}
+          selectedNode={selectedNode}
+          nodes={nodes}
+          onFocusNode={handleFocusNode}
+          scrollToBottomSignal={chatScrollSignal}
+          focusSignal={chatFocusSignal}
+          onRequestClearSelection={() => setSelectedId(null)}
+          input={historyInput}
+          busy={chatBusy}
+          graphBusy={graphBusy}
+          onInputChange={setHistoryInput}
+          onSend={handleSendFromHistory}
+          onRetry={retryMessage}
         />
-        <div className="relative flex-1">
+      );
+    }
+    if (tabId === "graph" || tabId === GRAPH_TAB_ID) {
+      return (
+        <div className="relative h-full w-full">
           <ReactFlow
             nodes={nodes}
             edges={displayEdges}
@@ -314,7 +537,6 @@ function FlowWorkspaceInner({
             selectNodesOnDrag={false}
             onPaneClick={() => {
               setSelectedId(null);
-              setChatCollapseSignal((prev) => prev + 1);
               if (flowInstance && inputZoomRef.current) {
                 const { viewport } = inputZoomRef.current;
                 inputZoomRef.current = null;
@@ -367,25 +589,53 @@ function FlowWorkspaceInner({
               pannable
             />
           </ReactFlow>
-          <ChatHistoryPanel
-            messages={chatMessages}
-            selectedResponseId={selectedResponseId}
-            selectedNode={selectedNode}
-            nodes={nodes}
-            onFocusNode={handleFocusNode}
-            collapseSignal={chatCollapseSignal}
-            pinSignal={chatPinSignal}
-            scrollToBottomSignal={chatScrollSignal}
-            focusSignal={chatFocusSignal}
-            onRequestClearSelection={() => setSelectedId(null)}
-            input={historyInput}
-            busy={chatBusy}
-            graphBusy={graphBusy}
-            onInputChange={setHistoryInput}
-            onSend={handleSendFromHistory}
-            onRetry={retryMessage}
-          />
           {renderPanelInput()}
+        </div>
+      );
+    }
+    return null;
+  };
+
+  const renderTabLabel = useCallback(
+    (tabId: string) => {
+      if (tabId === "chat" || tabId === CHAT_TAB_ID) {
+        return (
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <span className="text-foreground">Chat</span>
+            <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              {chatMessages.length} MSG
+            </span>
+          </div>
+        );
+      }
+      if (tabId === "graph" || tabId === GRAPH_TAB_ID) {
+        return <span className="text-sm font-medium text-foreground">Graph</span>;
+      }
+      return <span className="text-sm font-medium text-foreground">{tabId}</span>;
+    },
+    [chatMessages.length],
+  );
+
+
+  return (
+    <QuestionActionProvider value={{ retryQuestion, busy }}>
+      <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+        <FlowHeader
+          projectName={project.name}
+          projectPath={project.path}
+          busy={busy}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onFocusChat={() => openOrFocusTab("chat")}
+          onFocusGraph={() => openOrFocusTab("graph")}
+          onExit={handleExit}
+        />
+        <div className="relative flex-1">
+          <FlowFlexLayout
+            model={layoutModel}
+            onModelChange={handleLayoutChange}
+            renderTab={renderTab}
+            renderTabLabel={renderTabLabel}
+          />
         </div>
         <SettingsPanel
           open={settingsOpen}

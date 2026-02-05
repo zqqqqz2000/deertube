@@ -251,6 +251,7 @@ export function useChatActions({
                   toolOutput: {
                     nodesAdded,
                     nodes: result.nodes,
+                    explanation: result.explanation,
                   },
                 }
               : event,
@@ -437,21 +438,13 @@ export function useChatActions({
           ? `${buildNodeQuote(selectedNodeForQuote)} `
           : "";
       const finalPrompt = `${quotePrefix}${prompt}`;
-      if (process.env.NODE_ENV !== "production") {
-        console.log("[useChatActions] sendPrompt", {
-          prompt,
-          finalPrompt,
-          selectedId,
-          selectedNodeForQuote: selectedNodeForQuote?.id ?? null,
-        });
-      }
       reset();
       if (status === "streaming" || status === "submitted") {
         void stop();
       }
       void sendMessage({ text: finalPrompt });
     },
-    [selectedId, selectedNodeForQuote, sendMessage, status, stop],
+    [selectedNodeForQuote, sendMessage, status, stop],
   );
 
   const retryMessage = useCallback(

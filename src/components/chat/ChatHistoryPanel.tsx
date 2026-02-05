@@ -26,8 +26,13 @@ import {
   ChatToolbarAddonEnd,
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, ChevronDown } from "lucide-react";
 import { useStickToBottom } from "use-stick-to-bottom";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 
 interface ChatHistoryPanelProps {
   messages: ChatMessage[];
@@ -35,8 +40,6 @@ interface ChatHistoryPanelProps {
   selectedNode?: FlowNode | null;
   nodes?: FlowNode[];
   onFocusNode?: (nodeId: string) => void;
-  collapseSignal?: number;
-  pinSignal?: number;
   scrollToBottomSignal?: number;
   focusSignal?: number;
   onRequestClearSelection?: () => void;
@@ -48,14 +51,44 @@ interface ChatHistoryPanelProps {
   onRetry?: (messageId: string) => void;
 }
 
+interface GraphToolInput {
+  responseId?: string;
+  selectedNodeId?: string | null;
+  selectedNodeSummary?: string | null;
+}
+
+const parseGraphToolInput = (value: unknown): GraphToolInput | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const input = value as Record<string, unknown>;
+  const responseId =
+    typeof input.responseId === "string" && input.responseId.length > 0
+      ? input.responseId
+      : undefined;
+  const selectedNodeId =
+    typeof input.selectedNodeId === "string" || input.selectedNodeId === null
+      ? input.selectedNodeId
+      : undefined;
+  const selectedNodeSummary =
+    typeof input.selectedNodeSummary === "string" || input.selectedNodeSummary === null
+      ? input.selectedNodeSummary
+      : undefined;
+  if (!responseId && selectedNodeId === undefined && selectedNodeSummary === undefined) {
+    return null;
+  }
+  return { responseId, selectedNodeId, selectedNodeSummary };
+};
+
+const getGraphToolResponseId = (value: unknown): string | null =>
+  parseGraphToolInput(value)?.responseId ?? null;
+
 export default function ChatHistoryPanel({
   messages,
   selectedResponseId,
   selectedNode,
   nodes = [],
   onFocusNode,
-  collapseSignal = 0,
-  pinSignal = 0,
   scrollToBottomSignal = 0,
   focusSignal = 0,
   onRequestClearSelection,
@@ -67,14 +100,6 @@ export default function ChatHistoryPanel({
   onRetry,
 }: ChatHistoryPanelProps) {
   const { scrollRef, contentRef } = useStickToBottom();
-  const dragOffset = useRef<{ x: number; y: number } | null>(null);
-  const resizeOffset = useRef<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    mode: "x" | "y" | "both";
-  } | null>(null);
   const highlightedId = selectedResponseId;
   const ignoreHighlightRef = useRef(false);
   const nodeLookup = useMemo(() => {
@@ -83,26 +108,7 @@ export default function ChatHistoryPanel({
     return map;
   }, [nodes]);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const [panelPosition, setPanelPosition] = useState({ x: 16, y: 80 });
-  const [panelSize, setPanelSize] = useState(() => ({
-    width: 380,
-    height:
-      typeof window === "undefined"
-        ? 560
-        : Math.round(window.innerHeight * 0.78),
-  }));
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const [isPinned, setIsPinned] = useState(true);
-  const collapsedSize = useMemo(() => ({ width: 200, height: 70 }), []);
-  const expandedSize = panelSize;
   const sortedMessages = useMemo(() => messages, [messages]);
-  if (process.env.NODE_ENV !== "production") {
-    const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    if (lastUser && lastUser.requestText !== (window as { __lastRequestText?: string }).__lastRequestText) {
-      (window as { __lastRequestText?: string }).__lastRequestText = lastUser.requestText;
-      console.log("[ChatHistoryPanel] last user message", lastUser);
-    }
-  }
   const selectedSummary = useMemo(() => {
     if (!selectedNode) {
       return null;
@@ -166,14 +172,8 @@ export default function ChatHistoryPanel({
       if (message.kind !== "graph-event" || message.toolStatus !== "running") {
         return;
       }
-      if (!message.toolInput || typeof message.toolInput !== "object") {
-        return;
-      }
-      if (!("responseId" in message.toolInput)) {
-        return;
-      }
-      const responseId = (message.toolInput as { responseId?: unknown }).responseId;
-      if (typeof responseId === "string" && responseId.length > 0) {
+      const responseId = getGraphToolResponseId(message.toolInput);
+      if (responseId) {
         running.add(responseId);
       }
     });
@@ -307,22 +307,6 @@ export default function ChatHistoryPanel({
   ]);
 
   useEffect(() => {
-    if (collapseSignal === 0) {
-      return;
-    }
-    setIsPinned(false);
-    setIsCollapsed(true);
-  }, [collapseSignal]);
-
-  useEffect(() => {
-    if (pinSignal === 0) {
-      return;
-    }
-    setIsPinned(true);
-    setIsCollapsed(false);
-  }, [pinSignal]);
-
-  useEffect(() => {
     if (scrollToBottomSignal === 0) {
       return;
     }
@@ -334,105 +318,6 @@ export default function ChatHistoryPanel({
   useEffect(() => {
     handleScroll();
   }, [handleScroll, sortedMessages.length, busy, graphBusy]);
-
-  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    const target = event.currentTarget;
-    dragOffset.current = {
-      x: event.clientX - panelPosition.x,
-      y: event.clientY - panelPosition.y,
-    };
-    target.setPointerCapture(event.pointerId);
-  };
-
-  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragOffset.current) {
-      return;
-    }
-    setPanelPosition({
-      x: Math.max(0, event.clientX - dragOffset.current.x),
-      y: Math.max(0, event.clientY - dragOffset.current.y),
-    });
-  };
-
-  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
-    dragOffset.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-  };
-
-  const handleResizePointerDown =
-    (mode: "x" | "y" | "both") => (event: React.PointerEvent<HTMLDivElement>) => {
-      if (isCollapsed) {
-        return;
-      }
-      event.stopPropagation();
-      resizeOffset.current = {
-        x: event.clientX,
-        y: event.clientY,
-        width: panelSize.width,
-        height: panelSize.height,
-        mode,
-      };
-      event.currentTarget.setPointerCapture(event.pointerId);
-    };
-
-  const handleResizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!resizeOffset.current) {
-      return;
-    }
-    const maxWidth =
-      typeof window === "undefined"
-        ? 720
-        : Math.max(360, window.innerWidth - 40);
-    const maxHeight =
-      typeof window === "undefined"
-        ? 760
-        : Math.max(320, Math.round(window.innerHeight * 0.9));
-    const minWidth = 320;
-    const minHeight = 320;
-    const deltaX = event.clientX - resizeOffset.current.x;
-    const deltaY = event.clientY - resizeOffset.current.y;
-    const nextWidth =
-      resizeOffset.current.mode === "y"
-        ? resizeOffset.current.width
-        : Math.min(
-            maxWidth,
-            Math.max(minWidth, resizeOffset.current.width + deltaX),
-          );
-    const nextHeight =
-      resizeOffset.current.mode === "x"
-        ? resizeOffset.current.height
-        : Math.min(
-            maxHeight,
-            Math.max(minHeight, resizeOffset.current.height + deltaY),
-          );
-    setPanelSize({ width: nextWidth, height: nextHeight });
-  };
-
-  const handleResizePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
-    resizeOffset.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-  };
-
-  const handlePanelMouseEnter = () => {
-    if (!isPinned && isCollapsed) {
-      setIsCollapsed(false);
-    }
-  };
-
-  const handlePanelMouseLeave = () => {
-    if (!isPinned) {
-      setIsCollapsed(true);
-    }
-  };
-
-  const handlePanelInteract = () => {
-    if (!isPinned) {
-      setIsPinned(true);
-    }
-    if (isCollapsed) {
-      setIsCollapsed(false);
-    }
-  };
 
   const chatItems = useMemo(() => {
     const items: (
@@ -455,7 +340,7 @@ export default function ChatHistoryPanel({
       if (dateKey !== lastDateKey) {
         items.push({
           kind: "date",
-          id: `date-${dateKey}`,
+          id: `date-${dateKey}-${items.length}`,
           timestamp,
         });
         lastDateKey = dateKey;
@@ -488,368 +373,372 @@ export default function ChatHistoryPanel({
   );
 
   return (
-    <div
-      className="pointer-events-auto absolute z-20 transition-[width,height] duration-200"
-      style={{
-        left: panelPosition.x,
-        top: panelPosition.y,
-        width: isCollapsed ? collapsedSize.width : expandedSize.width,
-        height: isCollapsed ? collapsedSize.height : expandedSize.height,
-      }}
-      onMouseEnter={handlePanelMouseEnter}
-      onMouseLeave={handlePanelMouseLeave}
-    >
-      <div
-        className="flex h-full w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/90 shadow-2xl shadow-black/40 backdrop-blur transition-[width,height] duration-200"
-        onPointerDown={handlePanelInteract}
-        onWheel={handlePanelInteract}
-        onFocusCapture={handlePanelInteract}
-      >
-        {isCollapsed ? (
-          <div className="flex h-full items-center justify-between rounded-2xl border border-sky-400/60 bg-slate-950/95 px-4 text-[11px] uppercase tracking-[0.3em] text-sky-200 shadow-[0_0_24px_rgba(56,189,248,0.35)]">
-            <span>Chat</span>
-            <span className="text-[10px] font-semibold text-sky-200/80">
-              {messages.length}
-            </span>
-          </div>
-        ) : (
-          <>
-        <div
-          className="flex cursor-move items-center justify-between border-b border-border px-4 py-3 text-[11px] uppercase tracking-[0.25em] text-muted-foreground"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
+    <div className="relative flex h-full w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/90 shadow-2xl shadow-black/40 backdrop-blur">
+      {selectedSummary && (
+        <button
+          type="button"
+          className="mx-3 mt-3 flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left transition hover:border-white/25 hover:bg-white/10"
+          onClick={handleFocusNode}
         >
-          <span>Explore</span>
-          <span className="text-[10px] font-semibold text-muted-foreground/70">
-            {messages.length} MSG
-          </span>
-        </div>
-        {selectedSummary && (
-          <button
-            type="button"
-            className="mx-3 mt-3 flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left transition hover:border-white/25 hover:bg-white/10"
-            onClick={handleFocusNode}
-          >
-            <div className="mt-1 h-2.5 w-2.5 rounded-full bg-amber-400/80 shadow-[0_0_12px_rgba(251,191,36,0.45)]" />
-            <div className="min-w-0">
-              <div className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground/70">
-                Selected {selectedSummary.kind}
-              </div>
-              <div className="truncate text-sm font-semibold text-foreground">
-                {selectedSummary.title}
-              </div>
-              <div className="line-clamp-2 text-xs text-muted-foreground">
-                {selectedSummary.subtitle}
-              </div>
+          <div className="mt-1 h-2.5 w-2.5 rounded-full bg-amber-400/80 shadow-[0_0_12px_rgba(251,191,36,0.45)]" />
+          <div className="min-w-0">
+            <div className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground/70">
+              Selected {selectedSummary.kind}
             </div>
-          </button>
-        )}
-        <Chat>
-          <ChatMessages
-            ref={scrollRef}
-            className="gap-2 px-2"
-            onScroll={handleScroll}
-            contentRef={contentRef}
-          >
-            {messages.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
-                Ask a question to build the conversation.
-              </div>
-            ) : (
-              chatItems.map((item) => {
-                if (item.kind === "date") {
-                  return <DateItem key={item.id} timestamp={item.timestamp} />;
+            <div className="truncate text-sm font-semibold text-foreground">
+              {selectedSummary.title}
+            </div>
+            <div className="line-clamp-2 text-xs text-muted-foreground">
+              {selectedSummary.subtitle}
+            </div>
+          </div>
+        </button>
+      )}
+      <Chat>
+        <ChatMessages
+          ref={scrollRef}
+          className="gap-2 px-2"
+          onScroll={handleScroll}
+          contentRef={contentRef}
+        >
+          {messages.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+              Ask a question to build the conversation.
+            </div>
+          ) : (
+            chatItems.map((item) => {
+              if (item.kind === "date") {
+                return <DateItem key={item.id} timestamp={item.timestamp} />;
+              }
+              if (item.kind === "graph") {
+                const { message: eventMessage } = item;
+                const statusLabel =
+                  eventMessage.toolStatus === "running"
+                    ? "Running"
+                    : eventMessage.toolStatus === "failed"
+                      ? "Failed"
+                      : "Complete";
+
+                const parseOutputPayload = (value: unknown): unknown => {
+                  if (typeof value === "string") {
+                    try {
+                      return JSON.parse(value) as unknown;
+                    } catch {
+                      return null;
+                    }
+                  }
+                  return value;
+                };
+
+                interface GraphNodeSummary {
+                  id?: string;
+                  titleShort?: string;
+                  titleLong?: string;
+                  excerpt?: string;
                 }
-                if (item.kind === "graph") {
-                  const { message: eventMessage } = item;
-                  const statusLabel =
-                    eventMessage.toolStatus === "running"
-                      ? "Running"
-                      : eventMessage.toolStatus === "failed"
-                        ? "Failed"
-                        : "Complete";
 
-                  const parseOutputPayload = (value: unknown): unknown => {
-                    if (typeof value === "string") {
-                      try {
-                        return JSON.parse(value) as unknown;
-                      } catch {
-                        return null;
-                      }
-                    }
-                    return value;
-                  };
+                interface GraphOutputPayload {
+                  nodesAdded?: number;
+                  nodes?: GraphNodeSummary[];
+                  explanation?: string;
+                }
 
-                  interface GraphNodeSummary {
-                    id?: string;
-                    titleShort?: string;
-                    titleLong?: string;
-                    excerpt?: string;
-                  }
-
-                  interface GraphOutputPayload {
-                    nodesAdded?: number;
-                    nodes?: GraphNodeSummary[];
-                  }
-
-                  const isGraphOutputPayload = (
-                    value: unknown,
-                  ): value is GraphOutputPayload => {
-                    if (!value || typeof value !== "object") {
-                      return false;
-                    }
-                    if (
-                      "nodes" in value &&
-                      Array.isArray(
-                        (value as { nodes?: unknown }).nodes,
-                      )
-                    ) {
-                      return true;
-                    }
-                    if (
-                      "nodesAdded" in value &&
-                      typeof (value as { nodesAdded?: unknown }).nodesAdded ===
-                        "number"
-                    ) {
-                      return true;
-                    }
+                const isGraphOutputPayload = (
+                  value: unknown,
+                ): value is GraphOutputPayload => {
+                  if (!value || typeof value !== "object") {
                     return false;
-                  };
+                  }
+                  if (
+                    "nodes" in value &&
+                    Array.isArray((value as { nodes?: unknown }).nodes)
+                  ) {
+                    return true;
+                  }
+                  if (
+                    "nodesAdded" in value &&
+                    typeof (value as { nodesAdded?: unknown }).nodesAdded ===
+                      "number"
+                  ) {
+                    return true;
+                  }
+                  if (
+                    "explanation" in value &&
+                    typeof (value as { explanation?: unknown }).explanation ===
+                      "string"
+                  ) {
+                    return true;
+                  }
+                  return false;
+                };
 
-                  const outputPayloadRaw = parseOutputPayload(
-                    eventMessage.toolOutput,
-                  );
-                  const outputPayload = isGraphOutputPayload(outputPayloadRaw)
-                    ? outputPayloadRaw
-                    : null;
-                  const nodesFromOutput = outputPayload?.nodes ?? [];
-                  const nodesAdded = outputPayload?.nodesAdded;
-
-                  return (
-                    <ChatEvent key={item.id} className="items-start gap-2 px-2">
-                      <ChatEventBody>
-                        <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                          Graph Update
-                        </ChatEventTitle>
-                        <ChatEventContent className="space-y-2">
-                          {nodesAdded !== undefined && (
-                            <div className="text-xs text-muted-foreground">
-                              Added {nodesAdded} node{nodesAdded === 1 ? "" : "s"}
-                            </div>
-                          )}
-                          {nodesFromOutput.length > 0 && (
-                            <div className="space-y-2">
-                              {nodesFromOutput.map((node, index) => {
-                                const nodeId =
-                                  typeof node.id === "string" ? node.id : "";
-                                const title =
-                                  typeof node.titleShort === "string"
-                                    ? node.titleShort
-                                    : typeof node.titleLong === "string"
-                                      ? node.titleLong
-                                      : "Insight";
-                                const excerpt =
-                                  typeof node.excerpt === "string" ? node.excerpt : "";
-                                  return (
-                                    <button
-                                    key={nodeId || `${item.id}-${index}`}
-                                    type="button"
-                                    className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-left text-xs transition hover:border-white/25 hover:bg-white/10"
-                                    onClick={() => {
-                                      if (nodeId && onFocusNode) {
-                                        onFocusNode(nodeId);
-                                      }
-                                    }}
-                                  >
-                                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                                      Node
-                                    </div>
-                                    <div className="text-sm font-semibold text-foreground">
-                                      {title}
-                                    </div>
-                                    {excerpt && (
-                                      <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                                        {excerpt}
-                                      </div>
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </ChatEventContent>
-                        <ChatEventDescription>
-                          {eventMessage.error
-                            ? eventMessage.error
-                            : statusLabel}
-                        </ChatEventDescription>
-                      </ChatEventBody>
-                    </ChatEvent>
-                  );
-                }
-                const message = item.message;
-                const timestamp = new Date(message.createdAt).getTime();
-                const isUser = message.role === "user";
-                const isHighlighted = message.id === highlightedId;
-                const isFailed = message.status === "failed";
-                const shouldHighlightExcerpt =
-                  message.id === selectedResponseId && !!selectedExcerpt;
-                const displayContent =
-                  !isUser && message.status === "pending" && !message.content
-                    ? "Thinking..."
-                    : message.content;
-                const isGraphRunning =
-                  message.role === "assistant" &&
-                  runningGraphByResponseId.has(message.id);
-                const content = (
-                  <div
-                    className={cn(
-                      "rounded-md px-3 py-2",
-                      isUser
-                        ? "bg-muted text-foreground"
-                        : "bg-secondary text-foreground",
-                      isFailed &&
-                        "border border-destructive/40 bg-destructive/10 text-destructive",
-                      isHighlighted && "ring-2 ring-amber-400/60",
-                      isGraphRunning && "message-marquee",
-                    )}
-                  >
-                    {isUser ? (
-                      <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {renderUserContent(displayContent ?? "")}
-                      </div>
-                    ) : (
-                      <MarkdownRenderer
-                        source={displayContent ?? ""}
-                        highlightExcerpt={
-                          shouldHighlightExcerpt ? selectedExcerpt : undefined
-                        }
-                        onNodeLinkClick={handleNodeLinkClick}
-                        resolveNodeLabel={resolveNodeLabel}
-                        nodeExcerptRefs={nodeExcerptRefs}
-                      />
-                    )}
-                    {!isUser && isFailed && onRetry && (
-                      <div className="mt-3 flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 text-xs"
-                          onClick={() => onRetry(message.id)}
-                        >
-                          Retry
-                        </Button>
-                        <span className="text-xs text-muted-foreground">
-                          {message.error ?? "Request failed"}
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                const outputPayloadRaw = parseOutputPayload(
+                  eventMessage.toolOutput,
                 );
-                if (item.kind === "primary") {
-                  return (
-                    <div key={item.id} data-message-id={message.id}>
-                      <PrimaryMessage
-                        senderName={isUser ? "You" : "Assistant"}
-                        avatarFallback={isUser ? "U" : "A"}
-                        content={content}
-                        timestamp={timestamp}
-                      />
-                    </div>
-                  );
+                const outputPayload = isGraphOutputPayload(outputPayloadRaw)
+                  ? outputPayloadRaw
+                  : null;
+                const nodesFromOutput = outputPayload?.nodes ?? [];
+                const nodesAdded = outputPayload?.nodesAdded;
+                const explanation =
+                  typeof outputPayload?.explanation === "string"
+                    ? outputPayload.explanation
+                    : undefined;
+                const graphToolInput = parseGraphToolInput(eventMessage.toolInput);
+                const responseId = graphToolInput?.responseId;
+                const selectedNodeId = graphToolInput?.selectedNodeId ?? undefined;
+                const resolvedLabel = selectedNodeId
+                  ? resolveNodeLabel(selectedNodeId)
+                  : undefined;
+                const selectedLabel = resolvedLabel
+                  ? resolvedLabel
+                  : selectedNodeId
+                    ? `Node ${selectedNodeId.slice(0, 6)}`
+                    : undefined;
+                const logLines: string[] = [];
+                if (eventMessage.toolStatus === "running") {
+                  logLines.push("Running graph tool...");
                 }
+                if (responseId) {
+                  logLines.push(`Response ${responseId.slice(0, 8)}`);
+                }
+                if (selectedLabel) {
+                  logLines.push(`Selected ${selectedLabel}`);
+                }
+
+                const hasDetails =
+                  logLines.length > 0 ||
+                  nodesAdded !== undefined ||
+                  nodesFromOutput.length > 0 ||
+                  !!explanation;
+
+                return (
+                  <ChatEvent key={item.id} className="items-start gap-2 px-2">
+                    <ChatEventBody>
+                      <Collapsible defaultOpen={false}>
+                        <div className="flex items-center justify-between gap-2">
+                          <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Graph Update
+                          </ChatEventTitle>
+                          {hasDetails && (
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
+                          )}
+                        </div>
+                        <ChatEventDescription>
+                          {eventMessage.error ? eventMessage.error : statusLabel}
+                        </ChatEventDescription>
+                        {hasDetails && (
+                          <CollapsibleContent className="mt-2">
+                            <ChatEventContent className="space-y-2">
+                              {logLines.length > 0 && (
+                                <div className="space-y-1 text-[11px] text-muted-foreground">
+                                  {logLines.map((line, index) => (
+                                    <div key={`${item.id}-log-${index}`}>
+                                      {line}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {nodesAdded !== undefined && (
+                                <div className="text-xs text-muted-foreground">
+                                  Added {nodesAdded} node
+                                  {nodesAdded === 1 ? "" : "s"}
+                                </div>
+                              )}
+                              {explanation && (
+                                <div className="text-xs text-muted-foreground">
+                                  {explanation}
+                                </div>
+                              )}
+                              {nodesFromOutput.length > 0 && (
+                                <div className="space-y-2">
+                                  {nodesFromOutput.map((node, index) => {
+                                    const nodeId =
+                                      typeof node.id === "string" ? node.id : "";
+                                    const title =
+                                      typeof node.titleShort === "string"
+                                        ? node.titleShort
+                                        : typeof node.titleLong === "string"
+                                          ? node.titleLong
+                                          : "Insight";
+                                    const excerpt =
+                                      typeof node.excerpt === "string"
+                                        ? node.excerpt
+                                        : "";
+                                    return (
+                                      <button
+                                        key={nodeId || `${item.id}-${index}`}
+                                        type="button"
+                                        className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-left text-xs transition hover:border-white/25 hover:bg-white/10"
+                                        onClick={() => {
+                                          if (nodeId && onFocusNode) {
+                                            onFocusNode(nodeId);
+                                          }
+                                        }}
+                                      >
+                                        <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                                          Node
+                                        </div>
+                                        <div className="text-sm font-semibold text-foreground">
+                                          {title}
+                                        </div>
+                                        {excerpt && (
+                                          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                            {excerpt}
+                                          </div>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </ChatEventContent>
+                          </CollapsibleContent>
+                        )}
+                      </Collapsible>
+                    </ChatEventBody>
+                  </ChatEvent>
+                );
+              }
+              const message = item.message;
+              const timestamp = new Date(message.createdAt).getTime();
+              const isUser = message.role === "user";
+              const isHighlighted = message.id === highlightedId;
+              const isFailed = message.status === "failed";
+              const shouldHighlightExcerpt =
+                message.id === selectedResponseId && !!selectedExcerpt;
+              const displayContent =
+                !isUser && message.status === "pending" && !message.content
+                  ? "Thinking..."
+                  : message.content;
+              const isGraphRunning =
+                message.role === "assistant" &&
+                runningGraphByResponseId.has(message.id);
+              const content = (
+                <div
+                  className={cn(
+                    "rounded-md px-3 py-2",
+                    isUser ? "bg-muted text-foreground" : "bg-secondary text-foreground",
+                    isFailed &&
+                      "border border-destructive/40 bg-destructive/10 text-destructive",
+                    isHighlighted && "ring-2 ring-amber-400/60",
+                    isGraphRunning && "message-marquee",
+                  )}
+                >
+                  {isUser ? (
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                      {renderUserContent(displayContent ?? "")}
+                    </div>
+                  ) : (
+                    <MarkdownRenderer
+                      source={displayContent ?? ""}
+                      highlightExcerpt={
+                        shouldHighlightExcerpt ? selectedExcerpt : undefined
+                      }
+                      onNodeLinkClick={handleNodeLinkClick}
+                      resolveNodeLabel={resolveNodeLabel}
+                      nodeExcerptRefs={nodeExcerptRefs}
+                    />
+                  )}
+                  {!isUser && isFailed && onRetry && (
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => onRetry(message.id)}
+                      >
+                        Retry
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        {message.error ?? "Request failed"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+              if (item.kind === "primary") {
                 return (
                   <div key={item.id} data-message-id={message.id}>
-                    <AdditionalMessage
+                    <PrimaryMessage
+                      senderName={isUser ? "You" : "Assistant"}
+                      avatarFallback={isUser ? "U" : "A"}
                       content={content}
                       timestamp={timestamp}
                     />
                   </div>
                 );
-              })
-            )}
-            {busy && !hasPendingAssistant && (
-              <PrimaryMessage
-                senderName="Assistant"
-                avatarFallback="A"
-                content={
-                  <div className="rounded-md bg-secondary px-3 py-2 text-sm text-muted-foreground">
-                    Thinking...
-                  </div>
-                }
-                timestamp={Date.now()}
-              />
-            )}
-          </ChatMessages>
-          {!isAtBottom && (
-            <div className="absolute bottom-20 left-1/2 -translate-x-1/2">
-              <Button
-                size="icon"
-                variant="outline"
-                className="rounded-full shadow-lg"
-                onClick={() => {
-                  onRequestClearSelection?.();
-                  setIsAtBottom(true);
-                  scrollToBottom("smooth");
-                }}
-              >
-                <ArrowDown className="h-4 w-4" />
-              </Button>
-            </div>
+              }
+              return (
+                <div key={item.id} data-message-id={message.id}>
+                  <AdditionalMessage content={content} timestamp={timestamp} />
+                </div>
+              );
+            })
           )}
-          <ChatToolbar>
-            <ChatToolbarTextarea
-              value={input}
-              onChange={(event) => onInputChange(event.target.value)}
-              placeholder="Ask a question..."
-              disabled={busy}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  onSend();
-                }
-              }}
+          {busy && !hasPendingAssistant && (
+            <PrimaryMessage
+              senderName="Assistant"
+              avatarFallback="A"
+              content={
+                <div className="rounded-md bg-secondary px-3 py-2 text-sm text-muted-foreground">
+                  Thinking...
+                </div>
+              }
+              timestamp={Date.now()}
             />
-            <ChatToolbarAddonEnd>
-              <Button
-                size="sm"
-                className="h-9 rounded-md bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90"
-                onClick={onSend}
-                disabled={busy || !input.trim()}
-              >
-                {busy ? "..." : "Send"}
-              </Button>
-            </ChatToolbarAddonEnd>
-          </ChatToolbar>
-        </Chat>
-          </>
+          )}
+        </ChatMessages>
+        {!isAtBottom && (
+          <div className="absolute bottom-20 left-1/2 -translate-x-1/2">
+            <Button
+              size="icon"
+              variant="outline"
+              className="rounded-full shadow-lg"
+              onClick={() => {
+                onRequestClearSelection?.();
+                setIsAtBottom(true);
+                scrollToBottom("smooth");
+              }}
+            >
+              <ArrowDown className="h-4 w-4" />
+            </Button>
+          </div>
         )}
-      </div>
-      {!isCollapsed && (
-      <div
-        className="absolute right-0 top-10 h-[calc(100%-40px)] w-1 cursor-ew-resize"
-        onPointerDown={handleResizePointerDown("x")}
-        onPointerMove={handleResizePointerMove}
-        onPointerUp={handleResizePointerUp}
-      />
-      )}
-      {!isCollapsed && (
-      <div
-        className="absolute bottom-0 left-6 h-1 w-[calc(100%-24px)] cursor-ns-resize"
-        onPointerDown={handleResizePointerDown("y")}
-        onPointerMove={handleResizePointerMove}
-        onPointerUp={handleResizePointerUp}
-      />
-      )}
-      {!isCollapsed && (
-      <div
-        className="absolute bottom-1 right-1 h-4 w-4 cursor-se-resize rounded-full border border-white/30 bg-white/10"
-        onPointerDown={handleResizePointerDown("both")}
-        onPointerMove={handleResizePointerMove}
-        onPointerUp={handleResizePointerUp}
-      />
-      )}
+        <ChatToolbar>
+          <ChatToolbarTextarea
+            value={input}
+            onChange={(event) => onInputChange(event.target.value)}
+            placeholder="Ask a question..."
+            disabled={busy}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                onSend();
+              }
+            }}
+          />
+          <ChatToolbarAddonEnd>
+            <Button
+              size="sm"
+              className="h-9 rounded-md bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90"
+              onClick={onSend}
+              disabled={busy || !input.trim()}
+            >
+              {busy ? "..." : "Send"}
+            </Button>
+          </ChatToolbarAddonEnd>
+        </ChatToolbar>
+      </Chat>
     </div>
   );
 }

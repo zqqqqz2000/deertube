@@ -130,10 +130,10 @@ export const graphRouter = createTRPCRouter({
         .filter(Boolean)
         .join("\n");
 
-      await generateText({
+      const result = await generateText({
         model: provider(llmModelId),
         system:
-          "You are a graph-builder for a product that builds a clear, easy-to-understand knowledge map during conversation. Only call addInsightNodeTool when the response introduces new, distillable information worth adding to the graph; otherwise, do not call any tools. When there would be many new nodes, you may aggregate them into fewer, higher-level nodes. If the response contains multiple derivative points, you may create nodes at multiple levels of the graph and are not limited to the currently selected node. Each node must quote an exact excerpt from the response text. Excerpts must be a verbatim span from the response; if you add multiple nodes, avoid repeating or overlapping excerpts. Titles must be short, clear, and in three sizes: long (<=48 chars), short (<=28 chars), tiny (<=20 chars). Long/Short/Tiny should become progressively shorter and more abstract. Use the same language as the response for all titles. The language of all three titles must match the response. You MUST provide parentIntId for every node. Do not add explanations outside tool calls.",
+          "You are a graph-builder for a product that builds a clear, easy-to-understand knowledge map during conversation. Only call addInsightNodeTool when the response introduces new, distillable information worth adding to the graph; otherwise, respond with a short explanation of why no node should be added. When there would be many new nodes, you may aggregate them into fewer, higher-level nodes. If the response contains multiple derivative points, you may create nodes at multiple levels of the graph and are not limited to the currently selected node. Each node must quote an exact excerpt from the response text. Excerpts must be a verbatim span from the response; if you add multiple nodes, avoid repeating or overlapping excerpts. Titles must be short, clear, and in three sizes: long (<=48 chars), short (<=28 chars), tiny (<=20 chars). Long/Short/Tiny should become progressively shorter and more abstract. Use the same language as the response for all titles. The language of all three titles must match the response. You MUST provide parentIntId for every node.",
         prompt: `${contextBlock}${graphLines}\n\nResponse:\n${input.responseText}\n\nCreate nodes now.`,
         tools: { addInsightNodeTool },
         stopWhen: stepCountIs(4),
@@ -143,6 +143,10 @@ export const graphRouter = createTRPCRouter({
         nodes: actions.map((action) => ({
           ...action,
         })),
+        explanation:
+          actions.length === 0 && result.text.trim().length > 0
+            ? result.text.trim()
+            : undefined,
       };
     }),
 });

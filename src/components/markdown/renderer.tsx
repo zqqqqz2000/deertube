@@ -110,19 +110,6 @@ export const MarkdownRenderer = memo(
                   (nodeProp as { properties?: { href?: string } }).properties?.href,
                 )
               : undefined);
-          if (process.env.NODE_ENV !== "production") {
-            if (!props.href && rawHref && rawHref !== props.href) {
-              console.log("[MarkdownRenderer] resolved node href", {
-                rawHref,
-                propsHref: props.href,
-                node: props.node,
-              });
-            } else if (!props.href && !rawHref) {
-              console.log("[MarkdownRenderer] anchor without href", {
-                props,
-              });
-            }
-          }
           const nodeId = parseNodeHref(rawHref);
           if (nodeId) {
             const labelText = flattenText(props.children);

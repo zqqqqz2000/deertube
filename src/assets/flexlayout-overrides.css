@@ -1,0 +1,9 @@
+.flexlayout__tabset_content {
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.flexlayout__tab > * {
+  min-width: 0;
+  min-height: 0;
+}

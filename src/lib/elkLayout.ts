@@ -40,8 +40,8 @@ const elk = new ELK();
 const baseLayoutOptions: LayoutOptions = {
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "160",
-  "elk.spacing.nodeNode": "100",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "60",
+  "elk.spacing.nodeNode": "30",
   "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
   "elk.layered.nodePlacement.bk.fixedAlignment": "LEFT",
   "elk.layered.nodePlacement.bk.edgeStraightening": "IMPROVE",
