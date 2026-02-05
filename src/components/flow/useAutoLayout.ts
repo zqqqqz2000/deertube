@@ -25,14 +25,35 @@ export function useAutoLayout({
       return;
     }
     setIsLayouting(true);
+    const resolveDimension = (
+      value: number | null | undefined,
+      fallback: number | null | undefined,
+    ) => {
+      if (typeof value === "number" && value > 0) {
+        return value;
+      }
+      if (typeof fallback === "number" && fallback > 0) {
+        return fallback;
+      }
+      return undefined;
+    };
+    const layoutNodes: FlowNode[] = nodes.map((node) => {
+      const internal = flowInstance?.getNode(node.id);
+      const width = resolveDimension(internal?.width, node.width);
+      const height = resolveDimension(internal?.height, node.height);
+      if (width === node.width && height === node.height) {
+        return node;
+      }
+      return { ...node, width, height };
+    });
     const { positions } = await layoutFlowWithElk({
-      nodes,
+      nodes: layoutNodes,
       edges,
       direction: "RIGHT",
       useExistingPositions: true,
     });
     const focusNode = focusNodeId
-      ? nodes.find((node) => node.id === focusNodeId) ?? null
+      ? layoutNodes.find((node) => node.id === focusNodeId) ?? null
       : null;
     const focusPosition = focusNodeId ? positions[focusNodeId] ?? focusNode?.position : null;
     const focusSize = getNodeSize(focusNode);

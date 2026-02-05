@@ -56,21 +56,26 @@ const baseLayoutOptions: LayoutOptions = {
 };
 
 export const getNodeSize = (node: FlowNode | null) => {
+  const resolveDimension = (
+    value: number | null | undefined,
+    fallback: number,
+  ) => (typeof value === "number" && value > 0 ? value : fallback);
+
   if (node?.type === "source") {
     return {
-      width: node.width ?? SOURCE_NODE_WIDTH,
-      height: SOURCE_NODE_HEIGHT,
+      width: resolveDimension(node.width, SOURCE_NODE_WIDTH),
+      height: resolveDimension(node.height, SOURCE_NODE_HEIGHT),
     };
   }
   if (node?.type === "insight") {
     return {
-      width: node.width ?? INSIGHT_NODE_WIDTH,
-      height: INSIGHT_NODE_HEIGHT,
+      width: resolveDimension(node.width, INSIGHT_NODE_WIDTH),
+      height: resolveDimension(node.height, INSIGHT_NODE_HEIGHT),
     };
   }
   return {
-    width: node?.width ?? QUESTION_NODE_WIDTH,
-    height: QUESTION_NODE_HEIGHT,
+    width: resolveDimension(node?.width, QUESTION_NODE_WIDTH),
+    height: resolveDimension(node?.height, QUESTION_NODE_HEIGHT),
   };
 };
 

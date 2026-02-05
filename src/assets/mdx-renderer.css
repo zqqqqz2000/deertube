@@ -96,3 +96,44 @@
 .markdown-body {
   background-color: transparent;
 }
+
+.markdown-body.node-excerpt p,
+.markdown-body.node-excerpt ul,
+.markdown-body.node-excerpt ol,
+.markdown-body.node-excerpt blockquote,
+.markdown-body.node-excerpt pre,
+.markdown-body.node-excerpt table {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.markdown-body.node-excerpt ul,
+.markdown-body.node-excerpt ol {
+  padding-left: 1.25rem;
+}
+
+.node-excerpt-wrap {
+  max-height: 140px;
+  overflow: hidden;
+  transition: max-height 200ms ease;
+}
+
+.node-card:hover .node-excerpt-wrap {
+  max-height: 520px;
+}
+
+.node-card {
+  z-index: 1;
+}
+
+.node-card:hover {
+  z-index: 30;
+}
+
+.react-flow__node {
+  z-index: 1;
+}
+
+.react-flow__node:hover {
+  z-index: 1000 !important;
+}
