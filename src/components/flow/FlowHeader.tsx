@@ -1,5 +1,13 @@
 import { Button } from "@/components/ui/button";
-import { FolderOpen, MessageSquare, Moon, Network, Settings, Sun } from "lucide-react";
+import {
+  ExternalLink,
+  FolderOpen,
+  MessageSquare,
+  Moon,
+  Network,
+  Settings,
+  Sun,
+} from "lucide-react";
 import type { Theme } from "@/lib/theme";
 
 interface FlowHeaderProps {
@@ -26,10 +34,19 @@ export default function FlowHeader({
   onToggleTheme,
 }: FlowHeaderProps) {
   const ToggleIcon = theme === "dark" ? Sun : Moon;
+  const sourceUrl = import.meta.env.VITE_SOURCE_URL as string | undefined;
+  console.log(sourceUrl);
+  const handleOpenSource = () => {
+    if (sourceUrl) {
+      window.open(sourceUrl, "_blank", "noopener,noreferrer");
+    }
+  };
   return (
     <header className="flex flex-wrap items-center justify-between gap-6 border-b border-border/60 bg-background/70 px-6 py-4 backdrop-blur-xl">
       <div>
-        <div className="text-lg font-semibold text-foreground">{projectName}</div>
+        <div className="text-lg font-semibold text-foreground">
+          {projectName}
+        </div>
         <div className="text-xs text-muted-foreground">{projectPath}</div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -53,6 +70,18 @@ export default function FlowHeader({
         >
           <Network />
         </Button>
+        {sourceUrl ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-full border border-border/60 bg-background/60 text-foreground/80 shadow-sm hover:bg-accent hover:text-accent-foreground"
+            onClick={handleOpenSource}
+            aria-label="View source code"
+            title="View source code"
+          >
+            <ExternalLink />
+          </Button>
+        ) : null}
         <Button
           variant="ghost"
           size="icon"
@@ -68,8 +97,12 @@ export default function FlowHeader({
           size="icon"
           className="h-9 w-9 rounded-full border border-border/60 bg-background/60 text-foreground/80 shadow-sm hover:bg-accent hover:text-accent-foreground"
           onClick={onToggleTheme}
-          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          aria-label={
+            theme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+          }
+          title={
+            theme === "dark" ? "Switch to light theme" : "Switch to dark theme"
+          }
         >
           <ToggleIcon />
         </Button>

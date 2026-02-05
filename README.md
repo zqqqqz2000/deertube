@@ -38,6 +38,10 @@ Create these in your shell before running:
 TAVILY_API_KEY=...
 OPENAI_API_KEY=...
 ```
+Optional:
+```
+VITE_SOURCE_URL=...
+```
 
 ## Dev
 ```
@@ -53,3 +57,6 @@ bun run build
 ## Notes
 - The initial empty project auto-creates a root question node so you can start asking immediately.
 - Source previews appear on hover (WebContentsView).
+
+## License
+AGPL-3.0-only. If you run a modified version of this app and allow users to interact with it over a network, you must offer the corresponding source code to those users.
