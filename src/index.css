@@ -110,6 +110,63 @@
     }
   }
 
+  @keyframes message-marquee-x {
+    0% {
+      background-position:
+        0% 0%,
+        0% 100%;
+    }
+    100% {
+      background-position:
+        200% 0%,
+        200% 100%;
+    }
+  }
+
+  @keyframes message-marquee-y {
+    0% {
+      background-position:
+        0% 0%,
+        100% 0%;
+    }
+    100% {
+      background-position:
+        0% 200%,
+        100% 200%;
+    }
+  }
+
+  .message-marquee {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .message-marquee::before,
+  .message-marquee::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .message-marquee::before {
+    background:
+      linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.85), transparent)
+        0 0 / 200% 2px no-repeat,
+      linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.85), transparent)
+        0 100% / 200% 2px no-repeat;
+    animation: message-marquee-x 1.6s linear infinite;
+  }
+
+  .message-marquee::after {
+    background:
+      linear-gradient(0deg, transparent, rgba(56, 189, 248, 0.85), transparent)
+        0 0 / 2px 200% no-repeat,
+      linear-gradient(0deg, transparent, rgba(56, 189, 248, 0.85), transparent)
+        100% 0 / 2px 200% no-repeat;
+    animation: message-marquee-y 1.6s linear infinite;
+  }
+
   .react-flow__edge .react-flow__edge-path {
     transition: stroke 200ms ease, stroke-width 200ms ease,
       filter 200ms ease;

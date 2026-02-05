@@ -10,7 +10,7 @@ import type {
   SourceNode as SourceNodeType,
 } from "../../types/flow";
 import type { ProviderProfile } from "../../lib/settings";
-import type { ChatMessage, GraphEvent } from "../../types/chat";
+import type { ChatMessage } from "../../types/chat";
 import { placeInsightNodes } from "../../lib/flowPlacement";
 import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
 import { useChat } from "@/lib/chat/use-electron-chat";
@@ -154,7 +154,9 @@ export function useChatActions({
   const [historyInput, setHistoryInput] = useState("");
   const [panelInput, setPanelInput] = useState("");
   const [graphBusy, setGraphBusy] = useState(false);
-  const [graphEvents, setGraphEvents] = useState<GraphEvent[]>([]);
+  const [graphEventMessages, setGraphEventMessages] = useState<ChatMessage[]>(
+    () => initialMessages.filter((message) => message.kind === "graph-event"),
+  );
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedId) ?? null,
@@ -185,7 +187,10 @@ export function useChatActions({
   );
 
   const initialUiMessages = useMemo(
-    () => initialMessages.map(mapChatToUiMessage),
+    () =>
+      initialMessages
+        .filter((message) => message.kind !== "graph-event")
+        .map(mapChatToUiMessage),
     [initialMessages],
   );
 
@@ -196,13 +201,21 @@ export function useChatActions({
       }
       const eventId = crypto.randomUUID();
       const startedAt = new Date().toISOString();
-      setGraphEvents((prev) => [
+      setGraphEventMessages((prev) => [
         ...prev,
         {
           id: eventId,
-          status: "running",
+          role: "assistant",
+          content: "",
           createdAt: startedAt,
-          responseId,
+          kind: "graph-event",
+          toolName: "graph.run",
+          toolStatus: "running",
+          toolInput: {
+            responseId,
+            selectedNodeId: selectedId ?? null,
+            selectedNodeSummary: selectedNodeSummary ?? null,
+          },
         },
       ]);
       setGraphBusy(true);
@@ -229,14 +242,16 @@ export function useChatActions({
         });
 
         const nodesAdded = result.nodes.length;
-        setGraphEvents((prev) =>
+        setGraphEventMessages((prev) =>
           prev.map((event) =>
             event.id === eventId
               ? {
                   ...event,
-                  status: "complete",
-                  endedAt: new Date().toISOString(),
-                  nodesAdded,
+                  toolStatus: "complete",
+                  toolOutput: {
+                    nodesAdded,
+                    nodes: result.nodes,
+                  },
                 }
               : event,
           ),
@@ -347,13 +362,12 @@ export function useChatActions({
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : "Graph tool failed";
-        setGraphEvents((prev) =>
+        setGraphEventMessages((prev) =>
           prev.map((event) =>
             event.id === eventId
               ? {
                   ...event,
-                  status: "failed",
-                  endedAt: new Date().toISOString(),
+                  toolStatus: "failed",
                   error: errorMessage,
                 }
               : event,
@@ -404,10 +418,13 @@ export function useChatActions({
     },
   });
 
-  const derivedMessages = useMemo(
-    () => mapUiMessagesToChat(messages, status, error),
-    [messages, status, error],
-  );
+  const derivedMessages = useMemo(() => {
+    const mapped = mapUiMessagesToChat(messages, status, error);
+    if (!graphEventMessages.length) {
+      return mapped;
+    }
+    return mergeGraphEvents(mapped, graphEventMessages);
+  }, [messages, status, error, graphEventMessages]);
 
   const sendPrompt = useCallback(
     (rawPrompt: string, reset: () => void) => {
@@ -462,7 +479,6 @@ export function useChatActions({
     busy,
     chatBusy: busy,
     graphBusy,
-    graphEvents,
     handleSendFromHistory,
     handleSendFromPanel,
     retryMessage,
@@ -545,4 +561,59 @@ function mapUiMessagesToChat(
   }
 
   return mapped;
+}
+
+function mergeGraphEvents(
+  messages: ChatMessage[],
+  graphEvents: ChatMessage[],
+): ChatMessage[] {
+  if (graphEvents.length === 0) {
+    return messages;
+  }
+  const byResponseId = new Map<string, ChatMessage[]>();
+  const unattached: ChatMessage[] = [];
+
+  graphEvents.forEach((event) => {
+    const responseId = getGraphEventResponseId(event);
+    if (!responseId) {
+      unattached.push(event);
+      return;
+    }
+    const list = byResponseId.get(responseId) ?? [];
+    list.push(event);
+    byResponseId.set(responseId, list);
+  });
+
+  const merged: ChatMessage[] = [];
+  messages.forEach((message) => {
+    merged.push(message);
+    const events = byResponseId.get(message.id);
+    if (events && events.length > 0) {
+      merged.push(...events);
+      byResponseId.delete(message.id);
+    }
+  });
+
+  if (byResponseId.size > 0) {
+    byResponseId.forEach((events) => merged.push(...events));
+  }
+  if (unattached.length > 0) {
+    merged.push(...unattached);
+  }
+
+  return merged;
+}
+
+function getGraphEventResponseId(event: ChatMessage): string | null {
+  if (event.kind !== "graph-event") {
+    return null;
+  }
+  if (!event.toolInput || typeof event.toolInput !== "object") {
+    return null;
+  }
+  if (!("responseId" in event.toolInput)) {
+    return null;
+  }
+  const responseId = (event.toolInput as { responseId?: unknown }).responseId;
+  return typeof responseId === "string" ? responseId : null;
 }

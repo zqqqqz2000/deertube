@@ -8,14 +8,9 @@ export interface ChatMessage {
   status?: 'pending' | 'complete' | 'failed'
   error?: string
   requestText?: string
-}
-
-export interface GraphEvent {
-  id: string
-  status: 'running' | 'complete' | 'failed'
-  createdAt: string
-  endedAt?: string
-  responseId: string
-  nodesAdded?: number
-  error?: string
+  kind?: 'text' | 'graph-event'
+  toolName?: string
+  toolInput?: unknown
+  toolOutput?: unknown
+  toolStatus?: 'running' | 'complete' | 'failed'
 }

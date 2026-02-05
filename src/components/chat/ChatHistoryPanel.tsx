@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatMessage, GraphEvent } from "../../types/chat";
+import type { ChatMessage } from "../../types/chat";
 import type {
   FlowNode,
   InsightNodeData,
@@ -30,7 +30,6 @@ import { ArrowDown } from "lucide-react";
 
 interface ChatHistoryPanelProps {
   messages: ChatMessage[];
-  graphEvents?: GraphEvent[];
   selectedResponseId: string | null;
   selectedNode?: FlowNode | null;
   nodes?: FlowNode[];
@@ -50,7 +49,6 @@ interface ChatHistoryPanelProps {
 
 export default function ChatHistoryPanel({
   messages,
-  graphEvents = [],
   selectedResponseId,
   selectedNode,
   nodes = [],
@@ -96,14 +94,7 @@ export default function ChatHistoryPanel({
   const [isPinned, setIsPinned] = useState(true);
   const collapsedSize = useMemo(() => ({ width: 200, height: 70 }), []);
   const expandedSize = panelSize;
-  const sortedMessages = useMemo(
-    () =>
-      [...messages].sort(
-        (a, b) =>
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      ),
-    [messages],
-  );
+  const sortedMessages = useMemo(() => messages, [messages]);
   if (process.env.NODE_ENV !== "production") {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     if (lastUser && lastUser.requestText !== (window as { __lastRequestText?: string }).__lastRequestText) {
@@ -168,6 +159,25 @@ export default function ChatHistoryPanel({
         .filter((item) => item.text.trim().length > 0),
     [nodes],
   );
+  const runningGraphByResponseId = useMemo(() => {
+    const running = new Set<string>();
+    messages.forEach((message) => {
+      if (message.kind !== "graph-event" || message.toolStatus !== "running") {
+        return;
+      }
+      if (!message.toolInput || typeof message.toolInput !== "object") {
+        return;
+      }
+      if (!("responseId" in message.toolInput)) {
+        return;
+      }
+      const responseId = (message.toolInput as { responseId?: unknown }).responseId;
+      if (typeof responseId === "string" && responseId.length > 0) {
+        running.add(responseId);
+      }
+    });
+    return running;
+  }, [messages]);
   const handleFocusNode = useCallback(() => {
     if (!selectedSummary?.id || !onFocusNode) {
       return;
@@ -428,49 +438,35 @@ export default function ChatHistoryPanel({
       | { kind: "date"; id: string; timestamp: number }
       | { kind: "primary"; id: string; message: ChatMessage }
       | { kind: "additional"; id: string; message: ChatMessage }
-      | { kind: "graph"; id: string; event: GraphEvent }
+      | { kind: "graph"; id: string; message: ChatMessage }
     )[] = [];
-
-    const timeline = [
-      ...sortedMessages.map((message) => ({
-        kind: "message" as const,
-        timestamp: new Date(message.createdAt).getTime(),
-        message,
-      })),
-      ...graphEvents.map((event) => ({
-        kind: "graph" as const,
-        timestamp: new Date(event.createdAt).getTime(),
-        event,
-      })),
-    ].sort((a, b) => a.timestamp - b.timestamp);
-
     let lastDateKey = "";
     let lastRole: ChatMessage["role"] | null = null;
 
-    timeline.forEach((entry) => {
+    sortedMessages.forEach((message) => {
+      const timestamp = new Date(message.createdAt).getTime();
       const dateKey = new Intl.DateTimeFormat("en-US", {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
-      }).format(entry.timestamp);
+      }).format(timestamp);
 
       if (dateKey !== lastDateKey) {
         items.push({
           kind: "date",
           id: `date-${dateKey}`,
-          timestamp: entry.timestamp,
+          timestamp,
         });
         lastDateKey = dateKey;
         lastRole = null;
       }
 
-      if (entry.kind === "graph") {
-        items.push({ kind: "graph", id: entry.event.id, event: entry.event });
+      if (message.kind === "graph-event") {
+        items.push({ kind: "graph", id: message.id, message });
         lastRole = null;
         return;
       }
 
-      const message = entry.message;
       if (lastRole === message.role) {
         items.push({ kind: "additional", id: message.id, message });
       } else {
@@ -480,7 +476,7 @@ export default function ChatHistoryPanel({
     });
 
     return items;
-  }, [sortedMessages, graphEvents]);
+  }, [sortedMessages]);
   const hasPendingAssistant = useMemo(
     () =>
       messages.some(
@@ -564,28 +560,127 @@ export default function ChatHistoryPanel({
                   return <DateItem key={item.id} timestamp={item.timestamp} />;
                 }
                 if (item.kind === "graph") {
-                  const { event } = item;
+                  const { message: eventMessage } = item;
                   const statusLabel =
-                    event.status === "running"
+                    eventMessage.toolStatus === "running"
                       ? "Running"
-                      : event.status === "failed"
+                      : eventMessage.toolStatus === "failed"
                         ? "Failed"
-                        : event.nodesAdded
-                          ? `${event.nodesAdded} node(s)`
-                          : "No changes";
+                        : "Complete";
+
+                  const parseOutputPayload = (value: unknown): unknown => {
+                    if (typeof value === "string") {
+                      try {
+                        return JSON.parse(value) as unknown;
+                      } catch {
+                        return null;
+                      }
+                    }
+                    return value;
+                  };
+
+                  interface GraphNodeSummary {
+                    id?: string;
+                    titleShort?: string;
+                    titleLong?: string;
+                    excerpt?: string;
+                  }
+
+                  interface GraphOutputPayload {
+                    nodesAdded?: number;
+                    nodes?: GraphNodeSummary[];
+                  }
+
+                  const isGraphOutputPayload = (
+                    value: unknown,
+                  ): value is GraphOutputPayload => {
+                    if (!value || typeof value !== "object") {
+                      return false;
+                    }
+                    if (
+                      "nodes" in value &&
+                      Array.isArray(
+                        (value as { nodes?: unknown }).nodes,
+                      )
+                    ) {
+                      return true;
+                    }
+                    if (
+                      "nodesAdded" in value &&
+                      typeof (value as { nodesAdded?: unknown }).nodesAdded ===
+                        "number"
+                    ) {
+                      return true;
+                    }
+                    return false;
+                  };
+
+                  const outputPayloadRaw = parseOutputPayload(
+                    eventMessage.toolOutput,
+                  );
+                  const outputPayload = isGraphOutputPayload(outputPayloadRaw)
+                    ? outputPayloadRaw
+                    : null;
+                  const nodesFromOutput = outputPayload?.nodes ?? [];
+                  const nodesAdded = outputPayload?.nodesAdded;
+
                   return (
                     <ChatEvent key={item.id} className="items-start gap-2 px-2">
                       <ChatEventBody>
                         <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                          Function Call
+                          Graph Update
                         </ChatEventTitle>
-                        <ChatEventContent>
-                          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-                            graph.run()
-                          </div>
+                        <ChatEventContent className="space-y-2">
+                          {nodesAdded !== undefined && (
+                            <div className="text-xs text-muted-foreground">
+                              Added {nodesAdded} node{nodesAdded === 1 ? "" : "s"}
+                            </div>
+                          )}
+                          {nodesFromOutput.length > 0 && (
+                            <div className="space-y-2">
+                              {nodesFromOutput.map((node, index) => {
+                                const nodeId =
+                                  typeof node.id === "string" ? node.id : "";
+                                const title =
+                                  typeof node.titleShort === "string"
+                                    ? node.titleShort
+                                    : typeof node.titleLong === "string"
+                                      ? node.titleLong
+                                      : "Insight";
+                                const excerpt =
+                                  typeof node.excerpt === "string" ? node.excerpt : "";
+                                  return (
+                                    <button
+                                    key={nodeId || `${item.id}-${index}`}
+                                    type="button"
+                                    className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-left text-xs transition hover:border-white/25 hover:bg-white/10"
+                                    onClick={() => {
+                                      if (nodeId && onFocusNode) {
+                                        onFocusNode(nodeId);
+                                      }
+                                    }}
+                                  >
+                                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                                      Node
+                                    </div>
+                                    <div className="text-sm font-semibold text-foreground">
+                                      {title}
+                                    </div>
+                                    {excerpt && (
+                                      <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                        {excerpt}
+                                      </div>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </ChatEventContent>
                         <ChatEventDescription>
-                          {event.error ? event.error : statusLabel}
+                          {eventMessage.error
+                            ? eventMessage.error
+                            : statusLabel}
                         </ChatEventDescription>
                       </ChatEventBody>
                     </ChatEvent>
@@ -602,6 +697,9 @@ export default function ChatHistoryPanel({
                   !isUser && message.status === "pending" && !message.content
                     ? "Thinking..."
                     : message.content;
+                const isGraphRunning =
+                  message.role === "assistant" &&
+                  runningGraphByResponseId.has(message.id);
                 const content = (
                   <div
                     className={cn(
@@ -612,6 +710,7 @@ export default function ChatHistoryPanel({
                       isFailed &&
                         "border border-destructive/40 bg-destructive/10 text-destructive",
                       isHighlighted && "ring-2 ring-amber-400/60",
+                      isGraphRunning && "message-marquee",
                     )}
                   >
                     {isUser ? (
