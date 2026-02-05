@@ -26,6 +26,9 @@
 
 .dark .flexlayout__layout {
   --color-tab-selected-background: var(--background);
+  --color-tab-close-icon: #fff;
+  --color-tab-close-icon-hover: #fff;
+  --color-icon: #fff;
 }
 
 .flexlayout__layout {
