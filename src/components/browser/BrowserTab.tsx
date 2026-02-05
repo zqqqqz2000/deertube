@@ -7,7 +7,6 @@ import { cn } from "@/lib/utils";
 interface BrowserTabProps {
   tabId: string;
   url: string;
-  isActive: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
   onBoundsChange: (tabId: string, bounds: BrowserViewBounds) => void;
@@ -21,7 +20,6 @@ interface BrowserTabProps {
 export function BrowserTab({
   tabId,
   url,
-  isActive,
   canGoBack,
   canGoForward,
   onBoundsChange,
@@ -33,6 +31,7 @@ export function BrowserTab({
 }: BrowserTabProps) {
   const viewRef = useRef<HTMLDivElement | null>(null);
   const [address, setAddress] = useState(url);
+  const [isEditing, setIsEditing] = useState(false);
 
   const emitBounds = useCallback(() => {
     const node = viewRef.current;
@@ -52,23 +51,17 @@ export function BrowserTab({
   }, [onBoundsChange, tabId]);
 
   useLayoutEffect(() => {
-    if (!isActive) {
-      return;
-    }
     emitBounds();
-  }, [emitBounds, isActive, url]);
+  }, [emitBounds, url]);
 
   useEffect(() => {
-    if (!url) {
+    if (!url || isEditing) {
       return;
     }
     setAddress(url);
-  }, [url]);
+  }, [isEditing, url]);
 
   useEffect(() => {
-    if (!isActive) {
-      return;
-    }
     const handle = () => {
       requestAnimationFrame(() => emitBounds());
     };
@@ -81,7 +74,7 @@ export function BrowserTab({
       window.removeEventListener("resize", handle);
       observer.disconnect();
     };
-  }, [emitBounds, isActive]);
+  }, [emitBounds]);
 
   const commitAddress = () => {
     const raw = address.trim();
@@ -106,9 +99,14 @@ export function BrowserTab({
               if (event.key === "Enter") {
                 event.preventDefault();
                 commitAddress();
+                setIsEditing(false);
               }
             }}
-            onBlur={commitAddress}
+            onFocus={() => setIsEditing(true)}
+            onBlur={() => {
+              commitAddress();
+              setIsEditing(false);
+            }}
             placeholder="Enter URL"
             className="h-7 w-full rounded-md border border-border/60 bg-background/80 px-2 text-[11px] text-foreground shadow-inner shadow-black/10 focus:border-border focus:outline-none"
           />
@@ -120,10 +118,9 @@ export function BrowserTab({
             size="icon"
             className={cn(
               "h-7 w-7 text-muted-foreground",
-              !isActive && "opacity-40",
             )}
             onClick={() => onRequestBack(tabId)}
-            disabled={!isActive || !canGoBack}
+            disabled={!canGoBack}
             title="Back"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -134,10 +131,9 @@ export function BrowserTab({
             size="icon"
             className={cn(
               "h-7 w-7 text-muted-foreground",
-              !isActive && "opacity-40",
             )}
             onClick={() => onRequestForward(tabId)}
-            disabled={!isActive || !canGoForward}
+            disabled={!canGoForward}
             title="Forward"
           >
             <ArrowRight className="h-4 w-4" />
@@ -148,10 +144,9 @@ export function BrowserTab({
             size="icon"
             className={cn(
               "h-7 w-7 text-muted-foreground",
-              !isActive && "opacity-40",
             )}
             onClick={() => onRequestReload(tabId)}
-            disabled={!isActive}
+            disabled={!url}
             title="Reload"
           >
             <RotateCw className="h-4 w-4" />
@@ -171,7 +166,7 @@ export function BrowserTab({
       </div>
       <div ref={viewRef} className="relative flex-1 bg-muted/20">
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-          {isActive ? "Loading page..." : "Select tab to show page"}
+          {url ? "Loading page..." : "Enter a URL to start"}
         </div>
       </div>
     </div>

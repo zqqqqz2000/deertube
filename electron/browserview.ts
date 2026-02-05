@@ -68,37 +68,40 @@ const sanitizeSelection = (payload: BrowserViewSelectionPayload) => {
 
 class BrowserViewController {
   private window: BrowserWindow | null = null;
-  private view: WebContentsView | null = null;
-  private currentUrl: string | null = null;
-  private activeTabId: string | null = null;
-  private bounds: BrowserViewBounds | null = null;
+  private views = new Map<string, WebContentsView>();
+  private viewState = new Map<string, { url: string | null; bounds: BrowserViewBounds | null }>();
+  private senderToTab = new Map<number, string>();
   private listenersRegistered = false;
 
   attachWindow(window: BrowserWindow) {
     this.window = window;
   }
 
-  private ensureView() {
+  private ensureView(tabId: string) {
     if (!this.window) {
       return null;
     }
-    if (!this.view) {
-      this.view = new WebContentsView({
-        webPreferences: {
-          sandbox: true,
-          contextIsolation: true,
-          nodeIntegration: false,
-          preload: BROWSER_PRELOAD,
-        },
-      });
-      this.window.contentView.addChildView(this.view);
-      this.view.setVisible(false);
-      this.registerWebContentsHandlers(this.view);
+    const existing = this.views.get(tabId);
+    if (existing) {
+      return existing;
     }
-    return this.view;
+    const view = new WebContentsView({
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        preload: BROWSER_PRELOAD,
+      },
+    });
+    this.window.contentView.addChildView(view);
+    view.setVisible(false);
+    this.registerWebContentsHandlers(tabId, view);
+    this.views.set(tabId, view);
+    this.viewState.set(tabId, { url: null, bounds: null });
+    return view;
   }
 
-  private registerWebContentsHandlers(view: WebContentsView) {
+  private registerWebContentsHandlers(tabId: string, view: WebContentsView) {
     view.webContents.setWindowOpenHandler(({ url }) => {
       if (isAllowedUrl(url)) {
         void shell.openExternal(url);
@@ -111,53 +114,69 @@ class BrowserViewController {
         event.preventDefault();
         return;
       }
-      this.currentUrl = url;
-      this.sendState();
+      const state = this.viewState.get(tabId) ?? { url: null, bounds: null };
+      this.viewState.set(tabId, { ...state, url });
+      this.sendState(tabId);
     });
 
     const handleNav = (_event: Electron.Event, url: string) => {
       if (isAllowedUrl(url)) {
-        this.currentUrl = url;
+        const state = this.viewState.get(tabId) ?? { url: null, bounds: null };
+        this.viewState.set(tabId, { ...state, url });
       }
-      this.sendState();
+      this.sendState(tabId);
     };
 
     view.webContents.on("did-navigate", handleNav);
     view.webContents.on("did-navigate-in-page", handleNav);
     view.webContents.on("page-title-updated", (_event, title) => {
-      this.sendState({ title });
+      this.sendState(tabId, { title });
     });
+
+    this.senderToTab.set(view.webContents.id, tabId);
 
     if (this.listenersRegistered) {
       return;
     }
     this.listenersRegistered = true;
     ipcMain.on("browserview-selection", (event, payload) => {
-      if (!this.view || event.sender !== this.view.webContents) {
+      const senderId = event.sender.id;
+      const selectionTabId = this.senderToTab.get(senderId);
+      if (!selectionTabId) {
         return;
       }
-      if (!this.window || !this.activeTabId) {
+      const viewForSender = this.views.get(selectionTabId);
+      if (!viewForSender || event.sender !== viewForSender.webContents) {
+        return;
+      }
+      if (!this.window) {
         return;
       }
       const selection = sanitizeSelection(payload as BrowserViewSelectionPayload);
+      const state = this.viewState.get(selectionTabId);
       this.window.webContents.send("browserview-selection", {
         ...selection,
-        tabId: this.activeTabId,
-        viewBounds: this.bounds,
+        tabId: selectionTabId,
+        viewBounds: state?.bounds ?? null,
       });
     });
   }
 
-  private sendState(partial?: Partial<BrowserViewState>) {
-    if (!this.window || !this.view || !this.activeTabId) {
+  private sendState(tabId: string, partial?: Partial<BrowserViewState>) {
+    if (!this.window) {
       return;
     }
+    const view = this.views.get(tabId);
+    if (!view) {
+      return;
+    }
+    const state = this.viewState.get(tabId);
     const payload: BrowserViewState = {
-      tabId: this.activeTabId,
-      url: this.currentUrl ?? this.view.webContents.getURL(),
-      title: this.view.webContents.getTitle(),
-      canGoBack: this.view.webContents.canGoBack(),
-      canGoForward: this.view.webContents.canGoForward(),
+      tabId,
+      url: state?.url ?? view.webContents.getURL(),
+      title: view.webContents.getTitle(),
+      canGoBack: view.webContents.canGoBack(),
+      canGoForward: view.webContents.canGoForward(),
       ...partial,
     };
     this.window.webContents.send("browserview-state", payload);
@@ -167,12 +186,13 @@ class BrowserViewController {
     if (!isAllowedUrl(url)) {
       return false;
     }
-    const view = this.ensureView();
+    const view = this.ensureView(tabId);
     if (!view) {
       return false;
     }
-    this.activeTabId = tabId;
-    this.bounds = bounds;
+    const state = this.viewState.get(tabId) ?? { url: null, bounds: null };
+    const previousUrl = state.url;
+    this.viewState.set(tabId, { url, bounds });
     view.setBounds({
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
@@ -180,57 +200,81 @@ class BrowserViewController {
       height: Math.round(bounds.height),
     });
     view.setVisible(true);
-    if (this.currentUrl !== url) {
-      this.currentUrl = url;
+    if (previousUrl !== url) {
       await view.webContents.loadURL(url);
     } else {
-      this.sendState();
+      this.sendState(tabId);
     }
     return true;
   }
 
   updateBounds(tabId: string, bounds: BrowserViewBounds) {
-    if (!this.view || this.activeTabId !== tabId) {
+    const view = this.views.get(tabId);
+    if (!view) {
       return;
     }
-    this.bounds = bounds;
-    this.view.setBounds({
+    const state = this.viewState.get(tabId) ?? { url: null, bounds: null };
+    this.viewState.set(tabId, { ...state, bounds });
+    view.setBounds({
       x: Math.round(bounds.x),
       y: Math.round(bounds.y),
       width: Math.round(bounds.width),
       height: Math.round(bounds.height),
     });
+    view.setVisible(true);
   }
 
   hide() {
-    if (this.view) {
-      this.view.setVisible(false);
+    this.views.forEach((view) => {
+      view.setVisible(false);
+    });
+  }
+
+  hideTab(tabId: string) {
+    const view = this.views.get(tabId);
+    if (view) {
+      view.setVisible(false);
     }
   }
 
   reload(tabId: string) {
-    if (!this.view || this.activeTabId !== tabId) {
+    const view = this.views.get(tabId);
+    if (!view) {
       return;
     }
-    this.view.webContents.reload();
+    view.webContents.reload();
   }
 
   goBack(tabId: string) {
-    if (!this.view || this.activeTabId !== tabId) {
+    const view = this.views.get(tabId);
+    if (!view) {
       return;
     }
-    if (this.view.webContents.canGoBack()) {
-      this.view.webContents.goBack();
+    if (view.webContents.canGoBack()) {
+      view.webContents.goBack();
     }
   }
 
   goForward(tabId: string) {
-    if (!this.view || this.activeTabId !== tabId) {
+    const view = this.views.get(tabId);
+    if (!view) {
       return;
     }
-    if (this.view.webContents.canGoForward()) {
-      this.view.webContents.goForward();
+    if (view.webContents.canGoForward()) {
+      view.webContents.goForward();
     }
+  }
+
+  close(tabId: string) {
+    const view = this.views.get(tabId);
+    if (!view || !this.window) {
+      return;
+    }
+    this.window.contentView.removeChildView(view);
+    this.senderToTab.delete(view.webContents.id);
+    view.webContents.destroy();
+    this.views.delete(tabId);
+    this.viewState.delete(tabId);
   }
 
   openExternal(url: string) {

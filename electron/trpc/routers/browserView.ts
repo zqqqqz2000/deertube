@@ -40,6 +40,20 @@ export const browserViewRouter = createTRPCRouter({
     controller.hide();
     return { ok: true };
   }),
+  hideTab: baseProcedure
+    .input(z.object({ tabId: z.string() }))
+    .mutation(({ input }) => {
+      const controller = getBrowserViewController();
+      controller.hideTab(input.tabId);
+      return { ok: true };
+    }),
+  close: baseProcedure
+    .input(z.object({ tabId: z.string() }))
+    .mutation(({ input }) => {
+      const controller = getBrowserViewController();
+      controller.close(input.tabId);
+      return { ok: true };
+    }),
   reload: baseProcedure
     .input(z.object({ tabId: z.string() }))
     .mutation(({ input }) => {

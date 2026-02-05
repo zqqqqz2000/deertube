@@ -150,81 +150,6 @@ const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => 
   return ids;
 };
 
-const findSelectedBrowserTabId = (
-  node: FlexLayoutNode | undefined,
-): string | null => {
-  if (!node) {
-    return null;
-  }
-  if (node.type === "tabset" && Array.isArray(node.children)) {
-    const selectedValue = node.selected;
-    if (typeof selectedValue === "number" && node.children[selectedValue]) {
-      const selected = node.children[selectedValue];
-      if (selected.type === "tab") {
-        const component = selected.component ?? selected.id;
-        const tabId = component ? parseBrowserTabId(String(component)) : null;
-        if (tabId) {
-          return tabId;
-        }
-      }
-    }
-    if (typeof selectedValue === "string") {
-      const match =
-        node.children.find(
-          (child) =>
-            child.type === "tab" &&
-            (child.id === selectedValue || child.component === selectedValue),
-        ) ?? null;
-      if (match) {
-        const component = match.component ?? match.id;
-        const tabId = component ? parseBrowserTabId(String(component)) : null;
-        if (tabId) {
-          return tabId;
-        }
-      }
-      const direct = parseBrowserTabId(selectedValue);
-      if (direct) {
-        return direct;
-      }
-    }
-  }
-  if (node.children) {
-    for (const child of node.children) {
-      const found = findSelectedBrowserTabId(child);
-      if (found) {
-        return found;
-      }
-    }
-  }
-  return null;
-};
-
-const findActiveBrowserTabId = (jsonModel: IJsonModel): string | null => {
-  const model = Model.fromJson(jsonModel);
-  const modelWithActive = model as Model & {
-    getActiveTabset?: () => {
-      getSelectedNode?: () => {
-        getComponent?: () => string | undefined;
-        getId?: () => string | undefined;
-      } | null;
-    } | null;
-  };
-  const activeTabset = modelWithActive.getActiveTabset?.();
-  if (activeTabset?.getSelectedNode) {
-    const selectedNode = activeTabset.getSelectedNode();
-    if (selectedNode) {
-      const component =
-        selectedNode.getComponent?.() ?? selectedNode.getId?.();
-      const parsed = component ? parseBrowserTabId(String(component)) : null;
-      if (parsed) {
-        return parsed;
-      }
-    }
-  }
-  const layout = jsonModel.layout as FlexLayoutNode | undefined;
-  return findSelectedBrowserTabId(layout);
-};
-
 const hasTab = (layout: FlexLayoutNode | undefined, tabId: string): boolean => {
   const node = findLayoutNode(layout, tabId);
   return Boolean(node && node.type === "tab");
@@ -465,12 +390,10 @@ function FlowWorkspaceInner({
   const [browserBounds, setBrowserBounds] = useState<
     Record<string, BrowserViewBounds>
   >({});
-  const [activeBrowserTabId, setActiveBrowserTabId] = useState<string | null>(
-    null,
-  );
   const [browserSelection, setBrowserSelection] =
     useState<BrowserViewSelection | null>(null);
-  const activeBrowserTabRef = useRef<string | null>(null);
+  const previousBrowserTabIdsRef = useRef<Set<string>>(new Set());
+  const openedBrowserTabsRef = useRef<Set<string>>(new Set());
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
@@ -562,9 +485,6 @@ function FlowWorkspaceInner({
     [nodes, selectedId],
   );
 
-  useEffect(() => {
-    activeBrowserTabRef.current = activeBrowserTabId;
-  }, [activeBrowserTabId]);
 
   const handleLayoutChange = useCallback((nextModel: IJsonModel) => {
     setLayoutModel(nextModel);
@@ -572,9 +492,15 @@ function FlowWorkspaceInner({
 
   useEffect(() => {
     const layout = layoutModel.layout as FlexLayoutNode | undefined;
-    const activeId = findActiveBrowserTabId(layoutModel);
-    setActiveBrowserTabId(activeId);
     const existingIds = collectBrowserTabIds(layout);
+    const previousIds = previousBrowserTabIdsRef.current;
+    previousIds.forEach((tabId) => {
+      if (!existingIds.has(tabId)) {
+        trpc.browserView.close.mutate({ tabId }).catch(() => undefined);
+        openedBrowserTabsRef.current.delete(tabId);
+      }
+    });
+    previousBrowserTabIdsRef.current = existingIds;
     setBrowserTabs((prev) => prev.filter((tab) => existingIds.has(tab.id)));
     setBrowserBounds((prev) => {
       const next: Record<string, BrowserViewBounds> = {};
@@ -586,10 +512,6 @@ function FlowWorkspaceInner({
       return next;
     });
   }, [layoutModel]);
-
-  useEffect(() => {
-    setBrowserSelection(null);
-  }, [activeBrowserTabId]);
 
   useEffect(() => {
     const ipc = window.ipcRenderer;
@@ -622,10 +544,6 @@ function FlowWorkspaceInner({
       payload: BrowserViewSelection,
     ) => {
       if (!payload) {
-        return;
-      }
-      const activeId = activeBrowserTabRef.current;
-      if (payload.tabId && activeId && payload.tabId !== activeId) {
         return;
       }
       const text = payload.text?.trim();
@@ -758,8 +676,35 @@ function FlowWorkspaceInner({
   const handleBrowserBoundsChange = useCallback(
     (tabId: string, bounds: BrowserViewBounds) => {
       setBrowserBounds((prev) => ({ ...prev, [tabId]: bounds }));
+      if (bounds.width <= 1 || bounds.height <= 1) {
+        trpc.browserView.hideTab.mutate({ tabId }).catch(() => undefined);
+        return;
+      }
+      const tab = browserTabMap.get(tabId);
+      if (!tab) {
+        return;
+      }
+      if (!openedBrowserTabsRef.current.has(tabId)) {
+        trpc.browserView
+          .open
+          .mutate({
+            tabId,
+            url: tab.url,
+            bounds,
+          })
+          .catch(() => undefined);
+        openedBrowserTabsRef.current.add(tabId);
+        return;
+      }
+      trpc.browserView
+        .updateBounds
+        .mutate({
+          tabId,
+          bounds,
+        })
+        .catch(() => undefined);
     },
-    [],
+    [browserTabMap],
   );
 
   const handleBrowserBack = useCallback((tabId: string) => {
@@ -807,6 +752,7 @@ function FlowWorkspaceInner({
             bounds,
           })
           .catch(() => undefined);
+        openedBrowserTabsRef.current.add(tabId);
       }
     },
     [browserBounds],
@@ -837,27 +783,6 @@ function FlowWorkspaceInner({
     },
     [setBrowserSelection, setChatScrollSignal, setHistoryInput],
   );
-
-  useEffect(() => {
-    if (!activeBrowserTabId) {
-      trpc.browserView.hide.mutate().catch(() => undefined);
-      return;
-    }
-    const tab = browserTabMap.get(activeBrowserTabId);
-    const bounds = browserBounds[activeBrowserTabId];
-    if (!tab || !bounds) {
-      trpc.browserView.hide.mutate().catch(() => undefined);
-      return;
-    }
-    trpc.browserView
-      .open
-      .mutate({
-        tabId: activeBrowserTabId,
-        url: tab.url,
-        bounds,
-      })
-      .catch(() => undefined);
-  }, [activeBrowserTabId, browserBounds, browserTabMap]);
 
   useEffect(() => {
     if (!saveEnabled) {
@@ -1030,7 +955,6 @@ function FlowWorkspaceInner({
         <BrowserTab
           tabId={browserTabId}
           url={tab?.url ?? ""}
-          isActive={activeBrowserTabId === browserTabId}
           canGoBack={tab?.canGoBack}
           canGoForward={tab?.canGoForward}
           onBoundsChange={handleBrowserBoundsChange}
