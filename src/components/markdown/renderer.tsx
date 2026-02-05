@@ -179,6 +179,7 @@ interface MarkdownRendererProps {
   className?: string;
   highlightExcerpt?: string;
   onNodeLinkClick?: (nodeId: string) => void;
+  onReferenceClick?: (url: string, label?: string) => void;
   resolveNodeLabel?: (nodeId: string) => string | undefined;
   nodeExcerptRefs?: { id: string; text: string }[];
 }
@@ -189,6 +190,7 @@ export const MarkdownRenderer = memo(
     className,
     highlightExcerpt,
     onNodeLinkClick,
+    onReferenceClick,
     resolveNodeLabel,
     nodeExcerptRefs = [],
   }: MarkdownRendererProps) => {
@@ -235,6 +237,17 @@ export const MarkdownRenderer = memo(
         }
         return null;
       };
+      const isHttpUrl = (href?: string | null) => {
+        if (!href) {
+          return false;
+        }
+        try {
+          const parsed = new URL(href);
+          return parsed.protocol === "http:" || parsed.protocol === "https:";
+        } catch {
+          return false;
+        }
+      };
       const flattenText = (children: ReactNode): string => {
         if (typeof children === "string") {
           return children;
@@ -259,6 +272,7 @@ export const MarkdownRenderer = memo(
           props: AnchorHTMLAttributes<HTMLAnchorElement> & { node?: unknown },
         ) => {
           const nodeProp = props.node;
+          const { node: _node, ...restProps } = props;
           const rawHref =
             props.href ??
             (nodeProp && typeof nodeProp === "object" && "url" in nodeProp
@@ -291,7 +305,21 @@ export const MarkdownRenderer = memo(
               </button>
             );
           }
-          const { node: _node, ...restProps } = props;
+          if (isHttpUrl(rawHref) && onReferenceClick) {
+            const labelText = flattenText(props.children);
+            return (
+              <a
+                {...restProps}
+                href={rawHref}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onReferenceClick(rawHref ?? "", labelText);
+                }}
+                className="text-sky-300 underline-offset-4 hover:underline"
+                title={rawHref}
+              />
+            );
+          }
           return (
             <a
               target="_blank"
@@ -302,7 +330,7 @@ export const MarkdownRenderer = memo(
           );
         },
       };
-    }, [onNodeLinkClick, resolveNodeLabel]);
+    }, [onNodeLinkClick, onReferenceClick, resolveNodeLabel]);
 
     useEffect(() => {
       const container = containerRef.current;

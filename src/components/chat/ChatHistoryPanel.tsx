@@ -27,13 +27,14 @@ import {
   ChatToolbarAddonEnd,
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
-import { ArrowDown, ChevronDown } from "lucide-react";
+import { ArrowDown, ChevronDown, Loader2, RotateCw, Send } from "lucide-react";
 import { useStickToBottom } from "use-stick-to-bottom";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import type { BrowserViewSelection } from "@/types/browserview";
 
 interface ChatHistoryPanelProps {
   messages: ChatMessage[];
@@ -41,6 +42,9 @@ interface ChatHistoryPanelProps {
   selectedNode?: FlowNode | null;
   nodes?: FlowNode[];
   onFocusNode?: (nodeId: string) => void;
+  onReferenceClick?: (url: string, label?: string) => void;
+  browserSelection?: BrowserViewSelection | null;
+  onInsertBrowserSelection?: (selection: BrowserViewSelection) => void;
   scrollToBottomSignal?: number;
   focusSignal?: number;
   onRequestClearSelection?: () => void;
@@ -50,6 +54,7 @@ interface ChatHistoryPanelProps {
   onInputChange: (value: string) => void;
   onSend: () => void;
   onRetry?: (messageId: string) => void;
+  lastFailedMessageId?: string | null;
 }
 
 interface GraphToolInput {
@@ -95,6 +100,9 @@ export default function ChatHistoryPanel({
   selectedNode,
   nodes = [],
   onFocusNode,
+  onReferenceClick,
+  browserSelection,
+  onInsertBrowserSelection,
   scrollToBottomSignal = 0,
   focusSignal = 0,
   onRequestClearSelection,
@@ -104,6 +112,7 @@ export default function ChatHistoryPanel({
   onInputChange,
   onSend,
   onRetry,
+  lastFailedMessageId: lastFailedMessageIdProp,
 }: ChatHistoryPanelProps) {
   const { scrollRef, contentRef } = useStickToBottom();
   const highlightedId = selectedResponseId;
@@ -392,6 +401,40 @@ export default function ChatHistoryPanel({
       ),
     [messages],
   );
+  const hasBrowserSelection = Boolean(
+    browserSelection && browserSelection.text.trim().length > 0,
+  );
+  const browserSelectionLabel = useMemo(() => {
+    if (!browserSelection) {
+      return "";
+    }
+    const text = browserSelection.text.trim().replace(/\s+/g, " ");
+    if (!text) {
+      return "";
+    }
+    return text.length > 80 ? `${text.slice(0, 80)}...` : text;
+  }, [browserSelection]);
+  const lastFailedMessageId = useMemo(() => {
+    if (lastFailedMessageIdProp !== undefined) {
+      return lastFailedMessageIdProp;
+    }
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.kind === "graph-event") {
+        continue;
+      }
+      return message.status === "failed" ? message.id : null;
+    }
+    return null;
+  }, [lastFailedMessageIdProp, messages]);
+  const showRetry = Boolean(lastFailedMessageId && onRetry);
+  const handlePrimaryAction = useCallback(() => {
+    if (showRetry && lastFailedMessageId && onRetry) {
+      onRetry(lastFailedMessageId);
+      return;
+    }
+    onSend();
+  }, [lastFailedMessageId, onRetry, onSend, showRetry]);
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden border border-border/70 bg-background/85 shadow-2xl shadow-black/25 backdrop-blur">
@@ -628,6 +671,12 @@ export default function ChatHistoryPanel({
                 !isUser && message.status === "pending" && !message.content
                   ? "Thinking..."
                   : message.content;
+              const resolvedContent =
+                !isUser &&
+                isFailed &&
+                (!displayContent || !displayContent.trim())
+                  ? message.error ?? "Request failed"
+                  : displayContent;
               const isGraphRunning =
                 message.role === "assistant" &&
                 runningGraphByResponseId.has(message.id);
@@ -650,29 +699,15 @@ export default function ChatHistoryPanel({
                     </div>
                   ) : (
                     <MarkdownRenderer
-                      source={displayContent ?? ""}
+                      source={resolvedContent ?? ""}
                       highlightExcerpt={
                         shouldHighlightExcerpt ? selectedExcerpt : undefined
                       }
                       onNodeLinkClick={handleNodeLinkClick}
+                      onReferenceClick={onReferenceClick}
                       resolveNodeLabel={resolveNodeLabel}
                       nodeExcerptRefs={nodeExcerptRefs}
                     />
-                  )}
-                  {!isUser && isFailed && onRetry && (
-                    <div className="mt-3 flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-8 text-xs"
-                        onClick={() => onRetry(message.id)}
-                      >
-                        Retry
-                      </Button>
-                      <span className="text-xs text-muted-foreground">
-                        {message.error ?? "Request failed"}
-                      </span>
-                    </div>
                   )}
                 </div>
               );
@@ -725,14 +760,30 @@ export default function ChatHistoryPanel({
           </div>
         )}
         <ChatToolbar>
-          {selectedTagLabel && (
+          {(selectedTagLabel || hasBrowserSelection) && (
             <ChatToolbarAddonStart>
-              <span
-                className="max-w-[140px] truncate rounded-full border border-border/70 bg-muted/40 px-2 py-1 text-[11px] font-medium text-foreground/80 @md/chat:max-w-[220px]"
-                title={selectedTagLabel}
-              >
-                {selectedTagLabel}
-              </span>
+              {selectedTagLabel && (
+                <span
+                  className="max-w-[140px] truncate rounded-full border border-border/70 bg-muted/40 px-2 py-1 text-[11px] font-medium text-foreground/80 @md/chat:max-w-[220px]"
+                  title={selectedTagLabel}
+                >
+                  {selectedTagLabel}
+                </span>
+              )}
+              {hasBrowserSelection && (
+                <button
+                  type="button"
+                  className="max-w-[220px] truncate rounded-full border border-sky-400/40 bg-sky-500/10 px-2 py-1 text-[11px] font-medium text-sky-100/90 transition hover:border-sky-300/60 hover:bg-sky-500/20"
+                  title={browserSelection?.text}
+                  onClick={() => {
+                    if (browserSelection && onInsertBrowserSelection) {
+                      onInsertBrowserSelection(browserSelection);
+                    }
+                  }}
+                >
+                  {browserSelectionLabel || "Use web selection"}
+                </button>
+              )}
             </ChatToolbarAddonStart>
           )}
           <ChatToolbarTextarea
@@ -755,18 +806,27 @@ export default function ChatHistoryPanel({
               }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                onSend();
+                handlePrimaryAction();
               }
             }}
           />
           <ChatToolbarAddonEnd>
             <Button
-              size="sm"
-              className="h-9 rounded-md bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90"
-              onClick={onSend}
-              disabled={busy || !input.trim()}
+              size="icon"
+              variant={showRetry ? "destructive" : "default"}
+              className="h-8 w-8 rounded-md"
+              onClick={handlePrimaryAction}
+              disabled={busy || (!showRetry && !input.trim())}
+              aria-label={showRetry ? "Retry request" : "Send message"}
+              title={showRetry ? "Retry request" : "Send message"}
             >
-              {busy ? "..." : "Send"}
+              {busy ? (
+                <Loader2 className="animate-spin" />
+              ) : showRetry ? (
+                <RotateCw />
+              ) : (
+                <Send />
+              )}
             </Button>
           </ChatToolbarAddonEnd>
         </ChatToolbar>

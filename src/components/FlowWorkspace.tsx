@@ -34,6 +34,13 @@ import ChatHistoryPanel from "./chat/ChatHistoryPanel";
 import type { FlowEdge, FlowNode, InsightNodeData } from "../types/flow";
 import type { ChatMessage } from "../types/chat";
 import { FlowFlexLayout } from "./flow/FlowFlexLayout";
+import { BrowserTab } from "./browser/BrowserTab";
+import type {
+  BrowserViewBounds,
+  BrowserViewSelection,
+  BrowserViewStatePayload,
+  BrowserViewTabState,
+} from "../types/browserview";
 
 const CHAT_TABSET_ID = "chat-tabset";
 const GRAPH_TABSET_ID = "graph-tabset";
@@ -41,6 +48,7 @@ const CHAT_TAB_ID = "chat-tab";
 const GRAPH_TAB_ID = "graph-tab";
 const CHAT_DEFAULT_WEIGHT = 26;
 const TOTAL_LAYOUT_WEIGHT = 100;
+const BROWSER_TAB_PREFIX = "browser:";
 
 const coerceProjectState = (state: {
   nodes: unknown[];
@@ -56,6 +64,8 @@ interface FlexLayoutNode {
   id?: string;
   type?: string;
   weight?: number;
+  component?: string;
+  selected?: number;
   children?: FlexLayoutNode[];
 }
 
@@ -98,6 +108,121 @@ const findFirstTabsetId = (node: FlexLayoutNode | undefined): string | null => {
     }
   }
   return null;
+};
+
+const parseBrowserTabId = (value: string) => {
+  if (value.startsWith(BROWSER_TAB_PREFIX)) {
+    return value.slice(BROWSER_TAB_PREFIX.length);
+  }
+  if (value.startsWith("browser-")) {
+    return value;
+  }
+  return null;
+};
+
+const isHttpUrl = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => {
+  const ids = new Set<string>();
+  const visit = (current?: FlexLayoutNode) => {
+    if (!current) {
+      return;
+    }
+    if (current.type === "tab" && current.id) {
+      const component = current.component ?? current.id;
+      const tabId = parseBrowserTabId(String(component));
+      if (tabId) {
+        ids.add(tabId);
+      }
+    }
+    if (current.children) {
+      current.children.forEach((child) => visit(child));
+    }
+  };
+  visit(node);
+  return ids;
+};
+
+const findSelectedBrowserTabId = (
+  node: FlexLayoutNode | undefined,
+): string | null => {
+  if (!node) {
+    return null;
+  }
+  if (node.type === "tabset" && Array.isArray(node.children)) {
+    const selectedValue = node.selected;
+    if (typeof selectedValue === "number" && node.children[selectedValue]) {
+      const selected = node.children[selectedValue];
+      if (selected.type === "tab") {
+        const component = selected.component ?? selected.id;
+        const tabId = component ? parseBrowserTabId(String(component)) : null;
+        if (tabId) {
+          return tabId;
+        }
+      }
+    }
+    if (typeof selectedValue === "string") {
+      const match =
+        node.children.find(
+          (child) =>
+            child.type === "tab" &&
+            (child.id === selectedValue || child.component === selectedValue),
+        ) ?? null;
+      if (match) {
+        const component = match.component ?? match.id;
+        const tabId = component ? parseBrowserTabId(String(component)) : null;
+        if (tabId) {
+          return tabId;
+        }
+      }
+      const direct = parseBrowserTabId(selectedValue);
+      if (direct) {
+        return direct;
+      }
+    }
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      const found = findSelectedBrowserTabId(child);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return null;
+};
+
+const findActiveBrowserTabId = (jsonModel: IJsonModel): string | null => {
+  const model = Model.fromJson(jsonModel);
+  const modelWithActive = model as Model & {
+    getActiveTabset?: () => {
+      getSelectedNode?: () => {
+        getComponent?: () => string | undefined;
+        getId?: () => string | undefined;
+      } | null;
+    } | null;
+  };
+  const activeTabset = modelWithActive.getActiveTabset?.();
+  if (activeTabset?.getSelectedNode) {
+    const selectedNode = activeTabset.getSelectedNode();
+    if (selectedNode) {
+      const component =
+        selectedNode.getComponent?.() ?? selectedNode.getId?.();
+      const parsed = component ? parseBrowserTabId(String(component)) : null;
+      if (parsed) {
+        return parsed;
+      }
+    }
+  }
+  const layout = jsonModel.layout as FlexLayoutNode | undefined;
+  return findSelectedBrowserTabId(layout);
 };
 
 const hasTab = (layout: FlexLayoutNode | undefined, tabId: string): boolean => {
@@ -203,6 +328,45 @@ const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
   };
 };
 
+const createSingleBrowserLayoutModel = (
+  tabId: string,
+  label?: string,
+): IJsonModel => ({
+  global: {
+    tabEnableFloat: false,
+    tabEnableClose: true,
+    tabSetEnableClose: false,
+    tabSetEnableDeleteWhenEmpty: true,
+    tabSetMinWidth: 100,
+    tabSetMinHeight: 100,
+    borderMinSize: 100,
+  },
+  borders: [],
+  layout: {
+    type: "row",
+    weight: TOTAL_LAYOUT_WEIGHT,
+    children: [
+      {
+        type: "tabset",
+        id: GRAPH_TABSET_ID,
+        weight: TOTAL_LAYOUT_WEIGHT,
+        selected: 0,
+        enableClose: false,
+        enableDeleteWhenEmpty: true,
+        children: [
+          {
+            type: "tab",
+            id: tabId,
+            name: label?.trim() || "Browser",
+            component: `${BROWSER_TAB_PREFIX}${tabId}`,
+            enableClose: true,
+          },
+        ],
+      },
+    ],
+  },
+});
+
 function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
   const [loadedState, setLoadedState] = useState<ProjectState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -297,6 +461,16 @@ function FlowWorkspaceInner({
   const [layoutModel, setLayoutModel] = useState<IJsonModel>(
     () => createDefaultLayoutModel(),
   );
+  const [browserTabs, setBrowserTabs] = useState<BrowserViewTabState[]>([]);
+  const [browserBounds, setBrowserBounds] = useState<
+    Record<string, BrowserViewBounds>
+  >({});
+  const [activeBrowserTabId, setActiveBrowserTabId] = useState<string | null>(
+    null,
+  );
+  const [browserSelection, setBrowserSelection] =
+    useState<BrowserViewSelection | null>(null);
+  const activeBrowserTabRef = useRef<string | null>(null);
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
@@ -344,6 +518,16 @@ function FlowWorkspaceInner({
     activeProfile,
     initialMessages: initialState.chat ?? [],
   });
+  const lastFailedMessageId = useMemo(() => {
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index];
+      if (message.kind === "graph-event") {
+        continue;
+      }
+      return message.status === "failed" ? message.id : null;
+    }
+    return null;
+  }, [chatMessages]);
   const { isLayouting, handleAutoLayout } = useAutoLayout({
     flowInstance,
     nodes,
@@ -360,6 +544,10 @@ function FlowWorkspaceInner({
     () => ({ question: QuestionNode, source: SourceNode, insight: InsightNode }),
     [],
   );
+  const browserTabMap = useMemo(
+    () => new Map(browserTabs.map((tab) => [tab.id, tab])),
+    [browserTabs],
+  );
 
   const selectedResponseId = useMemo(() => {
     const selectedNode = nodes.find((node) => node.id === selectedId);
@@ -374,8 +562,86 @@ function FlowWorkspaceInner({
     [nodes, selectedId],
   );
 
+  useEffect(() => {
+    activeBrowserTabRef.current = activeBrowserTabId;
+  }, [activeBrowserTabId]);
+
   const handleLayoutChange = useCallback((nextModel: IJsonModel) => {
     setLayoutModel(nextModel);
+  }, []);
+
+  useEffect(() => {
+    const layout = layoutModel.layout as FlexLayoutNode | undefined;
+    const activeId = findActiveBrowserTabId(layoutModel);
+    setActiveBrowserTabId(activeId);
+    const existingIds = collectBrowserTabIds(layout);
+    setBrowserTabs((prev) => prev.filter((tab) => existingIds.has(tab.id)));
+    setBrowserBounds((prev) => {
+      const next: Record<string, BrowserViewBounds> = {};
+      Object.entries(prev).forEach(([key, value]) => {
+        if (existingIds.has(key)) {
+          next[key] = value;
+        }
+      });
+      return next;
+    });
+  }, [layoutModel]);
+
+  useEffect(() => {
+    setBrowserSelection(null);
+  }, [activeBrowserTabId]);
+
+  useEffect(() => {
+    const ipc = window.ipcRenderer;
+    if (!ipc) {
+      return;
+    }
+    const handleState = (
+      _event: unknown,
+      payload: BrowserViewStatePayload,
+    ) => {
+      if (!payload?.tabId) {
+        return;
+      }
+      setBrowserTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === payload.tabId
+            ? {
+                ...tab,
+                url: payload.url ?? tab.url,
+                title: payload.title ?? tab.title,
+                canGoBack: payload.canGoBack ?? tab.canGoBack,
+                canGoForward: payload.canGoForward ?? tab.canGoForward,
+              }
+            : tab,
+        ),
+      );
+    };
+    const handleSelection = (
+      _event: unknown,
+      payload: BrowserViewSelection,
+    ) => {
+      if (!payload) {
+        return;
+      }
+      const activeId = activeBrowserTabRef.current;
+      if (payload.tabId && activeId && payload.tabId !== activeId) {
+        return;
+      }
+      const text = payload.text?.trim();
+      if (!text) {
+        setBrowserSelection(null);
+        return;
+      }
+      setBrowserSelection(payload);
+    };
+
+    ipc.on("browserview-state", handleState);
+    ipc.on("browserview-selection", handleSelection);
+    return () => {
+      ipc.off("browserview-state", handleState);
+      ipc.off("browserview-selection", handleSelection);
+    };
   }, []);
 
   const openOrFocusTab = useCallback(
@@ -422,6 +688,176 @@ function FlowWorkspaceInner({
     },
     [handleLayoutChange, layoutModel],
   );
+
+  const selectBrowserTab = useCallback(
+    (tabId: string) => {
+      const jsonModel = layoutModel;
+      const layout = jsonModel.layout as FlexLayoutNode | undefined;
+      if (!hasTab(layout, tabId)) {
+        return false;
+      }
+      const model = Model.fromJson(jsonModel);
+      model.doAction(Actions.selectTab(tabId));
+      handleLayoutChange(model.toJson());
+      return true;
+    },
+    [handleLayoutChange, layoutModel],
+  );
+
+  const openBrowserReference = useCallback(
+    (rawUrl: string, label?: string) => {
+      if (!isHttpUrl(rawUrl)) {
+        return;
+      }
+      const normalized = new URL(rawUrl).toString();
+      const existing = browserTabs.find((tab) => tab.url === normalized);
+      if (existing) {
+        selectBrowserTab(existing.id);
+        return;
+      }
+      const tabId = `browser-${crypto.randomUUID()}`;
+      const nextTab: BrowserViewTabState = {
+        id: tabId,
+        url: normalized,
+        title: label?.trim() || undefined,
+      };
+      setBrowserTabs((prev) => [...prev, nextTab]);
+
+      const jsonModel = layoutModel;
+      const layout = jsonModel.layout as FlexLayoutNode | undefined;
+      const model = Model.fromJson(jsonModel);
+      const tab: IJsonTabNode = {
+        type: "tab",
+        id: tabId,
+        name: label?.trim() || "Browser",
+        component: `${BROWSER_TAB_PREFIX}${tabId}`,
+        enableClose: true,
+      };
+
+      if (hasTabset(layout, GRAPH_TABSET_ID)) {
+        model.doAction(
+          Actions.addNode(tab, GRAPH_TABSET_ID, DockLocation.CENTER, -1, true),
+        );
+        handleLayoutChange(model.toJson());
+        return;
+      }
+
+      const fallbackTabset = findFirstTabsetId(layout);
+      if (!fallbackTabset) {
+        handleLayoutChange(createSingleBrowserLayoutModel(tabId, label));
+        return;
+      }
+      model.doAction(
+        Actions.addNode(tab, fallbackTabset, DockLocation.RIGHT, -1, true),
+      );
+      handleLayoutChange(model.toJson());
+    },
+    [browserTabs, handleLayoutChange, layoutModel, selectBrowserTab],
+  );
+
+  const handleBrowserBoundsChange = useCallback(
+    (tabId: string, bounds: BrowserViewBounds) => {
+      setBrowserBounds((prev) => ({ ...prev, [tabId]: bounds }));
+    },
+    [],
+  );
+
+  const handleBrowserBack = useCallback((tabId: string) => {
+    trpc.browserView.back.mutate({ tabId }).catch(() => undefined);
+  }, []);
+
+  const handleBrowserForward = useCallback((tabId: string) => {
+    trpc.browserView.forward.mutate({ tabId }).catch(() => undefined);
+  }, []);
+
+  const handleBrowserReload = useCallback((tabId: string) => {
+    trpc.browserView.reload.mutate({ tabId }).catch(() => undefined);
+  }, []);
+
+  const handleBrowserOpenExternal = useCallback((url: string) => {
+    if (!isHttpUrl(url)) {
+      return;
+    }
+    trpc.browserView.openExternal.mutate({ url }).catch(() => undefined);
+  }, []);
+
+  const handleBrowserNavigate = useCallback(
+    (tabId: string, url: string) => {
+      if (!isHttpUrl(url)) {
+        return;
+      }
+      setBrowserTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === tabId
+            ? {
+                ...tab,
+                url,
+                title: undefined,
+              }
+            : tab,
+        ),
+      );
+      const bounds = browserBounds[tabId];
+      if (bounds) {
+        trpc.browserView
+          .open
+          .mutate({
+            tabId,
+            url,
+            bounds,
+          })
+          .catch(() => undefined);
+      }
+    },
+    [browserBounds],
+  );
+
+  const handleInsertBrowserSelection = useCallback(
+    (selection: BrowserViewSelection) => {
+      const text = selection.text.trim();
+      if (!text) {
+        return;
+      }
+      const title = selection.title?.trim();
+      const url = selection.url?.trim();
+      const header = title ? `${title}` : url;
+      const sourceLine = url ? `Source: ${url}` : "";
+      const quoted = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => `> ${line}`)
+        .join("\n");
+      const payload = [header, sourceLine, quoted].filter(Boolean).join("\n");
+      setHistoryInput((prev) =>
+        prev.trim().length > 0 ? `${prev.trimEnd()}\n\n${payload}\n` : `${payload}\n`,
+      );
+      setBrowserSelection(null);
+      setChatScrollSignal((prev) => prev + 1);
+    },
+    [setBrowserSelection, setChatScrollSignal, setHistoryInput],
+  );
+
+  useEffect(() => {
+    if (!activeBrowserTabId) {
+      trpc.browserView.hide.mutate().catch(() => undefined);
+      return;
+    }
+    const tab = browserTabMap.get(activeBrowserTabId);
+    const bounds = browserBounds[activeBrowserTabId];
+    if (!tab || !bounds) {
+      trpc.browserView.hide.mutate().catch(() => undefined);
+      return;
+    }
+    trpc.browserView
+      .open
+      .mutate({
+        tabId: activeBrowserTabId,
+        url: tab.url,
+        bounds,
+      })
+      .catch(() => undefined);
+  }, [activeBrowserTabId, browserBounds, browserTabMap]);
 
   useEffect(() => {
     if (!saveEnabled) {
@@ -579,12 +1015,33 @@ function FlowWorkspaceInner({
           void handleSendFromPanel();
           setChatScrollSignal((prev) => prev + 1);
         }}
+        onRetry={retryMessage}
+        retryMessageId={lastFailedMessageId}
         onFocusZoom={handleInputFocusZoom}
       />
     );
   };
 
   const renderTab = (tabId: string) => {
+    const browserTabId = parseBrowserTabId(tabId);
+    if (browserTabId) {
+      const tab = browserTabMap.get(browserTabId);
+      return (
+        <BrowserTab
+          tabId={browserTabId}
+          url={tab?.url ?? ""}
+          isActive={activeBrowserTabId === browserTabId}
+          canGoBack={tab?.canGoBack}
+          canGoForward={tab?.canGoForward}
+          onBoundsChange={handleBrowserBoundsChange}
+          onRequestBack={handleBrowserBack}
+          onRequestForward={handleBrowserForward}
+          onRequestReload={handleBrowserReload}
+          onRequestOpenExternal={handleBrowserOpenExternal}
+          onRequestNavigate={handleBrowserNavigate}
+        />
+      );
+    }
     if (tabId === "chat" || tabId === CHAT_TAB_ID) {
       return (
         <ChatHistoryPanel
@@ -593,6 +1050,9 @@ function FlowWorkspaceInner({
           selectedNode={selectedNode}
           nodes={nodes}
           onFocusNode={handleFocusNode}
+          onReferenceClick={openBrowserReference}
+          browserSelection={browserSelection}
+          onInsertBrowserSelection={handleInsertBrowserSelection}
           scrollToBottomSignal={chatScrollSignal}
           focusSignal={chatFocusSignal}
           onRequestClearSelection={() => setSelectedId(null)}
@@ -602,6 +1062,7 @@ function FlowWorkspaceInner({
           onInputChange={setHistoryInput}
           onSend={handleSendFromHistory}
           onRetry={retryMessage}
+          lastFailedMessageId={lastFailedMessageId}
         />
       );
     }
@@ -691,6 +1152,25 @@ function FlowWorkspaceInner({
 
   const renderTabLabel = useCallback(
     (tabId: string) => {
+      const browserTabId = parseBrowserTabId(tabId);
+      if (browserTabId) {
+        const tab = browserTabMap.get(browserTabId);
+        const label =
+          tab?.title?.trim() ||
+          (() => {
+            if (!tab?.url) {
+              return "Browser";
+            }
+            try {
+              return new URL(tab.url).host;
+            } catch {
+              return tab.url;
+            }
+          })();
+        return (
+          <span className="text-sm font-medium text-foreground">{label}</span>
+        );
+      }
       if (tabId === "chat" || tabId === CHAT_TAB_ID) {
         return (
           <div className="flex items-center gap-2 text-sm font-medium">
@@ -706,7 +1186,7 @@ function FlowWorkspaceInner({
       }
       return <span className="text-sm font-medium text-foreground">{tabId}</span>;
     },
-    [chatMessages.length],
+    [browserTabMap, chatMessages.length],
   );
 
 

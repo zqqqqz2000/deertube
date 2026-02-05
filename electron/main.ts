@@ -6,6 +6,7 @@ import { createIPCHandler } from 'electron-trpc-experimental/main'
 import { createTRPCContext } from './trpc/init'
 import { appRouter } from './trpc/routers/_app'
 import { getPreviewController } from './trpc/preview'
+import { getBrowserViewController } from './browserview'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -113,6 +114,7 @@ function createWindow() {
   })
 
   getPreviewController().attachWindow(win)
+  getBrowserViewController().attachWindow(win)
   createIPCHandler({
     router: appRouter,
     windows: [win],
