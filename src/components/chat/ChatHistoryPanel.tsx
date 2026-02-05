@@ -204,12 +204,6 @@ export default function ChatHistoryPanel({
     });
     return running;
   }, [messages]);
-  const handleFocusNode = useCallback(() => {
-    if (!selectedSummary?.id || !onFocusNode) {
-      return;
-    }
-    onFocusNode(selectedSummary.id);
-  }, [onFocusNode, selectedSummary]);
   const handleNodeLinkClick = useCallback(
     (nodeId: string) => {
       if (!onFocusNode) {
@@ -672,9 +666,7 @@ export default function ChatHistoryPanel({
                   ? "Thinking..."
                   : message.content;
               const resolvedContent =
-                !isUser &&
-                isFailed &&
-                (!displayContent || !displayContent.trim())
+                !isUser && isFailed && !displayContent?.trim()
                   ? message.error ?? "Request failed"
                   : displayContent;
               const isGraphRunning =

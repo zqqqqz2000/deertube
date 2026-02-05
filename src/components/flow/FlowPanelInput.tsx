@@ -58,7 +58,7 @@ export default function FlowPanelInput({
 
   const handleAction = () => {
     if (canRetry) {
-      onRetry?.(retryMessageId as string);
+      onRetry?.(retryMessageId!);
       return;
     }
     onSend();

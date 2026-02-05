@@ -1,6 +1,11 @@
 import { ipcRenderer } from "electron";
 
-type SelectionRect = { x: number; y: number; width: number; height: number };
+interface SelectionRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 interface SelectionPayload {
   text: string;

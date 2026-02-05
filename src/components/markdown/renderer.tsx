@@ -12,7 +12,10 @@ import remarkMath from "remark-math";
 import { cn } from "@/lib/utils";
 import { mdxComponents } from "@/components/markdown/components/mdx-components";
 
-type TextRange = { start: number; end: number };
+interface TextRange {
+  start: number;
+  end: number;
+}
 
 const collapseWhitespace = (input: string) => input.replace(/\s+/g, " ").trim();
 

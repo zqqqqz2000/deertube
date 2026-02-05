@@ -6,15 +6,20 @@ process.once('loaded', () => {
 })
 
 // --------- Expose some API to the Renderer process ---------
-type IpcListener = (event: IpcRendererEvent, ...args: unknown[]) => void
 
 contextBridge.exposeInMainWorld('ipcRenderer', {
-  on(channel: string, listener: IpcListener) {
+  on(
+    channel: string,
+    listener: (event: IpcRendererEvent, ...args: unknown[]) => void,
+  ) {
     return ipcRenderer.on(channel, (event: IpcRendererEvent, ...args: unknown[]) =>
       listener(event, ...args),
     )
   },
-  off(channel: string, listener: IpcListener) {
+  off(
+    channel: string,
+    listener: (event: IpcRendererEvent, ...args: unknown[]) => void,
+  ) {
     return ipcRenderer.off(channel, listener)
   },
   send(channel: string, ...args: unknown[]) {
@@ -28,7 +33,12 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
   // ...
 })
 
-type SelectionRect = { x: number; y: number; width: number; height: number }
+interface SelectionRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
 interface SelectionPayload {
   text: string
   url: string

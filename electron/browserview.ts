@@ -272,7 +272,6 @@ class BrowserViewController {
     }
     this.window.contentView.removeChildView(view);
     this.senderToTab.delete(view.webContents.id);
-    view.webContents.destroy();
     this.views.delete(tabId);
     this.viewState.delete(tabId);
   }

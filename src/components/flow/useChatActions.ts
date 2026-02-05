@@ -390,7 +390,7 @@ export function useChatActions({
             titleShort: node.titleShort,
             titleTiny: node.titleTiny,
             excerpt: node.excerpt,
-            responseId: node.responseId,
+            responseId: node.responseId ?? "",
           },
           width: INSIGHT_NODE_WIDTH,
         }));
@@ -544,7 +544,7 @@ export function useChatActions({
 
 function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
   const metadata =
-    message.status || message.error
+    message.status ?? message.error
       ? {
           status: message.status,
           error: message.error,

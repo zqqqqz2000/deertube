@@ -129,6 +129,11 @@ const isHttpUrl = (value: string) => {
   }
 };
 
+const normalizeBrowserLabel = (label?: string) => {
+  const trimmed = label?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+};
+
 const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => {
   const ids = new Set<string>();
   const visit = (current?: FlexLayoutNode) => {
@@ -296,41 +301,44 @@ const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
 const createSingleBrowserLayoutModel = (
   tabId: string,
   label?: string,
-): IJsonModel => ({
-  global: {
-    tabEnableFloat: false,
-    tabEnableClose: true,
-    tabSetEnableClose: false,
-    tabSetEnableDeleteWhenEmpty: true,
-    tabSetMinWidth: 100,
-    tabSetMinHeight: 100,
-    borderMinSize: 100,
-  },
-  borders: [],
-  layout: {
-    type: "row",
-    weight: TOTAL_LAYOUT_WEIGHT,
-    children: [
-      {
-        type: "tabset",
-        id: GRAPH_TABSET_ID,
-        weight: TOTAL_LAYOUT_WEIGHT,
-        selected: 0,
-        enableClose: false,
-        enableDeleteWhenEmpty: true,
-        children: [
-          {
-            type: "tab",
-            id: tabId,
-            name: label?.trim() || "Browser",
-            component: `${BROWSER_TAB_PREFIX}${tabId}`,
-            enableClose: true,
-          },
-        ],
-      },
-    ],
-  },
-});
+): IJsonModel => {
+  const resolvedLabel = normalizeBrowserLabel(label);
+  return {
+    global: {
+      tabEnableFloat: false,
+      tabEnableClose: true,
+      tabSetEnableClose: false,
+      tabSetEnableDeleteWhenEmpty: true,
+      tabSetMinWidth: 100,
+      tabSetMinHeight: 100,
+      borderMinSize: 100,
+    },
+    borders: [],
+    layout: {
+      type: "row",
+      weight: TOTAL_LAYOUT_WEIGHT,
+      children: [
+        {
+          type: "tabset",
+          id: GRAPH_TABSET_ID,
+          weight: TOTAL_LAYOUT_WEIGHT,
+          selected: 0,
+          enableClose: false,
+          enableDeleteWhenEmpty: true,
+          children: [
+            {
+              type: "tab",
+              id: tabId,
+              name: resolvedLabel ?? "Browser",
+              component: `${BROWSER_TAB_PREFIX}${tabId}`,
+              enableClose: true,
+            },
+          ],
+        },
+      ],
+    },
+  };
+};
 
 function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
   const [loadedState, setLoadedState] = useState<ProjectState | null>(null);
@@ -733,10 +741,11 @@ function FlowWorkspaceInner({
         return;
       }
       const tabId = `browser-${crypto.randomUUID()}`;
+      const resolvedLabel = normalizeBrowserLabel(label);
       const nextTab: BrowserViewTabState = {
         id: tabId,
         url: normalized,
-        title: label?.trim() || undefined,
+        title: resolvedLabel,
       };
       setBrowserTabs((prev) => [...prev, nextTab]);
 
@@ -746,7 +755,7 @@ function FlowWorkspaceInner({
       const tab: IJsonTabNode = {
         type: "tab",
         id: tabId,
-        name: label?.trim() || "Browser",
+        name: resolvedLabel ?? "Browser",
         component: `${BROWSER_TAB_PREFIX}${tabId}`,
         enableClose: true,
       };
@@ -1178,8 +1187,9 @@ function FlowWorkspaceInner({
       const browserTabId = parseBrowserTabId(tabId);
       if (browserTabId) {
         const tab = browserTabMap.get(browserTabId);
+        const resolvedLabel = normalizeBrowserLabel(tab?.title);
         const label =
-          tab?.title?.trim() ||
+          resolvedLabel ??
           (() => {
             if (!tab?.url) {
               return "Browser";
