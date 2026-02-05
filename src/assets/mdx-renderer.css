@@ -81,7 +81,7 @@
 }
 
 .markdown-body .node-ref-link {
-  color: rgb(186, 230, 253);
+  color: inherit;
   text-decoration-line: underline;
   text-decoration-color: rgba(125, 211, 252, 0.8);
   text-underline-offset: 3px;
@@ -89,7 +89,7 @@
 }
 
 .markdown-body .node-ref-link:hover {
-  color: rgb(240, 249, 255);
+  color: inherit;
   text-decoration-color: rgba(125, 211, 252, 1);
 }
 
