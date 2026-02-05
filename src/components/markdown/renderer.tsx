@@ -19,6 +19,43 @@ interface TextRange {
 
 const collapseWhitespace = (input: string) => input.replace(/\s+/g, " ").trim();
 
+const markdownSymbolSet = new Set([
+  "\\",
+  "`",
+  "*",
+  "_",
+  "~",
+  "[",
+  "]",
+  "(",
+  ")",
+  "{",
+  "}",
+  "<",
+  ">",
+  "#",
+  "+",
+  "=",
+  "|",
+  "!",
+  "-",
+]);
+
+const stripMarkdownSymbols = (input: string) => {
+  if (!input) {
+    return input;
+  }
+  const chars: string[] = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    if (markdownSymbolSet.has(char)) {
+      continue;
+    }
+    chars.push(char);
+  }
+  return chars.join("");
+};
+
 const stripMarkdownSyntax = (input: string) => {
   let text = input;
   text = text.replace(/```[^\n]*\n?/g, "");
@@ -33,7 +70,7 @@ const stripMarkdownSyntax = (input: string) => {
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^>\s?/gm, "");
   text = text.replace(/^(\s*([-*+]|\d+[.)]))\s+/gm, "");
-  return text;
+  return stripMarkdownSymbols(text);
 };
 
 const buildNeedleVariants = (input: string) => {
@@ -89,6 +126,9 @@ const normalizeWithMap = (input: string) => {
       inSpace = true;
       continue;
     }
+    if (markdownSymbolSet.has(char)) {
+      continue;
+    }
     sawContent = true;
     inSpace = false;
     normalized += char.toLowerCase();
@@ -101,8 +141,28 @@ const normalizeWithMap = (input: string) => {
   return { normalized, map };
 };
 
+const normalizeCompactWithMap = (input: string) => {
+  const map: number[] = [];
+  let normalized = "";
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    if (markdownSymbolSet.has(char)) {
+      continue;
+    }
+    if (/\s/.test(char)) {
+      continue;
+    }
+    normalized += char.toLowerCase();
+    map.push(i);
+  }
+  return { normalized, map };
+};
+
 const normalizeText = (input: string) =>
-  collapseWhitespace(input).toLowerCase();
+  collapseWhitespace(stripMarkdownSymbols(input)).toLowerCase();
+
+const normalizeCompactText = (input: string) =>
+  stripMarkdownSymbols(input).replace(/\s+/g, "").toLowerCase();
 
 const findNormalizedRanges = (
   haystack: string,
@@ -117,6 +177,33 @@ const findNormalizedRanges = (
     return [];
   }
   if (target.length < 3) {
+    return [];
+  }
+  const ranges: TextRange[] = [];
+  let index = 0;
+  while (index < normalized.length) {
+    const matchIndex = normalized.indexOf(target, index);
+    if (matchIndex === -1) {
+      break;
+    }
+    const start = map[matchIndex];
+    const end = map[matchIndex + target.length - 1] + 1;
+    ranges.push({ start, end });
+    index = matchIndex + target.length;
+  }
+  return ranges;
+};
+
+const findCompactRanges = (haystack: string, needle: string): TextRange[] => {
+  if (!needle) {
+    return [];
+  }
+  const { normalized, map } = normalizeCompactWithMap(haystack);
+  const target = normalizeCompactText(needle);
+  if (!target) {
+    return [];
+  }
+  if (target.length < 6) {
     return [];
   }
   const ranges: TextRange[] = [];
@@ -172,6 +259,12 @@ const findFlexibleRanges = (haystack: string, needle: string): TextRange[] => {
     const normalized = findNormalizedRanges(haystack, variant);
     if (normalized.length) {
       return normalized;
+    }
+  }
+  for (const variant of variants) {
+    const compact = findCompactRanges(haystack, variant);
+    if (compact.length) {
+      return compact;
     }
   }
   return [];
