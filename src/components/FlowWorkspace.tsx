@@ -150,6 +150,46 @@ const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => 
   return ids;
 };
 
+const collectVisibleBrowserTabIds = (
+  node: FlexLayoutNode | undefined,
+): Set<string> => {
+  const ids = new Set<string>();
+  const visit = (current?: FlexLayoutNode) => {
+    if (!current) {
+      return;
+    }
+    if (current.type === "tabset" && Array.isArray(current.children)) {
+      const selectedValue = current.selected;
+      let selectedNode: FlexLayoutNode | undefined;
+      if (typeof selectedValue === "number" && current.children[selectedValue]) {
+        selectedNode = current.children[selectedValue];
+      } else if (typeof selectedValue === "string") {
+        selectedNode = current.children.find(
+          (child) =>
+            child.type === "tab" &&
+            (child.id === selectedValue || child.component === selectedValue),
+        );
+      }
+      if (!selectedNode) {
+        selectedNode = current.children[0];
+      }
+      if (selectedNode?.type === "tab") {
+        const component = selectedNode.component ?? selectedNode.id;
+        const tabId = component ? parseBrowserTabId(String(component)) : null;
+        if (tabId) {
+          ids.add(tabId);
+        }
+      }
+      return;
+    }
+    if (current.children) {
+      current.children.forEach((child) => visit(child));
+    }
+  };
+  visit(node);
+  return ids;
+};
+
 const hasTab = (layout: FlexLayoutNode | undefined, tabId: string): boolean => {
   const node = findLayoutNode(layout, tabId);
   return Boolean(node && node.type === "tab");
@@ -393,7 +433,10 @@ function FlowWorkspaceInner({
   const [browserSelection, setBrowserSelection] =
     useState<BrowserViewSelection | null>(null);
   const previousBrowserTabIdsRef = useRef<Set<string>>(new Set());
+  const visibleBrowserTabsRef = useRef<Set<string>>(new Set());
   const openedBrowserTabsRef = useRef<Set<string>>(new Set());
+  const browserTabsRef = useRef<BrowserViewTabState[]>([]);
+  const browserBoundsRef = useRef<Record<string, BrowserViewBounds>>({});
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
@@ -472,6 +515,14 @@ function FlowWorkspaceInner({
     [browserTabs],
   );
 
+  useEffect(() => {
+    browserTabsRef.current = browserTabs;
+  }, [browserTabs]);
+
+  useEffect(() => {
+    browserBoundsRef.current = browserBounds;
+  }, [browserBounds]);
+
   const selectedResponseId = useMemo(() => {
     const selectedNode = nodes.find((node) => node.id === selectedId);
     if (!selectedNode || selectedNode.type !== "insight") {
@@ -493,6 +544,8 @@ function FlowWorkspaceInner({
   useEffect(() => {
     const layout = layoutModel.layout as FlexLayoutNode | undefined;
     const existingIds = collectBrowserTabIds(layout);
+    const visibleIds = collectVisibleBrowserTabIds(layout);
+    visibleBrowserTabsRef.current = visibleIds;
     const previousIds = previousBrowserTabIdsRef.current;
     previousIds.forEach((tabId) => {
       if (!existingIds.has(tabId)) {
@@ -510,6 +563,42 @@ function FlowWorkspaceInner({
         }
       });
       return next;
+    });
+    const boundsMap = browserBoundsRef.current;
+    const tabs = browserTabsRef.current;
+    const tabLookup = new Map(tabs.map((tab) => [tab.id, tab]));
+
+    existingIds.forEach((tabId) => {
+      if (!visibleIds.has(tabId)) {
+        trpc.browserView.hideTab.mutate({ tabId }).catch(() => undefined);
+      }
+    });
+
+    visibleIds.forEach((tabId) => {
+      const tab = tabLookup.get(tabId);
+      const bounds = boundsMap[tabId];
+      if (!tab || !bounds || bounds.width <= 1 || bounds.height <= 1) {
+        return;
+      }
+      if (!openedBrowserTabsRef.current.has(tabId)) {
+        trpc.browserView
+          .open
+          .mutate({
+            tabId,
+            url: tab.url,
+            bounds,
+          })
+          .catch(() => undefined);
+        openedBrowserTabsRef.current.add(tabId);
+        return;
+      }
+      trpc.browserView
+        .updateBounds
+        .mutate({
+          tabId,
+          bounds,
+        })
+        .catch(() => undefined);
     });
   }, [layoutModel]);
 
