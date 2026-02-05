@@ -23,6 +23,7 @@ import { AdditionalMessage } from "@/modules/chat/components/additional-message"
 import { DateItem } from "@/modules/chat/components/date-item";
 import {
   ChatToolbar,
+  ChatToolbarAddonStart,
   ChatToolbarAddonEnd,
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
@@ -160,6 +161,16 @@ export default function ChatHistoryPanel({
     }
     return data.excerpt ?? "";
   }, [selectedNode]);
+  const selectedTagLabel = useMemo(() => {
+    if (!selectedSummary) {
+      return "";
+    }
+    const title =
+      typeof selectedSummary.title === "string" && selectedSummary.title.trim().length > 0
+        ? selectedSummary.title.trim()
+        : selectedSummary.kind;
+    return title ? `@${title}` : "";
+  }, [selectedSummary]);
   const nodeExcerptRefs = useMemo(
     () =>
       nodes
@@ -383,27 +394,7 @@ export default function ChatHistoryPanel({
   );
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/85 shadow-2xl shadow-black/25 backdrop-blur">
-      {selectedSummary && (
-        <button
-          type="button"
-          className="mx-3 mt-3 flex items-start gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2 text-left transition hover:border-border hover:bg-card/80"
-          onClick={handleFocusNode}
-        >
-          <div className="mt-1 h-2.5 w-2.5 rounded-full bg-amber-400/80 shadow-[0_0_12px_rgba(251,191,36,0.45)]" />
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground/70">
-              Selected {selectedSummary.kind}
-            </div>
-            <div className="truncate text-sm font-semibold text-foreground">
-              {selectedSummary.title}
-            </div>
-            <div className="line-clamp-2 text-xs text-muted-foreground">
-              {selectedSummary.subtitle}
-            </div>
-          </div>
-        </button>
-      )}
+    <div className="relative flex h-full w-full flex-col overflow-hidden border border-border/70 bg-background/85 shadow-2xl shadow-black/25 backdrop-blur">
       <Chat>
         <ChatMessages
           ref={scrollRef}
@@ -734,12 +725,34 @@ export default function ChatHistoryPanel({
           </div>
         )}
         <ChatToolbar>
+          {selectedTagLabel && (
+            <ChatToolbarAddonStart>
+              <span
+                className="max-w-[140px] truncate rounded-full border border-border/70 bg-muted/40 px-2 py-1 text-[11px] font-medium text-foreground/80 @md/chat:max-w-[220px]"
+                title={selectedTagLabel}
+              >
+                {selectedTagLabel}
+              </span>
+            </ChatToolbarAddonStart>
+          )}
           <ChatToolbarTextarea
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
             placeholder="Ask a question..."
             disabled={busy}
             onKeyDown={(event) => {
+              if (
+                event.key === "Backspace" &&
+                selectedSummary &&
+                onRequestClearSelection
+              ) {
+                const target = event.currentTarget;
+                if (target.selectionStart === 0 && target.selectionEnd === 0) {
+                  event.preventDefault();
+                  onRequestClearSelection();
+                  return;
+                }
+              }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 onSend();
