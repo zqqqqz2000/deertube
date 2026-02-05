@@ -263,7 +263,7 @@ export default function ChatHistoryPanel({
       top: scrollRef.current.scrollHeight,
       behavior,
     });
-  }, []);
+  }, [scrollRef]);
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) {
@@ -273,7 +273,7 @@ export default function ChatHistoryPanel({
     const threshold = 24;
     const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
     setIsAtBottom(atBottom);
-  }, []);
+  }, [scrollRef]);
 
   useEffect(() => {
     if (!scrollRef.current) {
@@ -303,6 +303,7 @@ export default function ChatHistoryPanel({
     focusSignal,
     sortedMessages.length,
     isAtBottom,
+    scrollRef,
     scrollToBottom,
   ]);
 
