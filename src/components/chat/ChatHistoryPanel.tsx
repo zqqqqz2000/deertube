@@ -27,6 +27,7 @@ import {
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
 import { ArrowDown } from "lucide-react";
+import { useStickToBottom } from "use-stick-to-bottom";
 
 interface ChatHistoryPanelProps {
   messages: ChatMessage[];
@@ -65,7 +66,7 @@ export default function ChatHistoryPanel({
   onSend,
   onRetry,
 }: ChatHistoryPanelProps) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const { scrollRef, contentRef } = useStickToBottom();
   const dragOffset = useRef<{ x: number; y: number } | null>(null);
   const resizeOffset = useRef<{
     x: number;
@@ -549,6 +550,7 @@ export default function ChatHistoryPanel({
             ref={scrollRef}
             className="gap-2 px-2"
             onScroll={handleScroll}
+            contentRef={contentRef}
           >
             {messages.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
