@@ -543,9 +543,17 @@ export function useChatActions({
 }
 
 function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
+  const metadata =
+    message.status || message.error
+      ? {
+          status: message.status,
+          error: message.error,
+        }
+      : undefined;
   return {
     id: message.id,
     role: message.role,
+    metadata,
     parts: message.content
       ? [
           {
@@ -555,6 +563,21 @@ function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
         ]
       : [],
   };
+}
+
+function extractMessageMetadata(
+  metadata: unknown,
+): { status?: ChatMessage["status"]; error?: string } {
+  if (!metadata || typeof metadata !== "object") {
+    return {};
+  }
+  const value = metadata as Record<string, unknown>;
+  const status =
+    value.status === "pending" || value.status === "complete" || value.status === "failed"
+      ? (value.status as ChatMessage["status"])
+      : undefined;
+  const error = typeof value.error === "string" ? value.error : undefined;
+  return { status, error };
 }
 
 function extractUiMessageText(message: DeertubeUIMessage): string {
@@ -590,11 +613,15 @@ function mapUiMessagesToChat(
           ? message.createdAt.toISOString()
           : String(message.createdAt)
         : new Date().toISOString();
+    const { status: persistedStatus, error: persistedError } =
+      extractMessageMetadata(message.metadata);
     return {
       id: message.id,
       role: message.role as ChatMessage["role"],
       content,
       createdAt,
+      status: persistedStatus,
+      error: persistedError,
     };
   });
 
@@ -607,11 +634,14 @@ function mapUiMessagesToChat(
     const lastAssistant = mapped[lastAssistantIndex];
     if (status === "streaming" || status === "submitted") {
       lastAssistant.status = "pending";
+      lastAssistant.error = undefined;
     } else if (status === "error") {
       lastAssistant.status = "failed";
       lastAssistant.error = error?.message ?? "Request failed";
     } else {
-      lastAssistant.status = "complete";
+      if (!lastAssistant.status) {
+        lastAssistant.status = "complete";
+      }
     }
   }
 

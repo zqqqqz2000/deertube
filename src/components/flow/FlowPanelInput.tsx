@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Loader2, RotateCw, Send } from "lucide-react";
 
 interface FlowPanelInputProps {
   visible: boolean;
@@ -13,6 +14,8 @@ interface FlowPanelInputProps {
   busy: boolean;
   onPromptChange: (value: string) => void;
   onSend: () => void;
+  onRetry?: (messageId: string) => void;
+  retryMessageId?: string | null;
   onFocusZoom?: (focusInput: () => void) => void;
 }
 
@@ -26,6 +29,8 @@ export default function FlowPanelInput({
   busy,
   onPromptChange,
   onSend,
+  onRetry,
+  retryMessageId = null,
   onFocusZoom,
 }: FlowPanelInputProps) {
   const isMicro = zoom <= 0.55;
@@ -39,6 +44,25 @@ export default function FlowPanelInput({
       : "Ask a research question...";
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const useTextarea = !isMicro && !isCompact;
+  const canRetry = Boolean(retryMessageId && onRetry);
+  const buttonSizeClass = isMicro
+    ? "h-6 w-6"
+    : isCompact
+      ? "h-7 w-7"
+      : "h-8 w-8";
+  const iconSizeClass = isMicro
+    ? "[&_svg]:size-3"
+    : isCompact
+      ? "[&_svg]:size-3.5"
+      : "[&_svg]:size-4";
+
+  const handleAction = () => {
+    if (canRetry) {
+      onRetry?.(retryMessageId as string);
+      return;
+    }
+    onSend();
+  };
 
   const adjustHeight = () => {
     const el = textareaRef.current;
@@ -71,7 +95,7 @@ export default function FlowPanelInput({
     >
       <div
         className={`flex items-center gap-2 rounded-xl border border-border/70 bg-card/80 shadow-lg shadow-black/20 ${
-          isMicro ? "px-1.5 py-1" : isCompact ? "px-2 py-1" : "px-2 py-1.5"
+          isMicro ? "px-1 py-0.5" : isCompact ? "px-1.5 py-0.5" : "px-2 py-1"
         }`}
       >
         {useTextarea ? (
@@ -85,7 +109,7 @@ export default function FlowPanelInput({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                onSend();
+                handleAction();
               }
             }}
             disabled={busy}
@@ -108,7 +132,7 @@ export default function FlowPanelInput({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                onSend();
+                handleAction();
               }
             }}
             disabled={busy}
@@ -119,18 +143,21 @@ export default function FlowPanelInput({
           />
         )}
         <Button
-          size="sm"
-          className={`rounded-md bg-primary font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 ${
-            isMicro
-              ? "h-6 px-2 text-[10px]"
-              : isCompact
-                ? "h-7 px-3 text-[11px]"
-                : "h-8 px-4 text-xs"
-          }`}
-          onClick={onSend}
-          disabled={busy || !prompt.trim()}
+          size="icon"
+          variant={canRetry ? "destructive" : "default"}
+          className={`rounded-md ${buttonSizeClass} ${iconSizeClass}`}
+          onClick={handleAction}
+          disabled={busy || (!canRetry && !prompt.trim())}
+          aria-label={canRetry ? "Retry request" : "Send message"}
+          title={canRetry ? "Retry request" : "Send message"}
         >
-          {busy ? "..." : "Send"}
+          {busy ? (
+            <Loader2 className="animate-spin" />
+          ) : canRetry ? (
+            <RotateCw />
+          ) : (
+            <Send />
+          )}
         </Button>
       </div>
     </div>
