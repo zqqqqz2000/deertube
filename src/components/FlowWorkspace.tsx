@@ -523,6 +523,16 @@ function FlowWorkspaceInner({
     browserBoundsRef.current = browserBounds;
   }, [browserBounds]);
 
+  useEffect(() => {
+    return () => {
+      const tabs = browserTabsRef.current;
+      tabs.forEach((tab) => {
+        trpc.browserView.close.mutate({ tabId: tab.id }).catch(() => undefined);
+      });
+      trpc.browserView.hide.mutate().catch(() => undefined);
+    };
+  }, []);
+
   const selectedResponseId = useMemo(() => {
     const selectedNode = nodes.find((node) => node.id === selectedId);
     if (!selectedNode || selectedNode.type !== "insight") {
