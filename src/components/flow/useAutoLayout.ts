@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ReactFlowInstance } from "reactflow";
-import { layoutFlowWithElk } from "../../lib/elkLayout";
+import { getNodeSize, layoutFlowWithElk } from "../../lib/elkLayout";
 import type { FlowEdge, FlowNode } from "../../types/flow";
 
 interface UseAutoLayoutOptions {
@@ -8,6 +8,7 @@ interface UseAutoLayoutOptions {
   nodes: FlowNode[];
   edges: FlowEdge[];
   setNodes: (updater: (prev: FlowNode[]) => FlowNode[]) => void;
+  focusNodeId?: string | null;
 }
 
 export function useAutoLayout({
@@ -15,6 +16,7 @@ export function useAutoLayout({
   nodes,
   edges,
   setNodes,
+  focusNodeId = null,
 }: UseAutoLayoutOptions) {
   const [isLayouting, setIsLayouting] = useState(false);
 
@@ -29,6 +31,11 @@ export function useAutoLayout({
       direction: "RIGHT",
       useExistingPositions: true,
     });
+    const focusNode = focusNodeId
+      ? nodes.find((node) => node.id === focusNodeId) ?? null
+      : null;
+    const focusPosition = focusNodeId ? positions[focusNodeId] ?? focusNode?.position : null;
+    const focusSize = getNodeSize(focusNode);
     setNodes((prev) =>
       prev.map((node) => ({
         ...node,
@@ -36,10 +43,18 @@ export function useAutoLayout({
       })),
     );
     requestAnimationFrame(() => {
-      flowInstance?.fitView({ padding: 0.2, duration: 400 });
+      if (!flowInstance || !focusNodeId || !focusPosition) {
+        return;
+      }
+      const zoom = flowInstance.getZoom();
+      flowInstance.setCenter(
+        focusPosition.x + focusSize.width / 2,
+        focusPosition.y + focusSize.height / 2,
+        { zoom, duration: 350 },
+      );
     });
     setIsLayouting(false);
-  }, [edges, flowInstance, isLayouting, nodes, setNodes]);
+  }, [edges, flowInstance, focusNodeId, isLayouting, nodes, setNodes]);
 
   return { isLayouting, handleAutoLayout };
 }

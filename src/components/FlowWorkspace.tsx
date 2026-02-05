@@ -349,6 +349,7 @@ function FlowWorkspaceInner({
     nodes,
     edges,
     setNodes,
+    focusNodeId: selectedId,
   });
   const { handleNodeEnter, handleNodeLeave } = usePreviewHover();
   const retryQuestion = useCallback(() => undefined, []);
@@ -649,6 +650,7 @@ function FlowWorkspaceInner({
             onNodeMouseLeave={handleNodeLeave}
             onNodeDoubleClick={handleNodeDoubleClick}
             zoomOnDoubleClick={false}
+            deleteKeyCode={null}
             defaultEdgeOptions={{
               type: "smoothstep",
               style: { stroke: "var(--flow-edge)", strokeWidth: 1.6 },
