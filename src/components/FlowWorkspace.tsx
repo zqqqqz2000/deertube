@@ -503,6 +503,9 @@ function FlowWorkspaceInner({
   const browserTabsRef = useRef<BrowserViewTabState[]>([]);
   const browserBoundsRef = useRef<Record<string, BrowserViewBounds>>({});
   const browserHighlightTimersRef = useRef<Set<number>>(new Set());
+  const referenceResolveCacheRef = useRef<
+    Map<string, DeepResearchResolvedReference | null>
+  >(new Map());
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
@@ -752,6 +755,10 @@ function FlowWorkspaceInner({
   useEffect(() => {
     browserBoundsRef.current = browserBounds;
   }, [browserBounds]);
+
+  useEffect(() => {
+    referenceResolveCacheRef.current.clear();
+  }, [project.path]);
 
   useEffect(() => {
     const highlightTimers = browserHighlightTimersRef.current;
@@ -1047,38 +1054,74 @@ function FlowWorkspaceInner({
     [],
   );
 
+  const resolveBrowserReference = useCallback(
+    async (uri: string) => {
+      const normalizedUri = uri.trim();
+      if (!normalizedUri) {
+        return null;
+      }
+      const isDeertubeRef = normalizedUri.toLowerCase().startsWith("deertube://");
+      if (!isDeertubeRef && !isDeepResearchRefUri(normalizedUri)) {
+        return null;
+      }
+      const cached = referenceResolveCacheRef.current.get(normalizedUri);
+      if (cached !== undefined) {
+        return cached;
+      }
+      try {
+        const result = await trpc.deepSearch.resolveReference.mutate({
+          projectPath: project.path,
+          uri: normalizedUri,
+        });
+        const reference = result.reference ?? null;
+        referenceResolveCacheRef.current.set(normalizedUri, reference);
+        return reference;
+      } catch {
+        referenceResolveCacheRef.current.set(normalizedUri, null);
+        return null;
+      }
+    },
+    [project.path],
+  );
+
+  const resolveReferencePreview = useCallback(
+    async (uri: string) => {
+      const reference = await resolveBrowserReference(uri);
+      if (!reference) {
+        return null;
+      }
+      return {
+        title: reference.title,
+        url: reference.url,
+        text: reference.text,
+        startLine: reference.startLine,
+        endLine: reference.endLine,
+      };
+    },
+    [resolveBrowserReference],
+  );
+
   const openBrowserReference = useCallback(
     (rawUrl: string, label?: string) => {
       if (isHttpUrl(rawUrl)) {
         openBrowserUrl(rawUrl, label);
         return;
       }
-      const isDeertubeRef = rawUrl.trim().toLowerCase().startsWith("deertube://");
-      if (!isDeertubeRef && !isDeepResearchRefUri(rawUrl)) {
-        return;
-      }
-      trpc.deepSearch.resolveReference
-        .mutate({
-          projectPath: project.path,
-          uri: rawUrl,
-        })
-        .then((result) => {
-          const reference = result.reference;
-          if (!reference) {
-            return;
-          }
-          const tabId = openBrowserUrl(
-            reference.url,
-            reference.title ?? label ?? `Ref ${reference.refId}`,
-          );
-          if (!tabId) {
-            return;
-          }
-          scheduleBrowserReferenceHighlight(tabId, reference);
-        })
-        .catch(() => undefined);
+      void resolveBrowserReference(rawUrl).then((reference) => {
+        if (!reference) {
+          return;
+        }
+        const tabId = openBrowserUrl(
+          reference.url,
+          reference.title ?? label ?? `Ref ${reference.refId}`,
+        );
+        if (!tabId) {
+          return;
+        }
+        scheduleBrowserReferenceHighlight(tabId, reference);
+      });
     },
-    [openBrowserUrl, project.path, scheduleBrowserReferenceHighlight],
+    [openBrowserUrl, resolveBrowserReference, scheduleBrowserReferenceHighlight],
   );
 
   const handleBrowserBoundsChange = useCallback(
@@ -1396,6 +1439,7 @@ function FlowWorkspaceInner({
           nodes={nodes}
           onFocusNode={handleFocusNode}
           onReferenceClick={openBrowserReference}
+          onResolveReferencePreview={resolveReferencePreview}
           browserSelection={browserSelection}
           onInsertBrowserSelection={handleInsertBrowserSelection}
           scrollToBottomSignal={chatScrollSignal}

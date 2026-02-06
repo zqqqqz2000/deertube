@@ -18,7 +18,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Chat } from "@/modules/chat/components/chat";
 import { ChatMessages } from "@/modules/chat/components/chat-messages";
-import { MarkdownRenderer } from "@/components/markdown/renderer";
+import {
+  MarkdownRenderer,
+  type MarkdownReferencePreview,
+} from "@/components/markdown/renderer";
 import {
   ChatEvent,
   ChatEventAddon,
@@ -61,6 +64,9 @@ interface ChatHistoryPanelProps {
   nodes?: FlowNode[];
   onFocusNode?: (nodeId: string) => void;
   onReferenceClick?: (url: string, label?: string) => void;
+  onResolveReferencePreview?: (
+    uri: string,
+  ) => Promise<MarkdownReferencePreview | null>;
   browserSelection?: BrowserViewSelection | null;
   onInsertBrowserSelection?: (selection: BrowserViewSelection) => void;
   scrollToBottomSignal?: number;
@@ -245,6 +251,7 @@ export default function ChatHistoryPanel({
   nodes = [],
   onFocusNode,
   onReferenceClick,
+  onResolveReferencePreview,
   browserSelection,
   onInsertBrowserSelection,
   scrollToBottomSignal = 0,
@@ -1064,6 +1071,7 @@ export default function ChatHistoryPanel({
                       }
                       onNodeLinkClick={handleNodeLinkClick}
                       onReferenceClick={onReferenceClick}
+                      resolveReferencePreview={onResolveReferencePreview}
                       resolveNodeLabel={resolveNodeLabel}
                       nodeExcerptRefs={nodeExcerptRefs}
                     />

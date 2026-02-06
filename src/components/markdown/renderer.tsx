@@ -1,7 +1,8 @@
 import "katex/dist/katex.min.css";
 import "@/assets/github-markdown.css";
 import "@/assets/mdx-renderer.css";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useRef, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { isValidElement } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import type { Pluggable } from "unified";
@@ -15,12 +16,50 @@ import { mdxComponents } from "@/components/markdown/components/mdx-components";
 import { rehypeHighlightExcerpt } from "@/components/markdown/rehype-highlight-excerpt";
 import { rehypeLinkNodeExcerpts } from "@/components/markdown/rehype-link-node-excerpts";
 
+export interface MarkdownReferencePreview {
+  title?: string;
+  url: string;
+  text: string;
+  startLine: number;
+  endLine: number;
+}
+
+interface ReferenceTooltipLoadingState {
+  status: "loading";
+  uri: string;
+  left: number;
+  top: number;
+}
+
+interface ReferenceTooltipReadyState {
+  status: "ready";
+  uri: string;
+  left: number;
+  top: number;
+  reference: MarkdownReferencePreview;
+}
+
+type ReferenceTooltipState = ReferenceTooltipLoadingState | ReferenceTooltipReadyState;
+
+const TOOLTIP_WIDTH = 320;
+const TOOLTIP_HEIGHT = 184;
+const TOOLTIP_MARGIN = 12;
+const TOOLTIP_GAP = 10;
+
+const resolveReferenceTitle = (reference: MarkdownReferencePreview): string => {
+  const trimmed = reference.title?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "Reference";
+};
+
 interface MarkdownRendererProps {
   source: string;
   className?: string;
   highlightExcerpt?: string;
   onNodeLinkClick?: (nodeId: string) => void;
   onReferenceClick?: (url: string, label?: string) => void;
+  resolveReferencePreview?: (
+    uri: string,
+  ) => Promise<MarkdownReferencePreview | null>;
   resolveNodeLabel?: (nodeId: string) => string | undefined;
   nodeExcerptRefs?: { id: string; text: string }[];
 }
@@ -32,9 +71,94 @@ export const MarkdownRenderer = memo(
     highlightExcerpt,
     onNodeLinkClick,
     onReferenceClick,
+    resolveReferencePreview,
     resolveNodeLabel,
     nodeExcerptRefs = [],
   }: MarkdownRendererProps) => {
+    const referencePreviewCacheRef = useRef<Map<string, MarkdownReferencePreview | null>>(
+      new Map(),
+    );
+    const referencePreviewTokenRef = useRef(0);
+    const [referenceTooltip, setReferenceTooltip] =
+      useState<ReferenceTooltipState | null>(null);
+
+    const resolveTooltipPosition = useCallback((target: HTMLElement) => {
+      const rect = target.getBoundingClientRect();
+      let left = rect.left;
+      let top = rect.bottom + TOOLTIP_GAP;
+      const maxLeft = window.innerWidth - TOOLTIP_WIDTH - TOOLTIP_MARGIN;
+      if (left > maxLeft) {
+        left = maxLeft;
+      }
+      if (left < TOOLTIP_MARGIN) {
+        left = TOOLTIP_MARGIN;
+      }
+      const maxTop = window.innerHeight - TOOLTIP_HEIGHT - TOOLTIP_MARGIN;
+      if (top > maxTop) {
+        top = rect.top - TOOLTIP_HEIGHT - TOOLTIP_GAP;
+      }
+      if (top < TOOLTIP_MARGIN) {
+        top = TOOLTIP_MARGIN;
+      }
+      return { left, top };
+    }, []);
+
+    const hideReferenceTooltip = useCallback(() => {
+      referencePreviewTokenRef.current += 1;
+      setReferenceTooltip(null);
+    }, []);
+
+    const showReferenceTooltip = useCallback(
+      async (uri: string, target: HTMLElement) => {
+        if (!resolveReferencePreview) {
+          return;
+        }
+        const { left, top } = resolveTooltipPosition(target);
+        const cached = referencePreviewCacheRef.current.get(uri);
+        if (cached !== undefined) {
+          if (!cached) {
+            setReferenceTooltip(null);
+            return;
+          }
+          setReferenceTooltip({
+            status: "ready",
+            uri,
+            left,
+            top,
+            reference: cached,
+          });
+          return;
+        }
+
+        const token = referencePreviewTokenRef.current + 1;
+        referencePreviewTokenRef.current = token;
+        setReferenceTooltip({
+          status: "loading",
+          uri,
+          left,
+          top,
+        });
+
+        const resolved = await resolveReferencePreview(uri).catch(() => null);
+        referencePreviewCacheRef.current.set(uri, resolved);
+        if (referencePreviewTokenRef.current !== token) {
+          return;
+        }
+        if (!resolved) {
+          setReferenceTooltip(null);
+          return;
+        }
+        setReferenceTooltip({
+          status: "ready",
+          uri,
+          left,
+          top,
+          reference: resolved,
+        });
+      },
+      [resolveReferencePreview, resolveTooltipPosition],
+    );
+
     const remarkPlugins = useMemo<Pluggable[]>(() => [remarkGfm, remarkMath], []);
     const rehypePlugins = useMemo<Pluggable[]>(() => {
       const plugins: Pluggable[] = [];
@@ -187,6 +311,7 @@ export const MarkdownRenderer = memo(
               : undefined);
           const normalizedHref = normalizeHref(rawHref);
           const nodeId = parseNodeHref(normalizedHref);
+          const isDeertubeReference = isDeertubeUrl(normalizedHref);
 
           if (nodeId) {
             const labelText = flattenText(children);
@@ -220,6 +345,17 @@ export const MarkdownRenderer = memo(
                   }
                   onReferenceClick(normalizedHref, labelText);
                 }}
+                onMouseEnter={(event) => {
+                  if (!normalizedHref || !isDeertubeReference || !resolveReferencePreview) {
+                    return;
+                  }
+                  void showReferenceTooltip(normalizedHref, event.currentTarget);
+                }}
+                onMouseLeave={() => {
+                  if (isDeertubeReference) {
+                    hideReferenceTooltip();
+                  }
+                }}
                 className={markdownLinkClassName}
                 title={normalizedHref ?? undefined}
               >
@@ -244,7 +380,14 @@ export const MarkdownRenderer = memo(
           );
         },
       };
-    }, [onNodeLinkClick, onReferenceClick, resolveNodeLabel]);
+    }, [
+      hideReferenceTooltip,
+      onNodeLinkClick,
+      onReferenceClick,
+      resolveNodeLabel,
+      resolveReferencePreview,
+      showReferenceTooltip,
+    ]);
 
     const handleArticleClick = useCallback(
       (event: React.MouseEvent<HTMLElement>) => {
@@ -296,6 +439,7 @@ export const MarkdownRenderer = memo(
         className={cn("markdown-body text-sm leading-relaxed", className)}
         onClick={handleArticleClick}
         onKeyDown={handleArticleKeyDown}
+        onMouseLeave={hideReferenceTooltip}
       >
         <MarkdownHooks
           remarkPlugins={remarkPlugins}
@@ -305,6 +449,39 @@ export const MarkdownRenderer = memo(
         >
           {resolvedSource.trimStart()}
         </MarkdownHooks>
+        {referenceTooltip && typeof document !== "undefined"
+          ? createPortal(
+              <div
+                className="pointer-events-none fixed z-[2147483000] h-[184px] w-[320px] overflow-hidden rounded-lg border border-border/80 bg-popover/95 p-3 shadow-2xl backdrop-blur"
+                style={{
+                  left: `${referenceTooltip.left}px`,
+                  top: `${referenceTooltip.top}px`,
+                }}
+              >
+                {referenceTooltip.status === "loading" ? (
+                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                    Loading reference...
+                  </div>
+                ) : (
+                  <div className="flex h-full flex-col">
+                    <div className="truncate text-xs font-semibold text-foreground">
+                      {resolveReferenceTitle(referenceTooltip.reference)}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {referenceTooltip.reference.url}
+                    </div>
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                      Lines {referenceTooltip.reference.startLine}-{referenceTooltip.reference.endLine}
+                    </div>
+                    <div className="mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap pr-1 text-xs leading-relaxed text-foreground/90">
+                      {referenceTooltip.reference.text}
+                    </div>
+                  </div>
+                )}
+              </div>,
+              document.body,
+            )
+          : null}
       </article>
     );
   },
