@@ -86,15 +86,166 @@ const sanitizeReferenceHighlight = (
 };
 
 function runReferenceHighlightScript(payload: { refId: number; text: string }) {
-  const markerAttribute = "data-deertube-ref-highlight";
+  const inlineMarkerAttribute = "data-deertube-inline-highlight";
+  const styleId = "deertube-ref-highlight-style";
   const normalize = (value: string): string =>
     value.toLowerCase().replace(/\s+/g, " ").trim();
-  const tokenized = (value: string): string[] =>
-    normalize(value)
+  const escapeRegex = (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tokenized = (value: string): string[] => {
+    const normalized = normalize(value);
+    const latinTokens = normalized
       .split(" ")
       .map((token) => token.trim())
-      .filter((token) => token.length >= 3)
-      .slice(0, 24);
+      .filter((token) => token.length >= 3);
+    const cjkTokens = normalized.match(/[\u4e00-\u9fff]{2,}/g) ?? [];
+    return Array.from(new Set([...latinTokens, ...cjkTokens])).slice(0, 36);
+  };
+  const extractPhrases = (excerpt: string): string[] => {
+    const lines = excerpt
+      .split(/\r?\n+/)
+      .map((line) => line.trim())
+      .filter((line) => line.length >= 8);
+    const sentenceParts = excerpt
+      .split(/[。！？!?;；]+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 10);
+    const merged = [excerpt.trim(), ...lines, ...sentenceParts]
+      .map((item) => item.replace(/\s+/g, " ").trim())
+      .filter((item) => item.length >= 8);
+    const unique = Array.from(new Set(merged));
+    unique.sort((a, b) => b.length - a.length);
+    return unique.slice(0, 12);
+  };
+  const ensureStyle = () => {
+    if (document.getElementById(styleId)) {
+      return;
+    }
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = `
+      mark[${inlineMarkerAttribute}="true"] {
+        background: rgba(0, 245, 255, 0.62) !important;
+        color: #00121a !important;
+        border-radius: 0.18em !important;
+        padding: 0 0.08em !important;
+        box-shadow: 0 0 0 1px rgba(0, 220, 255, 0.7) inset !important;
+      }
+    `;
+    document.head.appendChild(style);
+  };
+  const clearExistingHighlights = () => {
+    const marks = document.querySelectorAll<HTMLElement>(`mark[${inlineMarkerAttribute}="true"]`);
+    marks.forEach((mark) => {
+      const parent = mark.parentNode;
+      if (!parent) {
+        return;
+      }
+      parent.replaceChild(document.createTextNode(mark.textContent ?? ""), mark);
+      parent.normalize();
+    });
+  };
+  const collectTextNodes = (element: HTMLElement): Text[] => {
+    const textNodes: Text[] = [];
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          const parent = node.parentElement;
+          if (!parent) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          const tag = parent.tagName.toLowerCase();
+          if (tag === "script" || tag === "style" || tag === "noscript" || tag === "textarea") {
+            return NodeFilter.FILTER_REJECT;
+          }
+          if (!node.textContent || node.textContent.trim().length === 0) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      },
+    );
+    let node = walker.nextNode();
+    while (node) {
+      textNodes.push(node as Text);
+      node = walker.nextNode();
+    }
+    return textNodes;
+  };
+  const findRangeInText = (
+    text: string,
+    candidates: string[],
+  ): { start: number; end: number; phrase: string } | null => {
+    for (const candidate of candidates) {
+      const phrase = candidate.trim();
+      if (phrase.length < 4) {
+        continue;
+      }
+      const regex = new RegExp(escapeRegex(phrase).replace(/\s+/g, "\\s+"), "i");
+      const match = regex.exec(text);
+      if (match && typeof match.index === "number") {
+        return {
+          start: match.index,
+          end: match.index + match[0].length,
+          phrase,
+        };
+      }
+    }
+    return null;
+  };
+  const applyInlineHighlight = (
+    element: HTMLElement,
+    start: number,
+    end: number,
+  ): number => {
+    if (start < 0 || end <= start) {
+      return 0;
+    }
+    const textNodes = collectTextNodes(element);
+    if (textNodes.length === 0) {
+      return 0;
+    }
+    let cursor = 0;
+    let wrapped = 0;
+    textNodes.forEach((textNode) => {
+      const text = textNode.textContent ?? "";
+      if (!text) {
+        return;
+      }
+      const nodeStart = cursor;
+      const nodeEnd = cursor + text.length;
+      cursor = nodeEnd;
+      if (end <= nodeStart || start >= nodeEnd) {
+        return;
+      }
+      const overlapStart = Math.max(start, nodeStart);
+      const overlapEnd = Math.min(end, nodeEnd);
+      const localStart = overlapStart - nodeStart;
+      const localEnd = overlapEnd - nodeStart;
+      if (localEnd <= localStart) {
+        return;
+      }
+      let workingNode: Text = textNode;
+      if (localStart > 0) {
+        workingNode = workingNode.splitText(localStart);
+      }
+      if (localEnd - localStart < workingNode.length) {
+        workingNode.splitText(localEnd - localStart);
+      }
+      const parent = workingNode.parentNode;
+      if (!parent) {
+        return;
+      }
+      const mark = document.createElement("mark");
+      mark.setAttribute(inlineMarkerAttribute, "true");
+      parent.replaceChild(mark, workingNode);
+      mark.appendChild(workingNode);
+      wrapped += 1;
+    });
+    return wrapped;
+  };
 
   const excerpt = typeof payload.text === "string" ? payload.text : "";
   const targetText = normalize(excerpt);
@@ -102,8 +253,12 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
     return { ok: false, reason: "empty-target" };
   }
 
+  ensureStyle();
+  clearExistingHighlights();
+
   const tokens = tokenized(excerpt);
-  const selector = "p,li,blockquote,pre,code,h1,h2,h3,h4,h5,h6,td,th,article,section,main,div";
+  const primarySelector = "p,li,blockquote,pre,code,h1,h2,h3,h4,h5,h6,td,th";
+  const fallbackSelector = "article,section,main,div";
 
   let bestMatch:
     | {
@@ -123,11 +278,14 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
       continue;
     }
     const tag = parent.tagName.toLowerCase();
-    if (tag === "script" || tag === "style" || tag === "noscript") {
+    if (tag === "script" || tag === "style" || tag === "noscript" || tag === "textarea") {
       currentNode = walker.nextNode();
       continue;
     }
-    const container = parent.closest<HTMLElement>(selector) ?? parent;
+    const container =
+      parent.closest<HTMLElement>(primarySelector) ??
+      parent.closest<HTMLElement>(fallbackSelector) ??
+      parent;
     if (seenElements.has(container)) {
       currentNode = walker.nextNode();
       continue;
@@ -141,13 +299,14 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
     }
 
     const exact = content.includes(targetText);
-    let score = exact ? 1000 + Math.min(400, targetText.length) : 0;
+    let score = exact ? 1400 + Math.min(500, targetText.length) : 0;
     for (const token of tokens) {
       if (content.includes(token)) {
-        score += 20;
+        score += 24;
       }
     }
-    score -= Math.min(Math.abs(content.length - targetText.length) / 40, 100);
+    score -= Math.min(Math.abs(content.length - targetText.length) / 30, 130);
+    score -= Math.min(content.length / 240, 50);
     if (score <= 0) {
       currentNode = walker.nextNode();
       continue;
@@ -168,37 +327,39 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
     return { ok: false, reason: "not-found" };
   }
 
-  const previousHighlighted = document.querySelectorAll<HTMLElement>(`[${markerAttribute}="true"]`);
-  previousHighlighted.forEach((element) => {
-    if (element === bestMatch?.element) {
-      return;
-    }
-    element.removeAttribute(markerAttribute);
-    element.style.backgroundColor = "";
-    element.style.boxShadow = "";
-  });
-
   const target = bestMatch.element;
-  target.setAttribute(markerAttribute, "true");
-  target.scrollIntoView({
+  const textNodes = collectTextNodes(target);
+  const combinedText = textNodes.map((node) => node.textContent ?? "").join("");
+  if (!combinedText.trim()) {
+    return { ok: false, reason: "empty-element-text" };
+  }
+
+  const phraseCandidates = extractPhrases(excerpt);
+  const tokenCandidates = tokens.sort((a, b) => b.length - a.length);
+  const range =
+    findRangeInText(combinedText, phraseCandidates) ??
+    findRangeInText(combinedText, tokenCandidates) ??
+    {
+      start: 0,
+      end: Math.min(combinedText.length, Math.max(16, Math.min(120, excerpt.trim().length))),
+      phrase: excerpt.trim().slice(0, 120),
+    };
+
+  const highlightedSegments = applyInlineHighlight(target, range.start, range.end);
+  const firstInlineMark = target.querySelector<HTMLElement>(`mark[${inlineMarkerAttribute}="true"]`);
+  (firstInlineMark ?? target).scrollIntoView({
     behavior: "smooth",
     block: "center",
     inline: "nearest",
   });
-  target.style.transition = "background-color 1200ms ease, box-shadow 600ms ease";
-  target.style.backgroundColor = "rgba(255, 235, 59, 0.55)";
-  target.style.boxShadow = "0 0 0 3px rgba(255, 193, 7, 0.6)";
 
-  window.setTimeout(() => {
-    target.style.backgroundColor = "rgba(255, 235, 59, 0.18)";
-    target.style.boxShadow = "0 0 0 1px rgba(255, 193, 7, 0.4)";
-  }, 1800);
-  window.setTimeout(() => {
-    target.style.backgroundColor = "";
-    target.style.boxShadow = "";
-  }, 3600);
-
-  return { ok: true, refId: payload.refId, score: bestMatch.score, exact: bestMatch.exact };
+  return {
+    ok: highlightedSegments > 0,
+    refId: payload.refId,
+    score: bestMatch.score,
+    exact: bestMatch.exact,
+    highlightedSegments,
+  };
 }
 
 class BrowserViewController {
