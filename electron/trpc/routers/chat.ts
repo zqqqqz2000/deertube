@@ -3,13 +3,14 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   generateText,
-  stepCountIs,
   streamText,
 } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { baseProcedure, createTRPCRouter } from "../init";
 import type { DeertubeUIMessage } from "../../../src/modules/ai/tools";
 import { createTools } from "../../../src/modules/ai/tools";
+
+const noStepLimit = () => false;
 
 export const chatRouter = createTRPCRouter({
   send: baseProcedure
@@ -189,7 +190,7 @@ export const chatRouter = createTRPCRouter({
             }),
             tools,
             toolChoice: "auto",
-            stopWhen: stepCountIs(8),
+            stopWhen: noStepLimit,
             abortSignal: signal,
           });
           writer.merge(result.toUIMessageStream());

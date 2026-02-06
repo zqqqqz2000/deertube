@@ -8,13 +8,23 @@ import { baseProcedure, createTRPCRouter } from '../init'
 import { ensureProjectStore } from './project'
 import type { JsonObject, JsonValue } from '../../../src/types/json'
 
+const TavilyOptionalStringSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value : undefined),
+  z.string().optional(),
+)
+
+const TavilyOptionalNullableStringSchema = z.preprocess(
+  (value) => (typeof value === 'string' || value === null ? value : undefined),
+  z.string().nullable().optional(),
+)
+
 const TavilySearchResultSchema = z.object({
-  title: z.string().optional(),
-  url: z.string().optional(),
-  content: z.string().optional(),
-  raw_content: z.string().nullable().optional(),
-  snippet: z.string().optional(),
-  description: z.string().optional(),
+  title: TavilyOptionalStringSchema,
+  url: TavilyOptionalStringSchema,
+  content: TavilyOptionalStringSchema,
+  raw_content: TavilyOptionalNullableStringSchema,
+  snippet: TavilyOptionalStringSchema,
+  description: TavilyOptionalStringSchema,
 })
 
 type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>

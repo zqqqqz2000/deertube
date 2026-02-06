@@ -20,7 +20,10 @@ import type {
 import { placeInsightNodes } from "../../lib/flowPlacement";
 import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
 import { useChat } from "@/lib/chat/use-electron-chat";
-import type { DeertubeMessageMetadata, DeertubeUIMessage } from "@/modules/ai/tools";
+import type {
+  DeertubeMessageMetadata,
+  DeertubeUIMessage,
+} from "@/modules/ai/tools";
 import { isJsonObject } from "@/types/json";
 import { useContextBuilder } from "./useContextBuilder";
 
@@ -77,7 +80,10 @@ const buildNodeContext = (node: FlowNode | null) => {
   return "";
 };
 
-const buildGraphSnapshot = (nodes: FlowNode[], edges: FlowEdge[]): GraphSnapshot => {
+const buildGraphSnapshot = (
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): GraphSnapshot => {
   const nodeIdToIntId = new Map<string, number>();
   const graphNodes = nodes.map((node, index) => {
     const intId = index + 1;
@@ -125,7 +131,10 @@ const buildGraphSnapshot = (nodes: FlowNode[], edges: FlowEdge[]): GraphSnapshot
       }
       return { sourceIntId, targetIntId };
     })
-    .filter((edge): edge is { sourceIntId: number; targetIntId: number } => edge !== null);
+    .filter(
+      (edge): edge is { sourceIntId: number; targetIntId: number } =>
+        edge !== null,
+    );
 
   return { nodes: graphNodes, edges: graphEdges };
 };
@@ -204,7 +213,6 @@ export function useChatActions({
     });
   }, [graphEventMessages]);
 
-
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedId) ?? null,
     [nodes, selectedId],
@@ -218,18 +226,18 @@ export function useChatActions({
     [selectedNodeForContext],
   );
   const { buildContextSummary } = useContextBuilder(nodes, edges);
-  const selectedPathSummary = useMemo(
-    () => {
-      if (!selectedId) {
-        return undefined;
-      }
-      const summary = buildContextSummary(selectedId).trim();
-      return summary.length > 0 ? summary : undefined;
-    },
-    [buildContextSummary, selectedId],
-  );
+  const selectedPathSummary = useMemo(() => {
+    if (!selectedId) {
+      return undefined;
+    }
+    const summary = buildContextSummary(selectedId).trim();
+    return summary.length > 0 ? summary : undefined;
+  }, [buildContextSummary, selectedId]);
   const selectedNodeForQuote = useMemo(
-    () => (selectedId ? nodes.find((node) => node.id === selectedId) ?? null : null),
+    () =>
+      selectedId
+        ? (nodes.find((node) => node.id === selectedId) ?? null)
+        : null,
     [nodes, selectedId],
   );
 
@@ -334,7 +342,9 @@ export function useChatActions({
 
         while (pendingByParent.size > 0 && placedInPass && pass < maxPasses) {
           placedInPass = false;
-          for (const [parentId, children] of Array.from(pendingByParent.entries())) {
+          for (const [parentId, children] of Array.from(
+            pendingByParent.entries(),
+          )) {
             const parentNode =
               workingNodes.find((node) => node.id === parentId) ?? null;
             if (!parentNode) {
@@ -459,34 +469,37 @@ export function useChatActions({
 
   const { messages, sendMessage, regenerate, status, error, stop } =
     useChat<DeertubeUIMessage>({
-    messages: initialUiMessages,
-    context: {
-      projectPath,
-      selectedNodeSummary,
-      selectedPathSummary,
-      settings: activeProfile
-        ? {
-            llmProvider: activeProfile.llmProvider.trim() || undefined,
-            llmModelId: activeProfile.llmModelId.trim() || undefined,
-            llmApiKey: activeProfile.llmApiKey.trim() || undefined,
-            llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
-            tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
-            jinaReaderBaseUrl: activeProfile.jinaReaderBaseUrl.trim() || undefined,
-            jinaReaderApiKey: activeProfile.jinaReaderApiKey.trim() || undefined,
-          }
-        : undefined,
-    },
-    onFinish: ({ message }: { message?: DeertubeUIMessage }) => {
-      if (!message || message.role !== "assistant") {
-        return;
-      }
-      const text = extractUiMessageText(message);
-      if (!text.trim()) {
-        return;
-      }
-      void runGraphTools(message.id, text);
-    },
-  });
+      messages: initialUiMessages,
+      context: {
+        projectPath,
+        selectedNodeSummary,
+        selectedPathSummary,
+        settings: activeProfile
+          ? {
+              llmProvider: activeProfile.llmProvider.trim() || undefined,
+              llmModelId: activeProfile.llmModelId.trim() || undefined,
+              llmApiKey: activeProfile.llmApiKey.trim() || undefined,
+              llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
+              tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
+              jinaReaderBaseUrl:
+                activeProfile.jinaReaderBaseUrl.trim() || undefined,
+              jinaReaderApiKey:
+                activeProfile.jinaReaderApiKey.trim() || undefined,
+            }
+          : undefined,
+      },
+      onFinish: ({ message }: { message?: DeertubeUIMessage }) => {
+        if (!message || message.role !== "assistant") {
+          return;
+        }
+        const text = extractUiMessageText(message);
+        if (!text.trim()) {
+          return;
+        }
+        void runGraphTools(message.id, text);
+      },
+    });
+  console.log(messages);
 
   useEffect(() => {
     messages.forEach((message) => {
@@ -495,7 +508,9 @@ export function useChatActions({
       }
       message.parts.forEach((part) => {
         const subagentPayload = readSubagentPartPayload(part);
-        const deepSearchPart = subagentPayload ? null : readDeepSearchPartPayload(part);
+        const deepSearchPart = subagentPayload
+          ? null
+          : readDeepSearchPartPayload(part);
         const deepSearchPayload = deepSearchPart?.payload;
         const payload = subagentPayload ?? deepSearchPayload;
         if (!payload) {
@@ -604,7 +619,7 @@ export function useChatActions({
 
 function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
   const metadata =
-    message.status ?? message.error
+    (message.status ?? message.error)
       ? {
           status: message.status,
           error: message.error,
@@ -679,7 +694,10 @@ const readSubagentPartPayload = (
 const readDeepSearchPartPayload = (
   part: DeertubeMessagePart,
 ): { payload: DeepSearchStreamPayload; done: boolean } | null => {
-  if (part.type !== "data-deepsearch-stream" && part.type !== "data-deepsearch-done") {
+  if (
+    part.type !== "data-deepsearch-stream" &&
+    part.type !== "data-deepsearch-done"
+  ) {
     return null;
   }
   const payload = (part as { data?: unknown }).data;
@@ -692,6 +710,39 @@ const readDeepSearchPartPayload = (
   };
 };
 
+const extractDeepSearchToolText = (part: DeertubeMessagePart): string | null => {
+  const isDeepSearchToolPart =
+    part.type === "tool-deepSearch" ||
+    (part.type === "dynamic-tool" &&
+      "toolName" in part &&
+      part.toolName === "deepSearch");
+  if (!isDeepSearchToolPart || !("output" in part)) {
+    if ("errorText" in part && typeof part.errorText === "string" && part.errorText.trim().length > 0) {
+      return part.errorText;
+    }
+    return null;
+  }
+  if (!isJsonObject(part.output)) {
+    if ("errorText" in part && typeof part.errorText === "string" && part.errorText.trim().length > 0) {
+      return part.errorText;
+    }
+    return null;
+  }
+  const answer = part.output.answer;
+  if (typeof answer === "string" && answer.trim().length > 0) {
+    return answer;
+  }
+  const conclusion = part.output.conclusion;
+  if (typeof conclusion === "string" && conclusion.trim().length > 0) {
+    return conclusion;
+  }
+  const error = part.output.error;
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  return null;
+};
+
 function extractUiMessageText(message: DeertubeUIMessage): string {
   if ("content" in message && typeof message.content === "string") {
     return message.content;
@@ -699,7 +750,7 @@ function extractUiMessageText(message: DeertubeUIMessage): string {
   if (!("parts" in message) || !Array.isArray(message.parts)) {
     return "";
   }
-  return message.parts
+  const text = message.parts
     .filter(
       (part): part is { type: "text"; text: string } =>
         typeof part === "object" &&
@@ -710,6 +761,28 @@ function extractUiMessageText(message: DeertubeUIMessage): string {
     )
     .map((part) => part.text)
     .join("");
+  if (text.trim().length > 0) {
+    return text;
+  }
+  for (const part of message.parts) {
+    const toolText = extractDeepSearchToolText(part);
+    if (toolText) {
+      return toolText;
+    }
+    const deepSearch = readDeepSearchPartPayload(part);
+    if (!deepSearch) {
+      continue;
+    }
+    const conclusion = deepSearch.payload.conclusion;
+    if (typeof conclusion === "string" && conclusion.trim().length > 0) {
+      return conclusion;
+    }
+    const error = deepSearch.payload.error;
+    if (typeof error === "string" && error.trim().length > 0) {
+      return error;
+    }
+  }
+  return "";
 }
 
 function buildSubagentEvents(
@@ -718,7 +791,11 @@ function buildSubagentEvents(
 ): ChatMessage[] {
   const byToolCall = new Map<
     string,
-    { payload: SubagentStreamPayload; parentMessageId: string; createdAt: string }
+    {
+      payload: SubagentStreamPayload;
+      parentMessageId: string;
+      createdAt: string;
+    }
   >();
   const isRunning = status === "streaming" || status === "submitted";
 
@@ -745,17 +822,22 @@ function buildSubagentEvents(
     });
   });
 
-  return Array.from(byToolCall.values()).map(({ payload, parentMessageId, createdAt }) => ({
-    id: `subagent-${payload.toolCallId}`,
-    role: "assistant",
-    content: "",
-    createdAt,
-    kind: "subagent-event",
-    toolName: payload.toolName,
-    toolInput: { responseId: parentMessageId, toolCallId: payload.toolCallId },
-    toolOutput: payload,
-    toolStatus: isRunning ? "running" : "complete",
-  }));
+  return Array.from(byToolCall.values()).map(
+    ({ payload, parentMessageId, createdAt }) => ({
+      id: `subagent-${payload.toolCallId}`,
+      role: "assistant",
+      content: "",
+      createdAt,
+      kind: "subagent-event",
+      toolName: payload.toolName,
+      toolInput: {
+        responseId: parentMessageId,
+        toolCallId: payload.toolCallId,
+      },
+      toolOutput: payload,
+      toolStatus: isRunning ? "running" : "complete",
+    }),
+  );
 }
 
 function buildDeepSearchEvents(
@@ -787,8 +869,8 @@ function buildDeepSearchEvents(
         "createdAt" in message && message.createdAt
           ? message.createdAt instanceof Date
             ? message.createdAt.toISOString()
-          : String(message.createdAt)
-        : new Date().toISOString();
+            : String(message.createdAt)
+          : new Date().toISOString();
       const done =
         doneByPartType ||
         payload.complete === true ||
@@ -820,7 +902,10 @@ function buildDeepSearchEvents(
         createdAt,
         kind: "deepsearch-event",
         toolName: payload.toolName,
-        toolInput: { responseId: parentMessageId, toolCallId: payload.toolCallId },
+        toolInput: {
+          responseId: parentMessageId,
+          toolCallId: payload.toolCallId,
+        },
         toolOutput: payload,
         toolStatus,
         error: failed ? payload.error : undefined,

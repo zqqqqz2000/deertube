@@ -4,15 +4,14 @@ import {
   UIMessageStreamWriter,
   generateText,
   readUIMessageStream,
-  stepCountIs,
   streamText,
   tool,
   type LanguageModel,
   type ModelMessage,
 } from "ai";
 import { z } from "zod";
-import type { JsonObject, JsonValue } from "@/types/json";
-import { isJsonObject } from "@/types/json";
+import type { JsonObject, JsonValue } from "../../types/json";
+import { isJsonObject } from "../../types/json";
 
 export interface DeertubeMessageMetadata {
   status?: "pending" | "complete" | "failed";
@@ -70,13 +69,25 @@ interface ToolConfig {
   jinaReaderApiKey?: string;
 }
 
+const noStepLimit = () => false;
+
+const TavilyOptionalStringSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value : undefined),
+  z.string().optional(),
+);
+
+const TavilyOptionalNullableStringSchema = z.preprocess(
+  (value) => (typeof value === "string" || value === null ? value : undefined),
+  z.string().nullable().optional(),
+);
+
 const TavilySearchResultSchema = z.object({
-  title: z.string().optional(),
-  url: z.string().optional(),
-  content: z.string().optional(),
-  raw_content: z.string().nullable().optional(),
-  snippet: z.string().optional(),
-  description: z.string().optional(),
+  title: TavilyOptionalStringSchema,
+  url: TavilyOptionalStringSchema,
+  content: TavilyOptionalStringSchema,
+  raw_content: TavilyOptionalNullableStringSchema,
+  snippet: TavilyOptionalStringSchema,
+  description: TavilyOptionalStringSchema,
 });
 
 type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>;
@@ -563,7 +574,7 @@ async function runExtractSubagent({
       readLines: readLinesTool,
     },
     toolChoice: "auto",
-    stopWhen: stepCountIs(12),
+    stopWhen: noStepLimit,
     abortSignal,
   });
 
@@ -673,7 +684,7 @@ async function runSearchSubagent({
       extract: extractTool,
     },
     toolChoice: "auto",
-    stopWhen: stepCountIs(30),
+    stopWhen: noStepLimit,
     abortSignal,
   });
 
@@ -898,11 +909,13 @@ export function createTools(writer: UIMessageStreamWriter, config: ToolConfig = 
           jinaReaderBaseUrl: config.jinaReaderBaseUrl,
           jinaReaderApiKey: config.jinaReaderApiKey,
         });
+        if (result.error) {
+          throw new Error(result.error);
+        }
         return {
           conclusion: result.conclusion,
           answer: result.conclusion,
           sources: result.sources,
-          ...(result.error ? { error: result.error } : {}),
         };
       },
     }),
