@@ -8,7 +8,7 @@ export const mdxComponents: Components = {
     <a
       target="_blank"
       rel="noopener noreferrer"
-      className="text-sky-300 underline-offset-4 hover:underline"
+      className="markdown-link"
       {...props}
     />
   ),

@@ -361,6 +361,8 @@ export const MarkdownRenderer = memo(
         }
         return "";
       };
+      const markdownLinkClassName = "markdown-link";
+      const nodeLinkClassName = "markdown-link markdown-node-link";
       return {
         ...mdxComponents,
         a: (
@@ -394,7 +396,7 @@ export const MarkdownRenderer = memo(
               <button
                 type="button"
                 onClick={() => onNodeLinkClick?.(nodeId)}
-                className="inline text-sky-200 underline decoration-sky-300/80 underline-offset-4 transition hover:text-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                className={nodeLinkClassName}
                 title={`Focus node ${label}`}
                 disabled={!onNodeLinkClick}
               >
@@ -412,7 +414,7 @@ export const MarkdownRenderer = memo(
                   event.preventDefault();
                   onReferenceClick(rawHref ?? "", labelText);
                 }}
-                className="text-sky-300 underline-offset-4 hover:underline"
+                className={markdownLinkClassName}
                 title={rawHref}
               />
             );
@@ -421,7 +423,7 @@ export const MarkdownRenderer = memo(
             <a
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sky-300 underline-offset-4 hover:underline"
+              className={markdownLinkClassName}
               {...restProps}
             />
           );

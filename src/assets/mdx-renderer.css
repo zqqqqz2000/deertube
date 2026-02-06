@@ -80,6 +80,54 @@
   color: rgb(240, 249, 255);
 }
 
+.markdown-body a.markdown-link {
+  color: rgb(37, 99, 235);
+  font-weight: 600;
+  text-decoration-line: underline;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  transition: color 150ms ease, text-decoration-color 150ms ease;
+}
+
+.markdown-body a.markdown-link:hover {
+  color: rgb(29, 78, 216);
+  text-decoration-color: currentColor;
+}
+
+.dark .markdown-body a.markdown-link {
+  color: rgb(147, 197, 253);
+}
+
+.dark .markdown-body a.markdown-link:hover {
+  color: rgb(191, 219, 254);
+}
+
+.markdown-body a.markdown-link[data-footnote-backref] {
+  font-weight: 700;
+}
+
+.markdown-body .markdown-node-link {
+  display: inline;
+}
+
+.markdown-body .markdown-node-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.markdown-body a.markdown-link[data-footnote-ref] {
+  border-radius: 9999px;
+  padding: 0 0.22em;
+  margin: 0 0.04em;
+  background-color: rgb(37 99 235 / 0.16);
+  font-weight: 700;
+}
+
+.dark .markdown-body a.markdown-link[data-footnote-ref] {
+  background-color: rgb(147 197 253 / 0.24);
+}
+
 .markdown-body .node-ref-link {
   color: inherit;
   text-decoration-line: underline;
