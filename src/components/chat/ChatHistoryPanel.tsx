@@ -585,7 +585,6 @@ export default function ChatHistoryPanel({
       <Chat>
         <ChatMessages
           ref={scrollRef}
-          className="gap-2 px-2"
           onScroll={handleScroll}
           contentRef={contentRef}
         >
