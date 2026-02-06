@@ -8,7 +8,7 @@ export interface ChatMessage {
   status?: 'pending' | 'complete' | 'failed'
   error?: string
   requestText?: string
-  kind?: 'text' | 'graph-event'
+  kind?: 'text' | 'graph-event' | 'subagent-event'
   toolName?: string
   toolInput?: unknown
   toolOutput?: unknown

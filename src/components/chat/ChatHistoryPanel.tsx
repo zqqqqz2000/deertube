@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { UIMessage } from "ai";
 import type { ChatMessage } from "../../types/chat";
 import type {
   FlowNode,
@@ -62,6 +63,140 @@ interface GraphToolInput {
   selectedNodeId?: string | null;
   selectedNodeSummary?: string | null;
 }
+
+interface SubagentStreamPayload {
+  toolCallId: string;
+  toolName?: string;
+  messages: UIMessage[];
+}
+
+type SubagentEntry = {
+  kind: "call" | "result";
+  label: string;
+  detail?: string;
+  tone?: "warn";
+};
+
+const parseToolPayload = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  return value;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isSubagentPayload = (value: unknown): value is SubagentStreamPayload => {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.toolCallId === "string" &&
+    Array.isArray(value.messages)
+  );
+};
+
+const isToolPart = (
+  part: unknown,
+): part is {
+  type: string;
+  input?: unknown;
+  output?: unknown;
+  toolName?: string;
+} => {
+  return (
+    typeof part === "object" &&
+    part !== null &&
+    "type" in part &&
+    typeof (part as { type?: unknown }).type === "string" &&
+    (((part as { type?: string }).type ?? "").startsWith("tool-") ||
+      (part as { type?: string }).type === "dynamic-tool")
+  );
+};
+
+const getToolName = (part: { type: string; toolName?: string }): string | undefined => {
+  if (part.type.startsWith("tool-")) {
+    return part.type.slice(5);
+  }
+  if (part.type === "dynamic-tool" && typeof part.toolName === "string") {
+    return part.toolName;
+  }
+  return undefined;
+};
+
+const summarizeToolInput = (toolName: string | undefined, input: unknown) => {
+  if (!isRecord(input)) {
+    return undefined;
+  }
+  if (toolName === "search" && typeof input.query === "string") {
+    return `query: ${input.query}`;
+  }
+  if (toolName === "extract" && typeof input.url === "string") {
+    return `url: ${input.url}`;
+  }
+  const preview = JSON.stringify(input);
+  return preview.length > 160 ? `${preview.slice(0, 160)}…` : preview;
+};
+
+const summarizeToolOutput = (
+  toolName: string | undefined,
+  output: unknown,
+): { detail?: string; tone?: "warn" } => {
+  if (!isRecord(output)) {
+    return { detail: undefined };
+  }
+  if (toolName === "search" && Array.isArray(output.results)) {
+    return { detail: `results: ${output.results.length}` };
+  }
+  if (toolName === "extract") {
+    const excerpts = Array.isArray(output.excerpts) ? output.excerpts.length : undefined;
+    const ranges = Array.isArray(output.ranges) ? output.ranges.length : undefined;
+    const broken = output.broken === true;
+    const detailParts: string[] = [];
+    if (typeof excerpts === "number") detailParts.push(`excerpts: ${excerpts}`);
+    if (typeof ranges === "number") detailParts.push(`ranges: ${ranges}`);
+    if (broken) detailParts.push("broken");
+    return {
+      detail: detailParts.length > 0 ? detailParts.join(", ") : undefined,
+      tone: broken ? "warn" : undefined,
+    };
+  }
+  return { detail: undefined };
+};
+
+const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] => {
+  const entries: SubagentEntry[] = [];
+  payload.messages.forEach((message) => {
+    (message.parts ?? []).forEach((part) => {
+      if (!isToolPart(part)) {
+        return;
+      }
+      const toolName = getToolName(part);
+      if ("input" in part && part.input !== undefined) {
+        entries.push({
+          kind: "call",
+          label: toolName ?? "tool",
+          detail: summarizeToolInput(toolName, part.input),
+        });
+      }
+      if ("output" in part && part.output !== undefined) {
+        const summary = summarizeToolOutput(toolName, part.output);
+        entries.push({
+          kind: "result",
+          label: toolName ?? "tool",
+          detail: summary.detail,
+          tone: summary.tone,
+        });
+      }
+    });
+  });
+  return entries;
+};
 
 const parseGraphToolInput = (value: unknown): GraphToolInput | null => {
   if (!value || typeof value !== "object") {
@@ -349,6 +484,7 @@ export default function ChatHistoryPanel({
       | { kind: "primary"; id: string; message: ChatMessage }
       | { kind: "additional"; id: string; message: ChatMessage }
       | { kind: "graph"; id: string; message: ChatMessage }
+      | { kind: "subagent"; id: string; message: ChatMessage }
     )[] = [];
     let lastDateKey = "";
     let lastRole: ChatMessage["role"] | null = null;
@@ -373,6 +509,11 @@ export default function ChatHistoryPanel({
 
       if (message.kind === "graph-event") {
         items.push({ kind: "graph", id: message.id, message });
+        lastRole = null;
+        return;
+      }
+      if (message.kind === "subagent-event") {
+        items.push({ kind: "subagent", id: message.id, message });
         lastRole = null;
         return;
       }
@@ -646,6 +787,93 @@ export default function ChatHistoryPanel({
                                   })}
                                 </div>
                               )}
+                            </ChatEventContent>
+                          </CollapsibleContent>
+                        )}
+                      </Collapsible>
+                    </ChatEventBody>
+                  </ChatEvent>
+                );
+              }
+              if (item.kind === "subagent") {
+                const { message: eventMessage } = item;
+                const statusLabel =
+                  eventMessage.toolStatus === "running"
+                    ? "Running"
+                    : eventMessage.toolStatus === "failed"
+                      ? "Failed"
+                      : "Complete";
+
+                const outputPayloadRaw = parseToolPayload(
+                  eventMessage.toolOutput,
+                );
+                const outputPayload = isSubagentPayload(outputPayloadRaw)
+                  ? outputPayloadRaw
+                  : null;
+                const entries = outputPayload
+                  ? buildSubagentEntries(outputPayload)
+                  : [];
+                const title =
+                  eventMessage.toolName ||
+                  outputPayload?.toolName ||
+                  "Subagent";
+                const hasDetails = entries.length > 0;
+
+                return (
+                  <ChatEvent key={item.id} className="items-start gap-2 px-2">
+                    <ChatEventBody>
+                      <Collapsible defaultOpen={false}>
+                        <div className="flex items-center justify-between gap-2">
+                          <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            {title}
+                          </ChatEventTitle>
+                          {hasDetails && (
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
+                          )}
+                        </div>
+                        <ChatEventDescription>
+                          {eventMessage.error
+                            ? eventMessage.error
+                            : statusLabel}
+                        </ChatEventDescription>
+                        {hasDetails && (
+                          <CollapsibleContent className="mt-2">
+                            <ChatEventContent className="space-y-2">
+                              <div className="space-y-1 text-[11px] text-muted-foreground">
+                                {entries.map((entry, index) => (
+                                  <div
+                                    key={`${item.id}-subagent-${index}`}
+                                    className={cn(
+                                      "flex items-start gap-2 rounded-md border border-border/60 bg-card/40 px-2 py-1",
+                                      entry.tone === "warn" &&
+                                        "border-amber-400/40 bg-amber-500/10 text-amber-700",
+                                    )}
+                                  >
+                                    <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/60">
+                                      {entry.kind === "call" ? "Call" : "Result"}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <div className="text-xs font-medium text-foreground/80">
+                                        {entry.label}
+                                      </div>
+                                      {entry.detail && (
+                                        <div className="text-[11px] text-muted-foreground">
+                                          {entry.detail}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             </ChatEventContent>
                           </CollapsibleContent>
                         )}

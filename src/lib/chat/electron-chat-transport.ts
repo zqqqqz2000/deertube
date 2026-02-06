@@ -6,13 +6,16 @@ export interface ChatContext {
   projectPath: string;
   selectedNodeSummary?: string;
   selectedPathSummary?: string;
-  settings?: {
-    llmProvider?: string;
-    llmModelId?: string;
-    llmApiKey?: string;
-    llmBaseUrl?: string;
-  };
-}
+    settings?: {
+      llmProvider?: string;
+      llmModelId?: string;
+      llmApiKey?: string;
+      llmBaseUrl?: string;
+      tavilyApiKey?: string;
+      jinaReaderBaseUrl?: string;
+      jinaReaderApiKey?: string;
+    };
+  }
 
 export class ElectronChatTransport implements ChatTransport<DeertubeUIMessage> {
   private context: ChatContext | null = null;

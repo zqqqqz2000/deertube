@@ -23,6 +23,9 @@ export const chatRouter = createTRPCRouter({
             llmModelId: z.string().optional(),
             llmApiKey: z.string().optional(),
             llmBaseUrl: z.string().optional(),
+            tavilyApiKey: z.string().optional(),
+            jinaReaderBaseUrl: z.string().optional(),
+            jinaReaderApiKey: z.string().optional(),
           })
           .optional(),
       }),
@@ -55,13 +58,15 @@ export const chatRouter = createTRPCRouter({
       }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
+        "When a question requires external evidence or sources, call the `search` tool and cite the returned excerpts.",
         ...contextLines,
       ]
         .filter(Boolean)
         .join("\n\n");
 
+      const model = provider(llmModelId);
       const result = await generateText({
-        model: provider(llmModelId),
+        model,
         system: systemPrompt,
         messages: await convertToModelMessages(input.messages, {
           ignoreIncompleteToolCalls: true,
@@ -87,6 +92,9 @@ export const chatRouter = createTRPCRouter({
             llmModelId: z.string().optional(),
             llmApiKey: z.string().optional(),
             llmBaseUrl: z.string().optional(),
+            tavilyApiKey: z.string().optional(),
+            jinaReaderBaseUrl: z.string().optional(),
+            jinaReaderApiKey: z.string().optional(),
           })
           .optional(),
       }),
@@ -119,17 +127,24 @@ export const chatRouter = createTRPCRouter({
       }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
+        "When a question requires external evidence or sources, call the `search` tool and cite the returned excerpts.",
         ...contextLines,
       ]
         .filter(Boolean)
         .join("\n\n");
 
+      const model = provider(llmModelId);
       const stream = createUIMessageStream<DeertubeUIMessage>({
         originalMessages: input.messages,
         execute: async ({ writer }) => {
-          const tools = createTools(writer);
+          const tools = createTools(writer, {
+            model,
+            tavilyApiKey: input.settings?.tavilyApiKey,
+            jinaReaderBaseUrl: input.settings?.jinaReaderBaseUrl,
+            jinaReaderApiKey: input.settings?.jinaReaderApiKey,
+          });
           const result = streamText({
-            model: provider(llmModelId),
+            model,
             system: systemPrompt,
             messages: await convertToModelMessages(input.messages, {
               ignoreIncompleteToolCalls: true,
