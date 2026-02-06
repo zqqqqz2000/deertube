@@ -40,10 +40,15 @@ import { FlowFlexLayout } from "./flow/FlowFlexLayout";
 import { BrowserTab } from "./browser/BrowserTab";
 import type {
   BrowserViewBounds,
+  BrowserViewReferenceHighlight,
   BrowserViewSelection,
   BrowserViewStatePayload,
   BrowserViewTabState,
 } from "../types/browserview";
+import {
+  isDeepResearchRefUri,
+  type DeepResearchResolvedReference,
+} from "@/shared/deepresearch";
 
 const CHAT_TABSET_ID = "chat-tabset";
 const GRAPH_TABSET_ID = "graph-tabset";
@@ -497,6 +502,7 @@ function FlowWorkspaceInner({
   const openedBrowserTabsRef = useRef<Set<string>>(new Set());
   const browserTabsRef = useRef<BrowserViewTabState[]>([]);
   const browserBoundsRef = useRef<Record<string, BrowserViewBounds>>({});
+  const browserHighlightTimersRef = useRef<Set<number>>(new Set());
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
@@ -748,7 +754,12 @@ function FlowWorkspaceInner({
   }, [browserBounds]);
 
   useEffect(() => {
+    const highlightTimers = browserHighlightTimersRef.current;
     return () => {
+      highlightTimers.forEach((timerId) => {
+        window.clearTimeout(timerId);
+      });
+      highlightTimers.clear();
       const tabs = browserTabsRef.current;
       tabs.forEach((tab) => {
         trpc.browserView.close.mutate({ tabId: tab.id }).catch(() => undefined);
@@ -945,17 +956,18 @@ function FlowWorkspaceInner({
     [handleLayoutChange, layoutModel],
   );
 
-  const openBrowserReference = useCallback(
-    (rawUrl: string, label?: string) => {
+  const openBrowserUrl = useCallback(
+    (rawUrl: string, label?: string): string | null => {
       if (!isHttpUrl(rawUrl)) {
-        return;
+        return null;
       }
       const normalized = new URL(rawUrl).toString();
       const existing = browserTabs.find((tab) => tab.url === normalized);
       if (existing) {
         selectBrowserTab(existing.id);
-        return;
+        return existing.id;
       }
+
       const tabId = `browser-${crypto.randomUUID()}`;
       const resolvedLabel = normalizeBrowserLabel(label);
       const nextTab: BrowserViewTabState = {
@@ -981,20 +993,92 @@ function FlowWorkspaceInner({
           Actions.addNode(tab, GRAPH_TABSET_ID, DockLocation.CENTER, -1, true),
         );
         handleLayoutChange(model.toJson());
-        return;
+        return tabId;
       }
 
       const fallbackTabset = findFirstTabsetId(layout);
       if (!fallbackTabset) {
-        handleLayoutChange(createSingleBrowserLayoutModel(tabId, label));
-        return;
+        handleLayoutChange(createSingleBrowserLayoutModel(tabId, resolvedLabel));
+        return tabId;
       }
       model.doAction(
         Actions.addNode(tab, fallbackTabset, DockLocation.RIGHT, -1, true),
       );
       handleLayoutChange(model.toJson());
+      return tabId;
     },
     [browserTabs, handleLayoutChange, layoutModel, selectBrowserTab],
+  );
+
+  const scheduleBrowserReferenceHighlight = useCallback(
+    (
+      tabId: string,
+      reference: DeepResearchResolvedReference,
+      attempt = 0,
+    ) => {
+      if (attempt > 8) {
+        return;
+      }
+      const delay = attempt === 0 ? 180 : Math.min(1300, 220 * (attempt + 1));
+      const timerId = window.setTimeout(() => {
+        browserHighlightTimersRef.current.delete(timerId);
+        const payload: BrowserViewReferenceHighlight = {
+          refId: reference.refId,
+          text: reference.text,
+          startLine: reference.startLine,
+          endLine: reference.endLine,
+        };
+        trpc.browserView.highlightReference
+          .mutate({
+            tabId,
+            reference: payload,
+          })
+          .then((result) => {
+            if (!result.ok) {
+              scheduleBrowserReferenceHighlight(tabId, reference, attempt + 1);
+            }
+          })
+          .catch(() => {
+            scheduleBrowserReferenceHighlight(tabId, reference, attempt + 1);
+          });
+      }, delay);
+      browserHighlightTimersRef.current.add(timerId);
+    },
+    [],
+  );
+
+  const openBrowserReference = useCallback(
+    (rawUrl: string, label?: string) => {
+      if (isHttpUrl(rawUrl)) {
+        openBrowserUrl(rawUrl, label);
+        return;
+      }
+      const isDeertubeRef = rawUrl.trim().toLowerCase().startsWith("deertube://");
+      if (!isDeertubeRef && !isDeepResearchRefUri(rawUrl)) {
+        return;
+      }
+      trpc.deepSearch.resolveReference
+        .mutate({
+          projectPath: project.path,
+          uri: rawUrl,
+        })
+        .then((result) => {
+          const reference = result.reference;
+          if (!reference) {
+            return;
+          }
+          const tabId = openBrowserUrl(
+            reference.url,
+            reference.title ?? label ?? `Ref ${reference.refId}`,
+          );
+          if (!tabId) {
+            return;
+          }
+          scheduleBrowserReferenceHighlight(tabId, reference);
+        })
+        .catch(() => undefined);
+    },
+    [openBrowserUrl, project.path, scheduleBrowserReferenceHighlight],
   );
 
   const handleBrowserBoundsChange = useCallback(

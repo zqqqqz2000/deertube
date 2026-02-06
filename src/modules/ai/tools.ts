@@ -12,6 +12,13 @@ import {
 import { z } from "zod";
 import type { JsonObject, JsonValue } from "../../types/json";
 import { isJsonObject } from "../../types/json";
+import {
+  buildDeepResearchRefUri,
+  type DeepResearchPersistenceAdapter,
+  type DeepResearchReferenceRecord,
+  type LineRange,
+  type LineSelection,
+} from "../../shared/deepresearch";
 
 export interface DeertubeMessageMetadata {
   status?: "pending" | "complete" | "failed";
@@ -37,14 +44,30 @@ export interface DeepSearchSource {
   title?: string;
   snippet?: string;
   excerpts?: string[];
+  referenceIds?: number[];
+}
+
+export interface DeepSearchReference {
+  refId: number;
+  uri: string;
+  pageId: string;
+  url: string;
+  title?: string;
+  startLine: number;
+  endLine: number;
+  text: string;
 }
 
 interface DeepSearchStreamPayload {
   toolCallId: string;
   toolName?: string;
   query?: string;
+  projectId?: string;
+  searchId?: string;
   status?: "running" | "complete" | "failed";
   sources?: DeepSearchSource[];
+  references?: DeepSearchReference[];
+  prompt?: string;
   conclusion?: string;
   error?: string;
   complete?: boolean;
@@ -67,6 +90,7 @@ interface ToolConfig {
   tavilyApiKey?: string;
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
+  deepResearchStore?: DeepResearchPersistenceAdapter;
 }
 
 const noStepLimit = () => false;
@@ -123,7 +147,10 @@ const EXTRACT_SUBAGENT_SYSTEM = [
 
 const DEEPSEARCH_SYSTEM = [
   "You are a deep-research assistant.",
-  "Write a concise answer and cite sources by index like [1].",
+  "You are given numbered references.",
+  "Write a concise answer and cite evidence inline using bracket indices like [1] and [2].",
+  "Only cite provided indices, do not invent new indices, and do not output footnotes.",
+  "Do not group citations as [1,2] or [1-2]. Write separate markers like [1], [2].",
 ].join("\n");
 
 const parseJson = (raw: string): JsonValue | null => {
@@ -272,14 +299,51 @@ const formatLineNumbered = (lines: string[], offset = 0, totalLines?: number): s
     .join("\n");
 };
 
-const buildExcerptsFromRanges = (
+const buildSelectionsFromRanges = (
   lines: string[],
-  ranges: { start: number; end: number }[],
-): string[] => {
-  const excerpts = ranges
-    .map((range) => lines.slice(range.start - 1, range.end).join("\n").trim())
-    .filter((text) => text.length > 0);
-  return Array.from(new Set(excerpts));
+  ranges: LineRange[],
+): LineSelection[] => {
+  const unique = new Map<string, LineSelection>();
+  ranges.forEach((range) => {
+    const text = lines.slice(range.start - 1, range.end).join("\n").trim();
+    if (!text) {
+      return;
+    }
+    const key = `${range.start}:${range.end}:${text}`;
+    unique.set(key, {
+      start: range.start,
+      end: range.end,
+      text,
+    });
+  });
+  return Array.from(unique.values());
+};
+
+const buildExcerptsFromSelections = (selections: LineSelection[]): string[] =>
+  Array.from(new Set(selections.map((selection) => selection.text).filter((text) => text.length > 0)));
+
+const parseLineSelections = (value: unknown): LineSelection[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (!isRecord(entry)) {
+        return null;
+      }
+      const start = Number(entry.start);
+      const end = Number(entry.end);
+      const text = typeof entry.text === "string" ? entry.text.trim() : "";
+      if (!Number.isFinite(start) || !Number.isFinite(end) || !text) {
+        return null;
+      }
+      return {
+        start: Math.max(1, Math.floor(start)),
+        end: Math.max(1, Math.floor(end)),
+        text,
+      } satisfies LineSelection;
+    })
+    .filter((entry): entry is LineSelection => entry !== null);
 };
 
 async function fetchTavilySearch(
@@ -390,29 +454,48 @@ async function fetchJinaReaderMarkdown(
 
 interface SearchResult {
   url: string;
+  title?: string;
+  pageId?: string;
+  lineCount?: number;
+  selections: LineSelection[];
   excerpts: string[];
   broken?: boolean;
 }
 
 const normalizeSearchResults = (raw: JsonValue | null): SearchResult[] => {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item) => {
-      if (!isRecord(item)) return null;
-      const url = typeof item.url === "string" ? item.url : "";
-      const paragraphs = Array.isArray(item.excerpts)
-        ? item.excerpts
-        : Array.isArray(item.paragraphs)
-          ? item.paragraphs
-          : [];
-      const excerpts = paragraphs.filter(
-        (entry: unknown): entry is string => typeof entry === "string",
-      );
-      const broken = typeof item.broken === "boolean" ? item.broken : undefined;
-      if (!url || (excerpts.length === 0 && broken !== true)) return null;
-      return broken === undefined ? { url, excerpts } : { url, excerpts, broken };
-    })
-    .filter((item): item is SearchResult => item !== null);
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const normalized: SearchResult[] = [];
+  raw.forEach((item) => {
+    if (!isRecord(item)) {
+      return;
+    }
+    const url = typeof item.url === "string" ? item.url : "";
+    const title = typeof item.title === "string" ? item.title : undefined;
+    const paragraphs = Array.isArray(item.excerpts)
+      ? item.excerpts
+      : Array.isArray(item.paragraphs)
+        ? item.paragraphs
+        : [];
+    const excerpts = paragraphs.filter(
+      (entry: unknown): entry is string => typeof entry === "string",
+    );
+    const selections = parseLineSelections(item.selections);
+    const broken = typeof item.broken === "boolean" ? item.broken : undefined;
+    if (!url || (excerpts.length === 0 && selections.length === 0 && broken !== true)) {
+      return;
+    }
+    const normalizedExcerpts = excerpts.length > 0 ? excerpts : buildExcerptsFromSelections(selections);
+    normalized.push({
+      url,
+      title,
+      selections,
+      excerpts: normalizedExcerpts,
+      broken,
+    });
+  });
+  return normalized;
 };
 
 const dedupeSearchResults = (
@@ -422,13 +505,28 @@ const dedupeSearchResults = (
   for (const item of results) {
     const existing = map.get(item.url);
     if (!existing) {
-      map.set(item.url, { ...item, excerpts: [...item.excerpts] });
+      map.set(item.url, {
+        ...item,
+        selections: [...item.selections],
+        excerpts: [...item.excerpts],
+      });
     } else {
-      const merged = Array.from(new Set([...existing.excerpts, ...item.excerpts]));
+      const mergedExcerpts = Array.from(new Set([...existing.excerpts, ...item.excerpts]));
+      const selectionMap = new Map<string, LineSelection>();
+      [...existing.selections, ...item.selections].forEach((selection) => {
+        const key = `${selection.start}:${selection.end}:${selection.text}`;
+        selectionMap.set(key, selection);
+      });
+      const mergedSelections = Array.from(selectionMap.values());
+      const hasResolvedContent = mergedExcerpts.length > 0 || mergedSelections.length > 0;
       map.set(item.url, {
         url: item.url,
-        excerpts: merged,
-        broken: existing.broken ?? item.broken,
+        title: existing.title ?? item.title,
+        pageId: existing.pageId ?? item.pageId,
+        lineCount: existing.lineCount ?? item.lineCount,
+        selections: mergedSelections,
+        excerpts: mergedExcerpts,
+        broken: hasResolvedContent ? undefined : existing.broken ?? item.broken,
       });
     }
   }
@@ -469,19 +567,27 @@ const buildSnippet = (excerpts: string[]): string => {
 const buildDeepSearchSources = (
   results: SearchResult[],
   maxResults: number,
+  references: DeepSearchReference[],
 ): DeepSearchSource[] => {
+  const referenceIdsByUrl = new Map<string, number[]>();
+  references.forEach((reference) => {
+    const current = referenceIdsByUrl.get(reference.url) ?? [];
+    current.push(reference.refId);
+    referenceIdsByUrl.set(reference.url, current);
+  });
   return results
     .filter((item) => !item.broken && item.excerpts.length > 0)
     .slice(0, maxResults)
     .map((item) => {
       const excerpts = normalizeExcerpts(item.excerpts);
       const snippet = buildSnippet(excerpts);
-      const title = deriveSourceTitle(item.url, snippet.split("\n")[0]);
+      const title = item.title ?? deriveSourceTitle(item.url, snippet.split("\n")[0]);
       return {
         url: item.url,
         title,
         snippet,
         excerpts,
+        referenceIds: referenceIdsByUrl.get(item.url) ?? [],
       };
     });
 };
@@ -496,10 +602,10 @@ async function runExtractSubagent({
   lines: string[];
   model: LanguageModel;
   abortSignal?: AbortSignal;
-}): Promise<{ ranges: { start: number; end: number }[]; broken: boolean }> {
+}): Promise<{ ranges: LineRange[]; broken: boolean; rawModelOutput: string }> {
   const lineCount = lines.length;
   if (lineCount === 0) {
-    return { ranges: [], broken: true };
+    return { ranges: [], broken: true, rawModelOutput: "Empty markdown input." };
   }
   const tooLarge = lineCount > 2200 || lines.join("\n").length > 180000;
   const previewLines = tooLarge ? lines.slice(0, 200) : lines;
@@ -581,11 +687,12 @@ async function runExtractSubagent({
   const parsed = extractJsonFromText(result.text);
   const broken = isRecord(parsed) && typeof parsed.broken === "boolean" ? parsed.broken : false;
   const ranges = normalizeRanges(isRecord(parsed) ? parsed.ranges : null, lineCount);
-  return { ranges, broken };
+  return { ranges, broken, rawModelOutput: result.text };
 }
 
 async function runSearchSubagent({
   query,
+  searchId,
   model,
   writer,
   toolCallId,
@@ -594,8 +701,10 @@ async function runSearchSubagent({
   tavilyApiKey,
   jinaReaderBaseUrl,
   jinaReaderApiKey,
+  deepResearchStore,
 }: {
   query: string;
+  searchId: string;
   model: LanguageModel;
   writer?: UIMessageStreamWriter;
   toolCallId?: string;
@@ -604,14 +713,16 @@ async function runSearchSubagent({
   tavilyApiKey?: string;
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
-}): Promise<{ url: string; excerpts: string[]; broken?: boolean }[]> {
+  deepResearchStore?: DeepResearchPersistenceAdapter;
+}): Promise<SearchResult[]> {
   console.log("[subagent.runSearch]", {
     query,
     toolCallId,
   });
   const accumulatedMessages: DeertubeUIMessage[] = [];
   let lastText = "";
-  const extracted: { url: string; excerpts: string[]; broken?: boolean }[] = [];
+  const extracted: SearchResult[] = [];
+  const searchLookup = new Map<string, { title?: string; snippet?: string }>();
 
   const searchTool = tool({
     description: "使用 Tavily 搜索网页，返回结果列表。",
@@ -625,6 +736,16 @@ async function runSearchSubagent({
         maxResults: maxResults ?? 6,
       });
       const results = await fetchTavilySearch(inputQuery, maxResults ?? 6, tavilyApiKey);
+      results.forEach((item) => {
+        const url = item.url?.trim();
+        if (!url) {
+          return;
+        }
+        searchLookup.set(url, {
+          title: item.title ?? item.description ?? undefined,
+          snippet: item.content ?? item.snippet ?? undefined,
+        });
+      });
       console.log("[subagent.search.results]", {
         count: results.length,
         top: results.slice(0, 3).map((item) => item.url ?? item.title ?? "unknown"),
@@ -644,6 +765,7 @@ async function runSearchSubagent({
         url,
         query: extractQuery,
       });
+      const lookup = searchLookup.get(url);
       let markdown = "";
       let broken = false;
       try {
@@ -654,24 +776,89 @@ async function runSearchSubagent({
       if (!markdown.trim()) {
         broken = true;
       }
+      const fetchedAt = new Date().toISOString();
       const lines = markdown ? splitLines(markdown) : [];
-      if (broken || lines.length === 0) {
-        return { url, broken: true, ranges: [], excerpts: [] };
+      let pageId: string | undefined;
+      let lineCount = lines.length;
+      if (markdown && deepResearchStore) {
+        const persistedPage = await deepResearchStore.savePage({
+          searchId,
+          query: extractQuery,
+          url,
+          title: lookup?.title,
+          markdown,
+          fetchedAt,
+        });
+        pageId = persistedPage.pageId;
+        lineCount = persistedPage.lineCount;
       }
-      const { ranges, broken: extractedBroken } = await runExtractSubagent({
+
+      if (broken || lines.length === 0) {
+        if (deepResearchStore && pageId) {
+          await deepResearchStore.saveExtraction({
+            searchId,
+            pageId,
+            query: extractQuery,
+            url,
+            broken: true,
+            lineCount,
+            ranges: [],
+            selections: [],
+            rawModelOutput: "Jina content unavailable.",
+            extractedAt: new Date().toISOString(),
+          });
+        }
+        return {
+          url,
+          title: lookup?.title,
+          pageId,
+          lineCount,
+          broken: true,
+          ranges: [],
+          selections: [],
+          excerpts: [],
+          rawModelOutput: "Jina content unavailable.",
+        };
+      }
+      const { ranges, broken: extractedBroken, rawModelOutput } = await runExtractSubagent({
         query: extractQuery,
         lines,
         model,
         abortSignal: options.abortSignal,
       });
-      const excerpts = buildExcerptsFromRanges(lines, ranges);
+      const selections = buildSelectionsFromRanges(lines, ranges);
+      const excerpts = buildExcerptsFromSelections(selections);
+      if (deepResearchStore && pageId) {
+        await deepResearchStore.saveExtraction({
+          searchId,
+          pageId,
+          query: extractQuery,
+          url,
+          broken: extractedBroken,
+          lineCount,
+          ranges,
+          selections,
+          rawModelOutput,
+          extractedAt: new Date().toISOString(),
+        });
+      }
       console.log("[subagent.extract.done]", {
         url,
         broken: extractedBroken,
         ranges: ranges.length,
         excerpts: excerpts.length,
       });
-      return { url, broken: extractedBroken, ranges, excerpts };
+      return {
+        url,
+        title: lookup?.title,
+        pageId,
+        lineCount,
+        broken: extractedBroken,
+        ranges,
+        selections,
+        excerpts,
+        rawModelOutput,
+      };
     },
   });
 
@@ -711,12 +898,24 @@ async function runSearchSubagent({
               (item: unknown): item is string => typeof item === "string",
             )
           : [];
+        const selections = parseLineSelections(output.output.selections);
+        const title = typeof output.output.title === "string" ? output.output.title : undefined;
+        const pageId = typeof output.output.pageId === "string" ? output.output.pageId : undefined;
+        const lineCountRaw = Number(output.output.lineCount);
+        const lineCount =
+          Number.isFinite(lineCountRaw) && lineCountRaw > 0
+            ? Math.floor(lineCountRaw)
+            : undefined;
         const broken =
           typeof output.output.broken === "boolean" ? output.output.broken : undefined;
-        if (!url || (excerpts.length === 0 && !broken)) return;
+        if (!url || (excerpts.length === 0 && selections.length === 0 && !broken)) return;
         extracted.push({
           url,
-          excerpts,
+          title,
+          pageId,
+          lineCount,
+          selections,
+          excerpts: excerpts.length > 0 ? excerpts : buildExcerptsFromSelections(selections),
           broken,
         });
       });
@@ -724,20 +923,20 @@ async function runSearchSubagent({
   }
 
   const parsed = extractJsonFromText(lastText);
-  const normalized = normalizeSearchResults(parsed);
-  if (normalized.length > 0) {
+  const normalized = normalizeSearchResults(parsed).map((item) => {
+    const lookup = searchLookup.get(item.url);
+    return {
+      ...item,
+      title: item.title ?? lookup?.title,
+    };
+  });
+  const mergedResults = dedupeSearchResults([...extracted, ...normalized]);
+  if (mergedResults.length > 0) {
     console.log("[subagent.runSearch.done]", {
       query,
-      results: normalized.length,
+      results: mergedResults.length,
     });
-    return dedupeSearchResults(normalized);
-  }
-  if (extracted.length > 0) {
-    console.log("[subagent.runSearch.done]", {
-      query,
-      results: extracted.length,
-    });
-    return dedupeSearchResults(extracted);
+    return mergedResults;
   }
   console.log("[subagent.runSearch.done]", {
     query,
@@ -746,21 +945,167 @@ async function runSearchSubagent({
   return [];
 }
 
+const normalizeKeyText = (value: string): string =>
+  value.replace(/\s+/g, " ").trim().toLowerCase();
+
+const buildDeepSearchReferences = (
+  results: SearchResult[],
+  projectId: string | undefined,
+  searchId: string,
+  maxReferences: number,
+): DeepSearchReference[] => {
+  const references: DeepSearchReference[] = [];
+  const dedupe = new Set<string>();
+
+  for (const result of results) {
+    if (result.broken) {
+      continue;
+    }
+    const fallbackSelections = result.excerpts.map((excerpt) => ({
+      start: 1,
+      end: 1,
+      text: excerpt,
+    }));
+    const candidates = (result.selections.length > 0 ? result.selections : fallbackSelections)
+      .map((selection) => ({
+        start: Math.max(1, selection.start),
+        end: Math.max(1, selection.end),
+        text: clampText(selection.text.trim(), 1200),
+      }))
+      .filter((selection) => selection.text.length > 0)
+      .slice(0, 3);
+
+    for (const candidate of candidates) {
+      if (references.length >= maxReferences) {
+        return references;
+      }
+      const dedupeKey = `${result.url}::${normalizeKeyText(candidate.text)}`;
+      if (dedupe.has(dedupeKey)) {
+        continue;
+      }
+      dedupe.add(dedupeKey);
+      const refId = references.length + 1;
+      const uri =
+        projectId && searchId
+          ? buildDeepResearchRefUri({ projectId, searchId, refId })
+          : "";
+      references.push({
+        refId,
+        uri,
+        pageId: result.pageId ?? "",
+        url: result.url,
+        title: result.title,
+        startLine: candidate.start,
+        endLine: candidate.end,
+        text: candidate.text,
+      });
+    }
+  }
+
+  return references;
+};
+
 const buildDeepSearchContext = (
   query: string,
-  sources: DeepSearchSource[],
+  references: DeepSearchReference[],
 ): string => {
-  const context = sources
-    .map((source, index) => {
-      const title = source.title ?? source.url;
-      const body =
-        source.excerpts && source.excerpts.length > 0
-          ? source.excerpts.join("\n")
-          : source.snippet ?? "";
-      return `Source ${index + 1}: ${title}\n${body}`;
+  const context = references
+    .map((reference) => {
+      const title = reference.title ?? deriveSourceTitle(reference.url);
+      return [
+        `[${reference.refId}] ${title}`,
+        `URL: ${reference.url}`,
+        `Lines: ${reference.startLine}-${reference.endLine}`,
+        "Excerpt:",
+        reference.text,
+      ].join("\n");
     })
     .join("\n\n");
-  return `Question: ${query}\n\n${context}`;
+  return [
+    `Question: ${query}`,
+    "Use only the numbered references below.",
+    "Every supported claim must include one or more citations like [1].",
+    "",
+    context,
+  ].join("\n");
+};
+
+const linkifyCitationMarkers = (
+  value: string,
+  references: DeepSearchReference[],
+): string => {
+  const uriById = new Map<number, string>();
+  references.forEach((reference) => {
+    if (reference.uri) {
+      uriById.set(reference.refId, reference.uri);
+    }
+  });
+  if (uriById.size === 0) {
+    return value;
+  }
+  const expandCitationGroup = (group: string): number[] => {
+    const compact = group.trim();
+    if (!compact) {
+      return [];
+    }
+    const tokens = compact.split(/[,\s，、;；]+/).filter((token) => token.length > 0);
+    const ids: number[] = [];
+    tokens.forEach((token) => {
+      const rangeMatch = token.match(/^(\d+)-(\d+)$/);
+      if (rangeMatch) {
+        const start = Number.parseInt(rangeMatch[1], 10);
+        const end = Number.parseInt(rangeMatch[2], 10);
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start && end - start <= 8) {
+          for (let index = start; index <= end; index += 1) {
+            ids.push(index);
+          }
+        }
+        return;
+      }
+      if (/^\d+$/.test(token)) {
+        ids.push(Number.parseInt(token, 10));
+      }
+    });
+    return ids;
+  };
+  const linkifiedGroups = value.replace(
+    /\[([\d,\s，、;；-]+)\](?!\()/g,
+    (full, rawGroup: string) => {
+      const ids = expandCitationGroup(rawGroup);
+      if (ids.length === 0) {
+        return full;
+      }
+      const linked = ids
+        .map((refId) => {
+          const uri = uriById.get(refId);
+          if (!uri) {
+            return null;
+          }
+          return `[${refId}](${uri})`;
+        })
+        .filter((entry): entry is string => entry !== null);
+      if (linked.length === 0) {
+        return full;
+      }
+      return linked.join(", ");
+    },
+  );
+  const linkifiedSingle = linkifiedGroups.replace(/\[(\d+)\](?!\()/g, (full, rawRefId: string) => {
+    const refId = Number.parseInt(rawRefId, 10);
+    const uri = uriById.get(refId);
+    if (!uri) {
+      return full;
+    }
+    return `[${refId}](${uri})`;
+  });
+  return linkifiedSingle.replace(/\[\^(\d+)\]/g, (full, rawRefId: string) => {
+    const refId = Number.parseInt(rawRefId, 10);
+    const uri = uriById.get(refId);
+    if (!uri) {
+      return full;
+    }
+    return `[${refId}](${uri})`;
+  });
 };
 
 async function runDeepSearchTool({
@@ -774,6 +1119,7 @@ async function runDeepSearchTool({
   tavilyApiKey,
   jinaReaderBaseUrl,
   jinaReaderApiKey,
+  deepResearchStore,
 }: {
   query: string;
   maxResults?: number;
@@ -785,7 +1131,16 @@ async function runDeepSearchTool({
   tavilyApiKey?: string;
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
-}): Promise<{ conclusion: string; sources: DeepSearchSource[]; error?: string }> {
+  deepResearchStore?: DeepResearchPersistenceAdapter;
+}): Promise<{
+  conclusion: string;
+  sources: DeepSearchSource[];
+  references: DeepSearchReference[];
+  searchId: string;
+  projectId?: string;
+  prompt: string;
+  error?: string;
+}> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) {
     const message = "Query is empty after trimming.";
@@ -801,17 +1156,34 @@ async function runDeepSearchTool({
       },
       true,
     );
-    return { conclusion: message, sources: [], error: message };
+    return {
+      conclusion: message,
+      sources: [],
+      references: [],
+      searchId: "",
+      prompt: "",
+      error: message,
+    };
   }
   const resolvedMax = Math.max(1, Math.min(8, maxResults ?? 5));
+  const fallbackCreatedAt = new Date().toISOString();
+  const searchSession = deepResearchStore
+    ? await deepResearchStore.createSearchSession(normalizedQuery)
+    : { searchId: `local-${Date.now()}`, createdAt: fallbackCreatedAt };
+  const searchId = searchSession.searchId;
+  const searchCreatedAt = searchSession.createdAt ?? fallbackCreatedAt;
+  const projectId = deepResearchStore?.projectId;
   writeDeepSearchStream(writer, toolCallId, toolName, {
     query: normalizedQuery,
+    projectId,
+    searchId,
     status: "running",
   });
 
   try {
     const results = await runSearchSubagent({
       query: normalizedQuery,
+      searchId,
       model,
       writer,
       toolCallId,
@@ -820,19 +1192,31 @@ async function runDeepSearchTool({
       tavilyApiKey,
       jinaReaderBaseUrl,
       jinaReaderApiKey,
+      deepResearchStore,
     });
-    const sources = buildDeepSearchSources(results, resolvedMax);
+    const references = buildDeepSearchReferences(
+      results,
+      projectId,
+      searchId,
+      Math.max(resolvedMax * 3, 6),
+    );
+    const sources = buildDeepSearchSources(results, resolvedMax, references);
     writeDeepSearchStream(writer, toolCallId, toolName, {
       query: normalizedQuery,
+      projectId,
+      searchId,
       sources,
+      references,
       status: "running",
     });
 
-    let conclusion = "";
-    if (sources.length === 0) {
-      conclusion = "No relevant sources found.";
+    let prompt = "";
+    let conclusionRaw = "";
+    if (sources.length === 0 || references.length === 0) {
+      prompt = `Question: ${normalizedQuery}\n\nNo references available.`;
+      conclusionRaw = "No relevant sources found.";
     } else {
-      const prompt = buildDeepSearchContext(normalizedQuery, sources);
+      prompt = buildDeepSearchContext(normalizedQuery, references);
       const result = streamText({
         model,
         system: DEEPSEARCH_SYSTEM,
@@ -840,32 +1224,70 @@ async function runDeepSearchTool({
         abortSignal,
       });
       for await (const delta of result.textStream) {
-        conclusion += delta;
+        conclusionRaw += delta;
         writeDeepSearchStream(writer, toolCallId, toolName, {
           query: normalizedQuery,
+          projectId,
+          searchId,
           sources,
-          conclusion,
+          references,
+          prompt,
+          conclusion: linkifyCitationMarkers(conclusionRaw, references),
           status: "running",
         });
       }
     }
 
-    const finalConclusion = conclusion.trim() || "No conclusion generated.";
+    const finalConclusionRaw = conclusionRaw.trim() || "No conclusion generated.";
+    const finalConclusionLinked = linkifyCitationMarkers(finalConclusionRaw, references);
+    if (deepResearchStore) {
+      const persistedReferences: DeepResearchReferenceRecord[] = references.map((reference) => ({
+        refId: reference.refId,
+        uri: reference.uri,
+        pageId: reference.pageId,
+        url: reference.url,
+        title: reference.title,
+        startLine: reference.startLine,
+        endLine: reference.endLine,
+        text: reference.text,
+      }));
+      await deepResearchStore.finalizeSearch({
+        searchId,
+        query: normalizedQuery,
+        llmPrompt: prompt,
+        llmConclusionRaw: finalConclusionRaw,
+        llmConclusionLinked: finalConclusionLinked,
+        references: persistedReferences,
+        createdAt: searchCreatedAt,
+        completedAt: new Date().toISOString(),
+      });
+    }
     writeDeepSearchStream(
       writer,
       toolCallId,
       toolName,
       {
         query: normalizedQuery,
+        projectId,
+        searchId,
+        prompt,
         sources,
-        conclusion: finalConclusion,
+        references,
+        conclusion: finalConclusionLinked,
         status: "complete",
         complete: true,
       },
       true,
     );
 
-    return { conclusion: finalConclusion, sources };
+    return {
+      conclusion: finalConclusionLinked,
+      sources,
+      references,
+      searchId,
+      projectId,
+      prompt,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Deep search failed.";
     writeDeepSearchStream(
@@ -874,13 +1296,23 @@ async function runDeepSearchTool({
       toolName,
       {
         query: normalizedQuery,
+        projectId,
+        searchId,
         status: "failed",
         error: message,
         complete: true,
       },
       true,
     );
-    return { conclusion: message, sources: [], error: message };
+    return {
+      conclusion: message,
+      sources: [],
+      references: [],
+      searchId,
+      projectId,
+      prompt: "",
+      error: message,
+    };
   }
 }
 
@@ -908,6 +1340,7 @@ export function createTools(writer: UIMessageStreamWriter, config: ToolConfig = 
           tavilyApiKey: config.tavilyApiKey,
           jinaReaderBaseUrl: config.jinaReaderBaseUrl,
           jinaReaderApiKey: config.jinaReaderApiKey,
+          deepResearchStore: config.deepResearchStore,
         });
         if (result.error) {
           throw new Error(result.error);
@@ -916,6 +1349,10 @@ export function createTools(writer: UIMessageStreamWriter, config: ToolConfig = 
           conclusion: result.conclusion,
           answer: result.conclusion,
           sources: result.sources,
+          references: result.references,
+          searchId: result.searchId,
+          projectId: result.projectId,
+          prompt: result.prompt,
         };
       },
     }),

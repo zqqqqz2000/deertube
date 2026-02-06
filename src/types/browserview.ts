@@ -34,3 +34,10 @@ export interface BrowserViewStatePayload {
   canGoBack?: boolean;
   canGoForward?: boolean;
 }
+
+export interface BrowserViewReferenceHighlight {
+  refId: number;
+  text: string;
+  startLine?: number;
+  endLine?: number;
+}

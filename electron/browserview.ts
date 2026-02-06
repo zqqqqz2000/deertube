@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type { JsonValue } from "../src/types/json";
 import { isJsonObject } from "../src/types/json";
+import type { BrowserViewReferenceHighlight } from "../src/types/browserview";
 
 interface BrowserViewBounds {
   x: number;
@@ -30,6 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BROWSER_PRELOAD = path.join(__dirname, "preload.mjs");
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const MAX_SELECTION_LENGTH = 5000;
+const MAX_HIGHLIGHT_TEXT_LENGTH = 4000;
 
 const isAllowedUrl = (value: string) => {
   try {
@@ -68,10 +70,142 @@ const sanitizeSelection = (payload: BrowserViewSelectionPayload) => {
   };
 };
 
+const sanitizeReferenceHighlight = (
+  payload: BrowserViewReferenceHighlight,
+): BrowserViewReferenceHighlight => {
+  const text = payload.text.trim();
+  return {
+    refId: payload.refId,
+    text:
+      text.length > MAX_HIGHLIGHT_TEXT_LENGTH
+        ? `${text.slice(0, MAX_HIGHLIGHT_TEXT_LENGTH)}...`
+        : text,
+    startLine: payload.startLine,
+    endLine: payload.endLine,
+  };
+};
+
+function runReferenceHighlightScript(payload: { refId: number; text: string }) {
+  const markerAttribute = "data-deertube-ref-highlight";
+  const normalize = (value: string): string =>
+    value.toLowerCase().replace(/\s+/g, " ").trim();
+  const tokenized = (value: string): string[] =>
+    normalize(value)
+      .split(" ")
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3)
+      .slice(0, 24);
+
+  const excerpt = typeof payload.text === "string" ? payload.text : "";
+  const targetText = normalize(excerpt);
+  if (!targetText || !document.body) {
+    return { ok: false, reason: "empty-target" };
+  }
+
+  const tokens = tokenized(excerpt);
+  const selector = "p,li,blockquote,pre,code,h1,h2,h3,h4,h5,h6,td,th,article,section,main,div";
+
+  let bestMatch:
+    | {
+        element: HTMLElement;
+        score: number;
+        exact: boolean;
+      }
+    | null = null;
+  const seenElements = new Set<HTMLElement>();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let currentNode: Node | null = walker.nextNode();
+
+  while (currentNode) {
+    const parent = currentNode.parentElement;
+    if (!parent) {
+      currentNode = walker.nextNode();
+      continue;
+    }
+    const tag = parent.tagName.toLowerCase();
+    if (tag === "script" || tag === "style" || tag === "noscript") {
+      currentNode = walker.nextNode();
+      continue;
+    }
+    const container = parent.closest<HTMLElement>(selector) ?? parent;
+    if (seenElements.has(container)) {
+      currentNode = walker.nextNode();
+      continue;
+    }
+    seenElements.add(container);
+
+    const content = normalize(container.innerText || container.textContent || "");
+    if (!content) {
+      currentNode = walker.nextNode();
+      continue;
+    }
+
+    const exact = content.includes(targetText);
+    let score = exact ? 1000 + Math.min(400, targetText.length) : 0;
+    for (const token of tokens) {
+      if (content.includes(token)) {
+        score += 20;
+      }
+    }
+    score -= Math.min(Math.abs(content.length - targetText.length) / 40, 100);
+    if (score <= 0) {
+      currentNode = walker.nextNode();
+      continue;
+    }
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = {
+        element: container,
+        score,
+        exact,
+      };
+    }
+
+    currentNode = walker.nextNode();
+  }
+
+  if (!bestMatch) {
+    return { ok: false, reason: "not-found" };
+  }
+
+  const previousHighlighted = document.querySelectorAll<HTMLElement>(`[${markerAttribute}="true"]`);
+  previousHighlighted.forEach((element) => {
+    if (element === bestMatch?.element) {
+      return;
+    }
+    element.removeAttribute(markerAttribute);
+    element.style.backgroundColor = "";
+    element.style.boxShadow = "";
+  });
+
+  const target = bestMatch.element;
+  target.setAttribute(markerAttribute, "true");
+  target.scrollIntoView({
+    behavior: "smooth",
+    block: "center",
+    inline: "nearest",
+  });
+  target.style.transition = "background-color 1200ms ease, box-shadow 600ms ease";
+  target.style.backgroundColor = "rgba(255, 235, 59, 0.55)";
+  target.style.boxShadow = "0 0 0 3px rgba(255, 193, 7, 0.6)";
+
+  window.setTimeout(() => {
+    target.style.backgroundColor = "rgba(255, 235, 59, 0.18)";
+    target.style.boxShadow = "0 0 0 1px rgba(255, 193, 7, 0.4)";
+  }, 1800);
+  window.setTimeout(() => {
+    target.style.backgroundColor = "";
+    target.style.boxShadow = "";
+  }, 3600);
+
+  return { ok: true, refId: payload.refId, score: bestMatch.score, exact: bestMatch.exact };
+}
+
 class BrowserViewController {
   private window: BrowserWindow | null = null;
   private views = new Map<string, WebContentsView>();
   private viewState = new Map<string, { url: string | null; bounds: BrowserViewBounds | null }>();
+  private pendingHighlights = new Map<string, BrowserViewReferenceHighlight>();
   private senderToTab = new Map<number, string>();
   private listenersRegistered = false;
 
@@ -131,6 +265,10 @@ class BrowserViewController {
 
     view.webContents.on("did-navigate", handleNav);
     view.webContents.on("did-navigate-in-page", handleNav);
+    view.webContents.on("did-finish-load", () => {
+      this.sendState(tabId);
+      void this.applyPendingHighlight(tabId);
+    });
     view.webContents.on("page-title-updated", (_event, title) => {
       this.sendState(tabId, { title });
     });
@@ -184,6 +322,36 @@ class BrowserViewController {
     this.window.webContents.send("browserview-state", payload);
   }
 
+  private async applyPendingHighlight(tabId: string): Promise<boolean> {
+    const view = this.views.get(tabId);
+    if (!view) {
+      return false;
+    }
+    const payload = this.pendingHighlights.get(tabId);
+    if (!payload) {
+      return false;
+    }
+    if (view.webContents.isLoadingMainFrame()) {
+      return false;
+    }
+    try {
+      const result: unknown = await view.webContents.executeJavaScript(
+        `(${runReferenceHighlightScript.toString()})(${JSON.stringify({
+          refId: payload.refId,
+          text: payload.text,
+        })})`,
+        true,
+      );
+      const ok = isJsonObject(result) && result.ok === true;
+      if (ok) {
+        this.pendingHighlights.delete(tabId);
+      }
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
   async open(tabId: string, url: string, bounds: BrowserViewBounds) {
     if (!isAllowedUrl(url)) {
       return false;
@@ -206,6 +374,7 @@ class BrowserViewController {
       await view.webContents.loadURL(url);
     } else {
       this.sendState(tabId);
+      void this.applyPendingHighlight(tabId);
     }
     return true;
   }
@@ -276,12 +445,26 @@ class BrowserViewController {
     this.senderToTab.delete(view.webContents.id);
     this.views.delete(tabId);
     this.viewState.delete(tabId);
+    this.pendingHighlights.delete(tabId);
   }
 
   openExternal(url: string) {
     if (isAllowedUrl(url)) {
       void shell.openExternal(url);
     }
+  }
+
+  async highlightReference(tabId: string, reference: BrowserViewReferenceHighlight) {
+    const view = this.views.get(tabId);
+    if (!view) {
+      return false;
+    }
+    const payload = sanitizeReferenceHighlight(reference);
+    if (!payload.text) {
+      return false;
+    }
+    this.pendingHighlights.set(tabId, payload);
+    return this.applyPendingHighlight(tabId);
   }
 }
 

@@ -2,6 +2,7 @@ import "katex/dist/katex.min.css";
 import "@/assets/github-markdown.css";
 import "@/assets/mdx-renderer.css";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { isValidElement } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import type { Pluggable } from "unified";
 import { MarkdownHooks } from "react-markdown";
@@ -11,6 +12,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { cn } from "@/lib/utils";
 import { mdxComponents } from "@/components/markdown/components/mdx-components";
+import { isDeepResearchRefUri } from "@/shared/deepresearch";
 
 interface TextRange {
   start: number;
@@ -332,6 +334,24 @@ export const MarkdownRenderer = memo(
         }
         return null;
       };
+      const normalizeHref = (href: unknown): string | null => {
+        if (typeof href === "string") {
+          const trimmed = href.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+        if (href instanceof URL) {
+          return href.toString();
+        }
+        if (href === null || href === undefined) {
+          return null;
+        }
+        try {
+          const casted = String(href).trim();
+          return casted.length > 0 ? casted : null;
+        } catch {
+          return null;
+        }
+      };
       const isHttpUrl = (href?: string | null) => {
         if (!href) {
           return false;
@@ -343,23 +363,51 @@ export const MarkdownRenderer = memo(
           return false;
         }
       };
+      const isDeertubeUrl = (href?: string | null) => {
+        if (!href) {
+          return false;
+        }
+        if (href.toLowerCase().startsWith("deertube://")) {
+          return true;
+        }
+        try {
+          const parsed = new URL(href);
+          return parsed.protocol === "deertube:";
+        } catch {
+          return false;
+        }
+      };
+      const isReferenceUrl = (href?: string | null) =>
+        isHttpUrl(href) || isDeertubeUrl(href) || (typeof href === "string" && isDeepResearchRefUri(href));
       const flattenText = (children: ReactNode): string => {
-        if (typeof children === "string") {
-          return children;
+        try {
+          const stack: ReactNode[] = [children];
+          const fragments: string[] = [];
+          let guard = 0;
+          while (stack.length > 0 && guard < 6000) {
+            guard += 1;
+            const current = stack.pop();
+            if (typeof current === "string" || typeof current === "number") {
+              fragments.push(String(current));
+              continue;
+            }
+            if (Array.isArray(current)) {
+              for (let index = current.length - 1; index >= 0; index -= 1) {
+                stack.push(current[index] as ReactNode);
+              }
+              continue;
+            }
+            if (isValidElement<{ children?: ReactNode }>(current)) {
+              const child = current.props?.children;
+              if (child !== current) {
+                stack.push(child);
+              }
+            }
+          }
+          return fragments.join("");
+        } catch {
+          return "";
         }
-        if (Array.isArray(children)) {
-          return children
-            .map((child) => flattenText(child as ReactNode))
-            .join("");
-        }
-        if (children && typeof children === "object" && "props" in children) {
-          const childProps = (children as { props?: { children?: ReactNode } })
-            .props;
-          return childProps?.children
-            ? flattenText(childProps.children as ReactNode)
-            : "";
-        }
-        return "";
       };
       const markdownLinkClassName = "markdown-link";
       const nodeLinkClassName = "markdown-link markdown-node-link";
@@ -370,63 +418,82 @@ export const MarkdownRenderer = memo(
             node?: { url?: string; properties?: { href?: string } };
           },
         ) => {
-          const nodeProp = props.node;
-          const { node: _node, ...restProps } = props;
-          const rawHref =
-            props.href ??
-            (nodeProp && typeof nodeProp === "object" && "url" in nodeProp
-              ? String(nodeProp.url ?? "")
-              : undefined) ??
-            (nodeProp &&
-            typeof nodeProp === "object" &&
-            "properties" in nodeProp &&
-            nodeProp.properties?.href
-              ? String(
-                  nodeProp.properties?.href,
-                )
-              : undefined);
-          const nodeId = parseNodeHref(rawHref);
-          if (nodeId) {
-            const labelText = flattenText(props.children);
-            const label =
-              (labelText.length > 0 ? labelText : undefined) ??
-              (resolveNodeLabel ? resolveNodeLabel(nodeId) : undefined) ??
-              `Node ${nodeId.slice(0, 6)}`;
-            return (
-              <button
-                type="button"
-                onClick={() => onNodeLinkClick?.(nodeId)}
-                className={nodeLinkClassName}
-                title={`Focus node ${label}`}
-                disabled={!onNodeLinkClick}
-              >
-                {label}
-              </button>
-            );
-          }
-          if (isHttpUrl(rawHref) && onReferenceClick) {
-            const labelText = flattenText(props.children);
+          try {
+            const nodeProp = props.node;
+            const { node: _node, ...restProps } = props;
+            const rawHref =
+              props.href ??
+              (nodeProp && typeof nodeProp === "object" && "url" in nodeProp
+                ? String(nodeProp.url ?? "")
+                : undefined) ??
+              (nodeProp &&
+              typeof nodeProp === "object" &&
+              "properties" in nodeProp &&
+              nodeProp.properties?.href
+                ? String(
+                    nodeProp.properties?.href,
+                  )
+                : undefined);
+            const normalizedHref = normalizeHref(rawHref);
+            const nodeId = parseNodeHref(normalizedHref);
+            if (nodeId) {
+              const labelText = flattenText(props.children);
+              const label =
+                (labelText.length > 0 ? labelText : undefined) ??
+                (resolveNodeLabel ? resolveNodeLabel(nodeId) : undefined) ??
+                `Node ${nodeId.slice(0, 6)}`;
+              return (
+                <button
+                  type="button"
+                  onClick={() => onNodeLinkClick?.(nodeId)}
+                  className={nodeLinkClassName}
+                  title={`Focus node ${label}`}
+                  disabled={!onNodeLinkClick}
+                >
+                  {label}
+                </button>
+              );
+            }
+            if (isReferenceUrl(normalizedHref) && onReferenceClick) {
+              const labelText = flattenText(props.children);
+              return (
+                <a
+                  {...restProps}
+                  href={normalizedHref ?? undefined}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (!normalizedHref) {
+                      return;
+                    }
+                    onReferenceClick(normalizedHref, labelText);
+                  }}
+                  className={markdownLinkClassName}
+                  title={normalizedHref ?? undefined}
+                />
+              );
+            }
+            if (isDeertubeUrl(normalizedHref) && !onReferenceClick) {
+              return <span className={markdownLinkClassName}>{props.children}</span>;
+            }
             return (
               <a
                 {...restProps}
-                href={rawHref}
-                onClick={(event) => {
-                  event.preventDefault();
-                  onReferenceClick(rawHref ?? "", labelText);
-                }}
+                target="_blank"
+                rel="noopener noreferrer"
                 className={markdownLinkClassName}
-                title={rawHref}
               />
             );
+          } catch {
+            return (
+              <a
+                className={markdownLinkClassName}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {props.children}
+              </a>
+            );
           }
-          return (
-            <a
-              target="_blank"
-              rel="noopener noreferrer"
-              className={markdownLinkClassName}
-              {...restProps}
-            />
-          );
         },
       };
     }, [onNodeLinkClick, onReferenceClick, resolveNodeLabel]);

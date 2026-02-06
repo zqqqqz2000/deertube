@@ -9,6 +9,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { baseProcedure, createTRPCRouter } from "../init";
 import type { DeertubeUIMessage } from "../../../src/modules/ai/tools";
 import { createTools } from "../../../src/modules/ai/tools";
+import { createDeepResearchPersistenceAdapter } from "../../deepresearch/store";
 
 const noStepLimit = () => false;
 
@@ -66,7 +67,8 @@ export const chatRouter = createTRPCRouter({
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
         "When a question requires external evidence or sources, call the `deepSearch` tool (it performs network search and uses a subagent for deep exploration).",
-        "If you used the `deepSearch` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use this tool, do not include footnotes.",
+        "If you used the `deepSearch` tool, keep citation markers like [1], [2] exactly as provided by the tool output and do not rewrite them into footnotes.",
+        "Do not merge citations into one bracket like [1,2] or [1-2]; keep separate markers [1], [2].",
         ...contextLines,
       ]
         .filter(Boolean)
@@ -151,7 +153,8 @@ export const chatRouter = createTRPCRouter({
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
         "When a question requires external evidence or sources, call the `deepSearch` tool (it performs network search and uses a subagent for deep exploration).",
-        "If you used the `deepSearch` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use this tool, do not include footnotes.",
+        "If you used the `deepSearch` tool, keep citation markers like [1], [2] exactly as provided by the tool output and do not rewrite them into footnotes.",
+        "Do not merge citations into one bracket like [1,2] or [1-2]; keep separate markers [1], [2].",
         ...contextLines,
       ]
         .filter(Boolean)
@@ -176,11 +179,13 @@ export const chatRouter = createTRPCRouter({
       const stream = createUIMessageStream<DeertubeUIMessage>({
         originalMessages: input.messages,
         execute: async ({ writer }) => {
+          const deepResearchStore = createDeepResearchPersistenceAdapter(input.projectPath);
           const tools = createTools(writer, {
             model,
             tavilyApiKey: input.settings?.tavilyApiKey,
             jinaReaderBaseUrl: input.settings?.jinaReaderBaseUrl,
             jinaReaderApiKey: input.settings?.jinaReaderApiKey,
+            deepResearchStore,
           });
           const result = streamText({
             model,

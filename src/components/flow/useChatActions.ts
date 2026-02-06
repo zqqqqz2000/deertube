@@ -750,20 +750,6 @@ function extractUiMessageText(message: DeertubeUIMessage): string {
   if (!("parts" in message) || !Array.isArray(message.parts)) {
     return "";
   }
-  const text = message.parts
-    .filter(
-      (part): part is { type: "text"; text: string } =>
-        typeof part === "object" &&
-        part !== null &&
-        "type" in part &&
-        part.type === "text" &&
-        "text" in part,
-    )
-    .map((part) => part.text)
-    .join("");
-  if (text.trim().length > 0) {
-    return text;
-  }
   for (const part of message.parts) {
     const toolText = extractDeepSearchToolText(part);
     if (toolText) {
@@ -781,6 +767,20 @@ function extractUiMessageText(message: DeertubeUIMessage): string {
     if (typeof error === "string" && error.trim().length > 0) {
       return error;
     }
+  }
+  const text = message.parts
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        typeof part === "object" &&
+        part !== null &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part,
+    )
+    .map((part) => part.text)
+    .join("");
+  if (text.trim().length > 0) {
+    return text;
   }
   return "";
 }

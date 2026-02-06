@@ -7,6 +7,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { baseProcedure, createTRPCRouter } from '../init'
 import { ensureProjectStore } from './project'
 import type { JsonObject, JsonValue } from '../../../src/types/json'
+import { resolveDeepResearchReference } from '../../deepresearch/store'
 
 const TavilyOptionalStringSchema = z.preprocess(
   (value) => (typeof value === 'string' ? value : undefined),
@@ -212,6 +213,17 @@ async function fetchJinaReaderMarkdown(
 }
 
 export const deepSearchRouter = createTRPCRouter({
+  resolveReference: baseProcedure
+    .input(
+      z.object({
+        projectPath: z.string(),
+        uri: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const reference = await resolveDeepResearchReference(input.projectPath, input.uri)
+      return { reference }
+    }),
   run: baseProcedure
     .input(
       z.object({

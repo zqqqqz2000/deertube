@@ -38,14 +38,30 @@ export interface DeepSearchSourcePayload {
   title?: string
   snippet?: string
   excerpts?: string[]
+  referenceIds?: number[]
+}
+
+export interface DeepSearchReferencePayload {
+  refId: number
+  uri: string
+  pageId: string
+  url: string
+  title?: string
+  startLine: number
+  endLine: number
+  text: string
 }
 
 export interface DeepSearchStreamPayload {
   toolCallId: string
   toolName?: string
   query?: string
+  projectId?: string
+  searchId?: string
   status?: 'running' | 'complete' | 'failed'
   sources?: DeepSearchSourcePayload[]
+  references?: DeepSearchReferencePayload[]
+  prompt?: string
   conclusion?: string
   error?: string
   complete?: boolean
