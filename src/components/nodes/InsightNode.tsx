@@ -3,6 +3,7 @@ import type { InsightNodeData } from "../../types/flow";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 type InsightNodeProps = NodeProps<InsightNodeData>;
 
@@ -50,7 +51,7 @@ export default function InsightNode({ data, selected }: InsightNodeProps) {
   return (
     <Card
       className={`node-card relative w-[340px] border-border/70 bg-card/90 text-foreground shadow-xl shadow-black/25 transition-[box-shadow,transform] duration-200 after:pointer-events-none after:absolute after:-inset-1 after:rounded-[18px] after:shadow-[0_0_18px_rgba(59,130,246,0.45)] after:opacity-0 after:transition-opacity after:duration-200 ${
-        selected ? "ring-1 ring-primary/40 after:opacity-100 node-card--focused" : ""
+        selected ? "ring-1 ring-primary/40 after:opacity-100" : ""
       }`}
     >
       <CardContent className="p-4">
@@ -69,11 +70,13 @@ export default function InsightNode({ data, selected }: InsightNodeProps) {
         <div className="mt-3 text-xs uppercase tracking-[0.2em] text-muted-foreground">
           Excerpt
         </div>
-        <div className="node-excerpt-wrap">
-          <MarkdownRenderer
-            source={data.excerpt}
-            className="node-excerpt mt-2 text-xs leading-relaxed text-foreground/80"
-          />
+        <div className="nodrag nopan" onWheelCapture={(event) => event.stopPropagation()}>
+          <ScrollArea className="node-excerpt-scroll mt-2 h-[110px]">
+            <MarkdownRenderer
+              source={data.excerpt}
+              className="node-excerpt text-xs leading-relaxed text-foreground/80"
+            />
+          </ScrollArea>
         </div>
       </CardContent>
       <Handle type="source" position={Position.Right} />

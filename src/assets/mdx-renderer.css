@@ -112,22 +112,12 @@
   padding-left: 1.25rem;
 }
 
-.node-excerpt-wrap {
-  max-height: 140px;
-  overflow: hidden;
-  transition: max-height 200ms ease;
-}
-
-.node-card--focused .node-excerpt-wrap {
-  max-height: 520px;
+.node-excerpt-scroll {
+  z-index: 0;
 }
 
 .node-card {
   z-index: 1;
-}
-
-.node-card--focused {
-  z-index: 30;
 }
 
 .react-flow__node {
