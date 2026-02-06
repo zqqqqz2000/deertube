@@ -118,7 +118,7 @@
   transition: max-height 200ms ease;
 }
 
-.node-card:hover .node-excerpt-wrap {
+.node-card--focused .node-excerpt-wrap {
   max-height: 520px;
 }
 
@@ -126,7 +126,7 @@
   z-index: 1;
 }
 
-.node-card:hover {
+.node-card--focused {
   z-index: 30;
 }
 
@@ -134,6 +134,6 @@
   z-index: 1;
 }
 
-.react-flow__node:hover {
+.react-flow__node.selected {
   z-index: 1000 !important;
 }

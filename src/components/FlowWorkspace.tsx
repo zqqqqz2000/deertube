@@ -18,7 +18,9 @@ import SourceNode from "./nodes/SourceNode";
 import InsightNode from "./nodes/InsightNode";
 import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
+import { Lock, LockOpen } from "lucide-react";
 import { createProfileDraft } from "../lib/settings";
+import { getNodeSize } from "../lib/elkLayout";
 import FlowHeader from "./flow/FlowHeader";
 import FlowPanelInput from "./flow/FlowPanelInput";
 import type { FlowWorkspaceProps, ProjectState } from "./flow/types";
@@ -429,6 +431,7 @@ function FlowWorkspaceInner({
   );
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [isDragging, setIsDragging] = useState(false);
+  const [autoLayoutLocked, setAutoLayoutLocked] = useState(false);
   const [chatScrollSignal, setChatScrollSignal] = useState(0);
   const [chatFocusSignal, setChatFocusSignal] = useState(0);
   const [layoutModel, setLayoutModel] = useState<IJsonModel>(
@@ -448,6 +451,12 @@ function FlowWorkspaceInner({
   const saveTimer = useRef<number | null>(null);
   const inputZoomRef = useRef<{ viewport: Viewport; nodeId: string } | null>(null);
   const nodeZoomRef = useRef<Viewport | null>(null);
+  const autoLayoutPendingRef = useRef(false);
+  const autoLayoutWasRunningRef = useRef(false);
+  const autoLayoutLastSizesRef = useRef<
+    Map<string, { width: number; height: number }> | null
+  >(null);
+  const autoLayoutLastCountRef = useRef<number | null>(null);
   const { getNode } = useReactFlow();
   const flowStateOptions = useMemo(() => ({ autoSave: false }), []);
 
@@ -518,6 +527,92 @@ function FlowWorkspaceInner({
     () => ({ question: QuestionNode, source: SourceNode, insight: InsightNode }),
     [],
   );
+
+  useEffect(() => {
+    if (!autoLayoutLocked) {
+      autoLayoutPendingRef.current = false;
+      autoLayoutLastSizesRef.current = null;
+      autoLayoutLastCountRef.current = null;
+      return;
+    }
+    const resolveDimension = (value: number | null | undefined) =>
+      typeof value === "number" && value > 0 ? value : undefined;
+    const currentSizes = new Map<string, { width: number; height: number }>();
+    nodes.forEach((node) => {
+      const internal = flowInstance?.getNode(node.id);
+      const width =
+        resolveDimension(internal?.width) ?? resolveDimension(node.width);
+      const height =
+        resolveDimension(internal?.height) ?? resolveDimension(node.height);
+      const size = getNodeSize({
+        ...node,
+        width,
+        height,
+      });
+      currentSizes.set(node.id, size);
+    });
+
+    const previousSizes = autoLayoutLastSizesRef.current;
+    const previousCount = autoLayoutLastCountRef.current;
+    const countChanged =
+      typeof previousCount === "number" && nodes.length !== previousCount;
+    let sizeChanged = false;
+    if (previousSizes && previousSizes.size === currentSizes.size) {
+      for (const [id, size] of currentSizes) {
+        const previousSize = previousSizes.get(id);
+        if (!previousSize) {
+          sizeChanged = true;
+          break;
+        }
+        if (
+          previousSize.width !== size.width ||
+          previousSize.height !== size.height
+        ) {
+          sizeChanged = true;
+          break;
+        }
+      }
+    } else if (previousSizes) {
+      sizeChanged = true;
+    }
+
+    const shouldLayout = countChanged || sizeChanged;
+    autoLayoutLastSizesRef.current = currentSizes;
+    autoLayoutLastCountRef.current = nodes.length;
+
+    if (!shouldLayout) {
+      return;
+    }
+    if (isLayouting) {
+      autoLayoutPendingRef.current = true;
+      return;
+    }
+    void handleAutoLayout();
+  }, [
+    autoLayoutLocked,
+    flowInstance,
+    handleAutoLayout,
+    isLayouting,
+    nodes,
+    viewport.zoom,
+  ]);
+
+  useEffect(() => {
+    const wasLayouting = autoLayoutWasRunningRef.current;
+    autoLayoutWasRunningRef.current = isLayouting;
+    if (!wasLayouting || isLayouting) {
+      return;
+    }
+    if (!autoLayoutLocked) {
+      autoLayoutPendingRef.current = false;
+      return;
+    }
+    if (!autoLayoutPendingRef.current) {
+      return;
+    }
+    autoLayoutPendingRef.current = false;
+    void handleAutoLayout();
+  }, [autoLayoutLocked, handleAutoLayout, isLayouting]);
   const browserTabMap = useMemo(
     () => new Map(browserTabs.map((tab) => [tab.id, tab])),
     [browserTabs],
@@ -1101,16 +1196,17 @@ function FlowWorkspaceInner({
     if (tabId === "graph" || tabId === GRAPH_TAB_ID) {
       return (
         <div className="relative h-full w-full">
-          <ReactFlow
-            nodes={nodes}
-            edges={displayEdges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            nodeTypes={nodeTypes}
-            onInit={(instance) => {
-              setFlowInstance(instance);
-              setViewport(instance.getViewport());
-            }}
+            <ReactFlow
+              nodes={nodes}
+              edges={displayEdges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              nodeTypes={nodeTypes}
+              nodesDraggable={!autoLayoutLocked}
+              onInit={(instance) => {
+                setFlowInstance(instance);
+                setViewport(instance.getViewport());
+              }}
             onMove={(_, nextViewport) => setViewport(nextViewport)}
             onMoveStart={() => setIsDragging(true)}
             onMoveEnd={() => setIsDragging(false)}
@@ -1154,15 +1250,24 @@ function FlowWorkspaceInner({
             <Background gap={20} size={1} color="var(--flow-grid)" />
             <Panel position="top-right" className="flex items-center gap-2">
               <Button
-                size="sm"
+                size="icon"
                 variant="outline"
-                className="border-border/70 bg-card/80 text-xs uppercase tracking-[0.2em] text-muted-foreground hover:border-border hover:bg-accent/40 hover:text-foreground"
+                className={`h-9 w-9 border-border/70 bg-card/80 text-muted-foreground transition-colors hover:border-border hover:bg-accent/40 hover:text-foreground ${
+                  autoLayoutLocked ? "border-primary/50 text-foreground" : ""
+                }`}
                 onClick={() => {
-                  void handleAutoLayout();
+                  setAutoLayoutLocked((prev) => !prev);
                 }}
-                disabled={isLayouting || nodes.length === 0}
+                disabled={nodes.length === 0}
+                aria-label={
+                  autoLayoutLocked ? "Disable auto layout lock" : "Enable auto layout lock"
+                }
+                aria-pressed={autoLayoutLocked}
+                title={
+                  autoLayoutLocked ? "Auto layout locked" : "Auto layout unlocked"
+                }
               >
-                {isLayouting ? "Layout..." : "Auto layout"}
+                {autoLayoutLocked ? <Lock /> : <LockOpen />}
               </Button>
             </Panel>
             <Controls
