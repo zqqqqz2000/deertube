@@ -19,7 +19,7 @@ import SourceNode from "./nodes/SourceNode";
 import InsightNode from "./nodes/InsightNode";
 import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
-import { LayoutGrid, Lock, LockOpen } from "lucide-react";
+import { Globe, LayoutGrid, Lock, LockOpen, MessageSquare, Network } from "lucide-react";
 import { createProfileDraft } from "../lib/settings";
 import { getNodeSize } from "../lib/elkLayout";
 import FlowHeader from "./flow/FlowHeader";
@@ -52,6 +52,7 @@ const GRAPH_TAB_ID = "graph-tab";
 const CHAT_DEFAULT_WEIGHT = 26;
 const TOTAL_LAYOUT_WEIGHT = 100;
 const BROWSER_TAB_PREFIX = "browser:";
+const BROWSER_TAB_MAX_LABEL_LENGTH = 36;
 
 type ProjectStateInput = Omit<ProjectState, "chat"> & { chat?: ChatMessage[] };
 
@@ -135,6 +136,16 @@ const isHttpUrl = (value: string) => {
 const normalizeBrowserLabel = (label?: string) => {
   const trimmed = label?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+};
+
+const truncateLabel = (value: string, maxLength: number) => {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  if (maxLength <= 3) {
+    return ".".repeat(Math.max(0, maxLength));
+  }
+  return `${value.slice(0, maxLength - 3)}...`;
 };
 
 const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => {
@@ -1451,7 +1462,7 @@ function FlowWorkspaceInner({
       if (browserTabId) {
         const tab = browserTabMap.get(browserTabId);
         const resolvedLabel = normalizeBrowserLabel(tab?.title);
-        const label =
+        const rawLabel =
           resolvedLabel ??
           (() => {
             if (!tab?.url) {
@@ -1463,13 +1474,20 @@ function FlowWorkspaceInner({
               return tab.url;
             }
           })();
+        const label = truncateLabel(rawLabel, BROWSER_TAB_MAX_LABEL_LENGTH);
         return (
-          <span className="text-sm font-medium text-foreground">{label}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="max-w-[24ch] truncate text-sm font-medium text-foreground" title={rawLabel}>
+              {label}
+            </span>
+          </div>
         );
       }
       if (tabId === "chat" || tabId === CHAT_TAB_ID) {
         return (
-          <div className="flex items-center gap-2 text-sm font-medium">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+            <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="text-foreground">Chat</span>
             <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
               {chatMessages.length} MSG
@@ -1478,7 +1496,12 @@ function FlowWorkspaceInner({
         );
       }
       if (tabId === "graph" || tabId === GRAPH_TAB_ID) {
-        return <span className="text-sm font-medium text-foreground">Graph</span>;
+        return (
+          <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+            <Network className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-foreground">Graph</span>
+          </div>
+        );
       }
       return <span className="text-sm font-medium text-foreground">{tabId}</span>;
     },
