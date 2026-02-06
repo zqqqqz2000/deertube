@@ -189,6 +189,12 @@ export function useChatActions({
   const [graphEventMessages, setGraphEventMessages] = useState<ChatMessage[]>(
     () => initialMessages.filter((message) => message.kind === "graph-event"),
   );
+  const [persistedSubagentEvents] = useState<ChatMessage[]>(
+    () => initialMessages.filter((message) => message.kind === "subagent-event"),
+  );
+  const [persistedDeepSearchEvents] = useState<ChatMessage[]>(
+    () => initialMessages.filter((message) => message.kind === "deepsearch-event"),
+  );
   const loggedGraphEventsRef = useRef<Map<string, string>>(new Map());
   const loggedStreamPartsRef = useRef<Map<string, string>>(new Map());
 
@@ -553,16 +559,29 @@ export function useChatActions({
     const withGraphEvents = graphEventMessages.length
       ? mergeGraphEvents(mapped, graphEventMessages)
       : mapped;
-    const subagentEvents = buildSubagentEvents(messages, status);
+    const subagentEvents = mergePersistedAgentEvents(
+      persistedSubagentEvents,
+      buildSubagentEvents(messages, status),
+    );
     const withSubagentEvents = subagentEvents.length
       ? mergeSubagentEvents(withGraphEvents, subagentEvents)
       : withGraphEvents;
-    const deepSearchEvents = buildDeepSearchEvents(messages, status);
+    const deepSearchEvents = mergePersistedAgentEvents(
+      persistedDeepSearchEvents,
+      buildDeepSearchEvents(messages, status),
+    );
     if (!deepSearchEvents.length) {
       return withSubagentEvents;
     }
     return mergeDeepSearchEvents(withSubagentEvents, deepSearchEvents);
-  }, [messages, status, error, graphEventMessages]);
+  }, [
+    messages,
+    status,
+    error,
+    graphEventMessages,
+    persistedSubagentEvents,
+    persistedDeepSearchEvents,
+  ]);
 
   const sendPrompt = useCallback(
     (rawPrompt: string, reset: () => void) => {
@@ -1001,6 +1020,26 @@ function mergeGraphEvents(
   }
 
   return merged;
+}
+
+function mergePersistedAgentEvents(
+  persisted: ChatMessage[],
+  runtime: ChatMessage[],
+): ChatMessage[] {
+  if (persisted.length === 0) {
+    return runtime;
+  }
+  if (runtime.length === 0) {
+    return persisted;
+  }
+  const byId = new Map<string, ChatMessage>();
+  persisted.forEach((message) => {
+    byId.set(message.id, message);
+  });
+  runtime.forEach((message) => {
+    byId.set(message.id, message);
+  });
+  return Array.from(byId.values());
 }
 
 function mergeSubagentEvents(

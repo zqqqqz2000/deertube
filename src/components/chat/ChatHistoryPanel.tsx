@@ -21,6 +21,7 @@ import { ChatMessages } from "@/modules/chat/components/chat-messages";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import {
   ChatEvent,
+  ChatEventAddon,
   ChatEventBody,
   ChatEventContent,
   ChatEventDescription,
@@ -35,7 +36,16 @@ import {
   ChatToolbarAddonEnd,
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
-import { ArrowDown, ChevronDown, Loader2, RotateCw, Send } from "lucide-react";
+import {
+  ArrowDown,
+  ChevronDown,
+  Globe,
+  Loader2,
+  MessageSquare,
+  Network,
+  RotateCw,
+  Send,
+} from "lucide-react";
 import { useStickToBottom } from "use-stick-to-bottom";
 import {
   Collapsible,
@@ -580,6 +590,31 @@ export default function ChatHistoryPanel({
     onSend();
   }, [lastFailedMessageId, onRetry, onSend, showRetry]);
 
+  const renderEventLogo = useCallback(
+    (kind: "graph" | "subagent" | "deepsearch") => {
+      if (kind === "graph") {
+        return (
+          <div className="mx-auto flex size-8 items-center justify-center rounded-full border border-border/70 bg-muted/50 text-foreground/70 @md/chat:size-10">
+            <Network className="size-4 @md/chat:size-5" />
+          </div>
+        );
+      }
+      if (kind === "subagent") {
+        return (
+          <div className="mx-auto flex size-8 items-center justify-center rounded-full border border-border/70 bg-muted/50 text-foreground/70 @md/chat:size-10">
+            <MessageSquare className="size-4 @md/chat:size-5" />
+          </div>
+        );
+      }
+      return (
+        <div className="mx-auto flex size-8 items-center justify-center rounded-full border border-border/70 bg-muted/50 text-foreground/70 @md/chat:size-10">
+          <Globe className="size-4 @md/chat:size-5" />
+        </div>
+      );
+    },
+    [],
+  );
+
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden border border-border/70 bg-background/85 shadow-2xl shadow-black/25 backdrop-blur">
       <Chat>
@@ -669,6 +704,7 @@ export default function ChatHistoryPanel({
 
                 return (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
+                    <ChatEventAddon>{renderEventLogo("graph")}</ChatEventAddon>
                     <ChatEventBody>
                       <Collapsible defaultOpen={false}>
                         <div className="flex items-center justify-between gap-2">
@@ -791,6 +827,7 @@ export default function ChatHistoryPanel({
 
                 return (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
+                    <ChatEventAddon>{renderEventLogo("subagent")}</ChatEventAddon>
                     <ChatEventBody>
                       <Collapsible defaultOpen={false}>
                         <div className="flex items-center justify-between gap-2">
@@ -891,6 +928,7 @@ export default function ChatHistoryPanel({
 
                 return (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
+                    <ChatEventAddon>{renderEventLogo("deepsearch")}</ChatEventAddon>
                     <ChatEventBody>
                       <Collapsible defaultOpen={false}>
                         <div className="flex items-center justify-between gap-2">
