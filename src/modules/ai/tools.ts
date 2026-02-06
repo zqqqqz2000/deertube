@@ -11,22 +11,57 @@ import {
   type ModelMessage,
 } from "ai";
 import { z } from "zod";
+import type { JsonObject, JsonValue } from "@/types/json";
+import { isJsonObject } from "@/types/json";
+
+export interface DeertubeMessageMetadata {
+  status?: "pending" | "complete" | "failed";
+  error?: string;
+}
+
+export type DeertubeUITools = InferUITools<ReturnType<typeof createTools>>;
+
+export type DeertubeUIMessage = UIMessage<
+  DeertubeMessageMetadata,
+  DeertubeUIDataTypes,
+  DeertubeUITools
+>;
 
 interface SubagentStreamPayload {
   toolCallId: string;
   toolName?: string;
-  messages: UIMessage[];
+  messages: DeertubeUIMessage[];
 }
 
-export interface SubagentUIDataParts extends Record<string, unknown> {
+export interface DeepSearchSource {
+  url: string;
+  title?: string;
+  snippet?: string;
+  excerpts?: string[];
+}
+
+interface DeepSearchStreamPayload {
+  toolCallId: string;
+  toolName?: string;
+  query?: string;
+  status?: "running" | "complete" | "failed";
+  sources?: DeepSearchSource[];
+  conclusion?: string;
+  error?: string;
+  complete?: boolean;
+}
+
+export interface SubagentUIDataParts {
   "subagent-stream": SubagentStreamPayload;
 }
 
-export type DeertubeUIDataTypes = SubagentUIDataParts;
+export interface DeepSearchUIDataParts {
+  "deepsearch-stream": DeepSearchStreamPayload;
+  "deepsearch-done": DeepSearchStreamPayload;
+}
 
-export type DeertubeUITools = InferUITools<ReturnType<typeof createTools>>;
-
-export type DeertubeUIMessage = UIMessage<unknown, DeertubeUIDataTypes, DeertubeUITools>;
+export type DeertubeUIDataTypes =
+  Record<string, unknown> & SubagentUIDataParts & DeepSearchUIDataParts;
 
 interface ToolConfig {
   model?: LanguageModel;
@@ -39,7 +74,7 @@ const TavilySearchResultSchema = z.object({
   title: z.string().optional(),
   url: z.string().optional(),
   content: z.string().optional(),
-  raw_content: z.string().optional(),
+  raw_content: z.string().nullable().optional(),
   snippet: z.string().optional(),
   description: z.string().optional(),
 });
@@ -75,15 +110,20 @@ const EXTRACT_SUBAGENT_SYSTEM = [
   "仅输出 JSON。",
 ].join("\n");
 
-const parseJson = (raw: string): unknown => {
+const DEEPSEARCH_SYSTEM = [
+  "You are a deep-research assistant.",
+  "Write a concise answer and cite sources by index like [1].",
+].join("\n");
+
+const parseJson = (raw: string): JsonValue | null => {
   try {
-    return JSON.parse(raw) as unknown;
+    return JSON.parse(raw) as JsonValue;
   } catch {
     return null;
   }
 };
 
-const extractJsonFromText = (text: string): unknown => {
+const extractJsonFromText = (text: string): JsonValue | null => {
   const trimmed = text.trim();
   const direct = parseJson(trimmed);
   if (direct) return direct;
@@ -109,14 +149,13 @@ const extractJsonFromText = (text: string): unknown => {
   return null;
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
+const isRecord = (value: unknown): value is JsonObject => isJsonObject(value);
 
 const writeSubagentStream = (
   writer: UIMessageStreamWriter | undefined,
   toolCallId: string | undefined,
   toolName: string | undefined,
-  messages: UIMessage[],
+  messages: DeertubeUIMessage[],
 ) => {
   if (!writer || !toolCallId) return;
   writer.write({
@@ -126,7 +165,27 @@ const writeSubagentStream = (
   });
 };
 
-type AnyUIMessagePart = NonNullable<UIMessage["parts"]>[number];
+const writeDeepSearchStream = (
+  writer: UIMessageStreamWriter | undefined,
+  toolCallId: string | undefined,
+  toolName: string | undefined,
+  payload: Omit<DeepSearchStreamPayload, "toolCallId" | "toolName">,
+  done = false,
+) => {
+  if (!writer || !toolCallId) return;
+  writer.write({
+    type: done ? "data-deepsearch-done" : "data-deepsearch-stream",
+    id: toolCallId,
+    data: {
+      toolCallId,
+      toolName,
+      ...payload,
+      complete: done || payload.complete,
+    },
+  });
+};
+
+type AnyUIMessagePart = NonNullable<DeertubeUIMessage["parts"]>[number];
 
 const isTextPart = (part: AnyUIMessagePart): part is AnyUIMessagePart & { text: string } =>
   part.type === "text" && "text" in part;
@@ -144,7 +203,7 @@ const getToolName = (part: AnyUIMessagePart): string | undefined => {
   return undefined;
 };
 
-const extractText = (message: UIMessage): string => {
+const extractText = (message: DeertubeUIMessage): string => {
   if (!message.parts) return "";
   return message.parts
     .filter(isTextPart)
@@ -153,20 +212,26 @@ const extractText = (message: UIMessage): string => {
 };
 
 const collectToolOutputs = (
-  message: UIMessage,
-): { name?: string; output: unknown }[] => {
+  message: DeertubeUIMessage,
+) : { name?: string; output: unknown }[] => {
   if (!message.parts) return [];
   return message.parts
     .filter(isToolPart)
-    .map((part) => ({
-      name: getToolName(part),
-      output: "output" in part ? part.output : undefined,
-    }))
-    .filter((item) => item.output !== undefined);
+    .flatMap((part) => {
+      if (!("output" in part) || part.output === undefined) {
+        return [];
+      }
+      return [
+        {
+          name: getToolName(part),
+          output: part.output,
+        },
+      ];
+    });
 };
 
 const normalizeRanges = (
-  ranges: unknown,
+  ranges: JsonValue | null,
   maxLine: number,
 ): { start: number; end: number }[] => {
   if (!Array.isArray(ranges)) return [];
@@ -228,11 +293,47 @@ async function fetchTavilySearch(
       search_depth: "advanced",
     }),
   });
+  const raw = await response.text();
   if (!response.ok) {
+    console.warn("[tavily.search.error]", {
+      query,
+      status: response.status,
+      bodyPreview: raw.slice(0, 400),
+    });
     throw new Error(`Tavily search failed: ${response.status}`);
   }
-  const parsed = TavilyResponseSchema.safeParse(await response.json());
-  return parsed.success ? parsed.data.results ?? [] : [];
+  let parsedJson: JsonValue;
+  try {
+    parsedJson = JSON.parse(raw) as JsonValue;
+  } catch (error) {
+    console.warn("[tavily.search.parse]", {
+      query,
+      status: response.status,
+      error: error instanceof Error ? error.message : "unknown",
+      bodyPreview: raw.slice(0, 400),
+    });
+    throw new Error("Tavily search response parse failed.");
+  }
+  const parsed = TavilyResponseSchema.safeParse(parsedJson);
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0];
+    console.warn("[tavily.search.schema]", {
+      query,
+      status: response.status,
+      issue: firstIssue ? `${firstIssue.path.join(".")}: ${firstIssue.message}` : "invalid",
+      bodyPreview: raw.slice(0, 400),
+    });
+    throw new Error("Tavily search response schema invalid.");
+  }
+  const results = parsed.data.results ?? [];
+  if (results.length === 0) {
+    console.warn("[tavily.search.empty]", {
+      query,
+      status: response.status,
+      bodyPreview: raw.slice(0, 400),
+    });
+  }
+  return results;
 }
 
 async function fetchJinaReaderMarkdown(
@@ -260,13 +361,13 @@ async function fetchJinaReaderMarkdown(
     return parsed;
   }
   if (typeof parsed === "object") {
-    const obj = parsed as Record<string, unknown>;
+    const obj = parsed as JsonObject;
     if (typeof obj.content === "string") {
       return obj.content;
     }
     const nested = obj.data;
     if (nested && typeof nested === "object") {
-      const nestedContent = (nested as Record<string, unknown>).content;
+      const nestedContent = (nested as JsonObject).content;
       if (typeof nestedContent === "string") {
         return nestedContent;
       }
@@ -276,9 +377,13 @@ async function fetchJinaReaderMarkdown(
   return raw;
 }
 
-interface SearchResult { url: string; excerpts: string[]; broken?: boolean }
+interface SearchResult {
+  url: string;
+  excerpts: string[];
+  broken?: boolean;
+}
 
-const normalizeSearchResults = (raw: unknown): SearchResult[] => {
+const normalizeSearchResults = (raw: JsonValue | null): SearchResult[] => {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item) => {
@@ -289,7 +394,9 @@ const normalizeSearchResults = (raw: unknown): SearchResult[] => {
         : Array.isArray(item.paragraphs)
           ? item.paragraphs
           : [];
-      const excerpts = paragraphs.filter((entry) => typeof entry === "string");
+      const excerpts = paragraphs.filter(
+        (entry: unknown): entry is string => typeof entry === "string",
+      );
       const broken = typeof item.broken === "boolean" ? item.broken : undefined;
       if (!url || (excerpts.length === 0 && broken !== true)) return null;
       return broken === undefined ? { url, excerpts } : { url, excerpts, broken };
@@ -315,6 +422,57 @@ const dedupeSearchResults = (
     }
   }
   return Array.from(map.values());
+};
+
+const clampText = (value: string, maxLength: number): string =>
+  value.length > maxLength ? `${value.slice(0, maxLength).trimEnd()}…` : value;
+
+const normalizeExcerpts = (excerpts: string[]): string[] => {
+  const cleaned = excerpts.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  const limited: string[] = [];
+  let total = 0;
+  for (const entry of cleaned) {
+    const slice = clampText(entry, 900);
+    if (total + slice.length > 3200) break;
+    limited.push(slice);
+    total += slice.length;
+    if (limited.length >= 6) break;
+  }
+  return limited;
+};
+
+const deriveSourceTitle = (url: string, fallback?: string): string => {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || (fallback ?? url);
+  } catch {
+    return fallback ?? url;
+  }
+};
+
+const buildSnippet = (excerpts: string[]): string => {
+  if (excerpts.length === 0) return "";
+  return clampText(excerpts.join("\n"), 400);
+};
+
+const buildDeepSearchSources = (
+  results: SearchResult[],
+  maxResults: number,
+): DeepSearchSource[] => {
+  return results
+    .filter((item) => !item.broken && item.excerpts.length > 0)
+    .slice(0, maxResults)
+    .map((item) => {
+      const excerpts = normalizeExcerpts(item.excerpts);
+      const snippet = buildSnippet(excerpts);
+      const title = deriveSourceTitle(item.url, snippet.split("\n")[0]);
+      return {
+        url: item.url,
+        title,
+        snippet,
+        excerpts,
+      };
+    });
 };
 
 async function runExtractSubagent({
@@ -411,7 +569,7 @@ async function runExtractSubagent({
 
   const parsed = extractJsonFromText(result.text);
   const broken = isRecord(parsed) && typeof parsed.broken === "boolean" ? parsed.broken : false;
-  const ranges = normalizeRanges(isRecord(parsed) ? parsed.ranges : undefined, lineCount);
+  const ranges = normalizeRanges(isRecord(parsed) ? parsed.ranges : null, lineCount);
   return { ranges, broken };
 }
 
@@ -436,7 +594,11 @@ async function runSearchSubagent({
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
 }): Promise<{ url: string; excerpts: string[]; broken?: boolean }[]> {
-  const accumulatedMessages: UIMessage[] = [];
+  console.log("[subagent.runSearch]", {
+    query,
+    toolCallId,
+  });
+  const accumulatedMessages: DeertubeUIMessage[] = [];
   let lastText = "";
   const extracted: { url: string; excerpts: string[]; broken?: boolean }[] = [];
 
@@ -447,7 +609,15 @@ async function runSearchSubagent({
       maxResults: z.number().min(1).max(8).optional(),
     }),
     execute: async ({ query: inputQuery, maxResults }) => {
+      console.log("[subagent.search]", {
+        query: inputQuery,
+        maxResults: maxResults ?? 6,
+      });
       const results = await fetchTavilySearch(inputQuery, maxResults ?? 6, tavilyApiKey);
+      console.log("[subagent.search.results]", {
+        count: results.length,
+        top: results.slice(0, 3).map((item) => item.url ?? item.title ?? "unknown"),
+      });
       return { results };
     },
   });
@@ -459,6 +629,10 @@ async function runSearchSubagent({
       query: z.string().min(1),
     }),
     execute: async ({ url, query: extractQuery }, options) => {
+      console.log("[subagent.extract]", {
+        url,
+        query: extractQuery,
+      });
       let markdown = "";
       let broken = false;
       try {
@@ -480,6 +654,12 @@ async function runSearchSubagent({
         abortSignal: options.abortSignal,
       });
       const excerpts = buildExcerptsFromRanges(lines, ranges);
+      console.log("[subagent.extract.done]", {
+        url,
+        broken: extractedBroken,
+        ranges: ranges.length,
+        excerpts: excerpts.length,
+      });
       return { url, broken: extractedBroken, ranges, excerpts };
     },
   });
@@ -497,8 +677,8 @@ async function runSearchSubagent({
     abortSignal,
   });
 
-  const stream = result.toUIMessageStream();
-  const uiMessages = readUIMessageStream({ stream });
+  const stream = result.toUIMessageStream<DeertubeUIMessage>();
+  const uiMessages = readUIMessageStream<DeertubeUIMessage>({ stream });
 
   for await (const uiMessage of uiMessages) {
     const existingIndex = accumulatedMessages.findIndex((item) => item.id === uiMessage.id);
@@ -516,7 +696,9 @@ async function runSearchSubagent({
         if (!isRecord(output.output)) return;
         const url = typeof output.output.url === "string" ? output.output.url : "";
         const excerpts = Array.isArray(output.output.excerpts)
-          ? output.output.excerpts.filter((item) => typeof item === "string")
+          ? output.output.excerpts.filter(
+              (item: unknown): item is string => typeof item === "string",
+            )
           : [];
         const broken =
           typeof output.output.broken === "boolean" ? output.output.broken : undefined;
@@ -533,36 +715,195 @@ async function runSearchSubagent({
   const parsed = extractJsonFromText(lastText);
   const normalized = normalizeSearchResults(parsed);
   if (normalized.length > 0) {
+    console.log("[subagent.runSearch.done]", {
+      query,
+      results: normalized.length,
+    });
     return dedupeSearchResults(normalized);
   }
   if (extracted.length > 0) {
+    console.log("[subagent.runSearch.done]", {
+      query,
+      results: extracted.length,
+    });
     return dedupeSearchResults(extracted);
   }
+  console.log("[subagent.runSearch.done]", {
+    query,
+    results: 0,
+  });
   return [];
+}
+
+const buildDeepSearchContext = (
+  query: string,
+  sources: DeepSearchSource[],
+): string => {
+  const context = sources
+    .map((source, index) => {
+      const title = source.title ?? source.url;
+      const body =
+        source.excerpts && source.excerpts.length > 0
+          ? source.excerpts.join("\n")
+          : source.snippet ?? "";
+      return `Source ${index + 1}: ${title}\n${body}`;
+    })
+    .join("\n\n");
+  return `Question: ${query}\n\n${context}`;
+};
+
+async function runDeepSearchTool({
+  query,
+  maxResults,
+  model,
+  writer,
+  toolCallId,
+  toolName,
+  abortSignal,
+  tavilyApiKey,
+  jinaReaderBaseUrl,
+  jinaReaderApiKey,
+}: {
+  query: string;
+  maxResults?: number;
+  model: LanguageModel;
+  writer?: UIMessageStreamWriter;
+  toolCallId?: string;
+  toolName?: string;
+  abortSignal?: AbortSignal;
+  tavilyApiKey?: string;
+  jinaReaderBaseUrl?: string;
+  jinaReaderApiKey?: string;
+}): Promise<{ conclusion: string; sources: DeepSearchSource[]; error?: string }> {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    const message = "Query is empty after trimming.";
+    writeDeepSearchStream(
+      writer,
+      toolCallId,
+      toolName,
+      {
+        query: normalizedQuery,
+        status: "failed",
+        error: message,
+        complete: true,
+      },
+      true,
+    );
+    return { conclusion: message, sources: [], error: message };
+  }
+  const resolvedMax = Math.max(1, Math.min(8, maxResults ?? 5));
+  writeDeepSearchStream(writer, toolCallId, toolName, {
+    query: normalizedQuery,
+    status: "running",
+  });
+
+  try {
+    const results = await runSearchSubagent({
+      query: normalizedQuery,
+      model,
+      writer,
+      toolCallId,
+      toolName: "search",
+      abortSignal,
+      tavilyApiKey,
+      jinaReaderBaseUrl,
+      jinaReaderApiKey,
+    });
+    const sources = buildDeepSearchSources(results, resolvedMax);
+    writeDeepSearchStream(writer, toolCallId, toolName, {
+      query: normalizedQuery,
+      sources,
+      status: "running",
+    });
+
+    let conclusion = "";
+    if (sources.length === 0) {
+      conclusion = "No relevant sources found.";
+    } else {
+      const prompt = buildDeepSearchContext(normalizedQuery, sources);
+      const result = streamText({
+        model,
+        system: DEEPSEARCH_SYSTEM,
+        prompt,
+        abortSignal,
+      });
+      for await (const delta of result.textStream) {
+        conclusion += delta;
+        writeDeepSearchStream(writer, toolCallId, toolName, {
+          query: normalizedQuery,
+          sources,
+          conclusion,
+          status: "running",
+        });
+      }
+    }
+
+    const finalConclusion = conclusion.trim() || "No conclusion generated.";
+    writeDeepSearchStream(
+      writer,
+      toolCallId,
+      toolName,
+      {
+        query: normalizedQuery,
+        sources,
+        conclusion: finalConclusion,
+        status: "complete",
+        complete: true,
+      },
+      true,
+    );
+
+    return { conclusion: finalConclusion, sources };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Deep search failed.";
+    writeDeepSearchStream(
+      writer,
+      toolCallId,
+      toolName,
+      {
+        query: normalizedQuery,
+        status: "failed",
+        error: message,
+        complete: true,
+      },
+      true,
+    );
+    return { conclusion: message, sources: [], error: message };
+  }
 }
 
 export function createTools(writer: UIMessageStreamWriter, config: ToolConfig = {}) {
   return {
-    search: tool({
-      description: "Search the web and return relevant excerpts from sources.",
+    deepSearch: tool({
+      description:
+        "Run deep research via network search and a subagent, returning a concise conclusion with sources.",
       inputSchema: z.object({
         query: z.string().min(1),
+        maxResults: z.number().min(1).max(8).optional(),
       }),
-      execute: async ({ query }, options) => {
+      execute: async ({ query, maxResults }, options) => {
         if (!config.model) {
-          throw new Error("Search tool is not configured with a model.");
+          throw new Error("DeepSearch tool is not configured with a model.");
         }
-        return runSearchSubagent({
+        const result = await runDeepSearchTool({
           query,
+          maxResults,
           model: config.model,
           writer,
           toolCallId: options.toolCallId,
-          toolName: "search",
+          toolName: "deepSearch",
           abortSignal: options.abortSignal,
           tavilyApiKey: config.tavilyApiKey,
           jinaReaderBaseUrl: config.jinaReaderBaseUrl,
           jinaReaderApiKey: config.jinaReaderApiKey,
         });
+        return {
+          conclusion: result.conclusion,
+          answer: result.conclusion,
+          sources: result.sources,
+          ...(result.error ? { error: result.error } : {}),
+        };
       },
     }),
   };

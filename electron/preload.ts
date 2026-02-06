@@ -1,5 +1,6 @@
 import { ipcRenderer, contextBridge, type IpcRendererEvent } from 'electron'
 import { exposeElectronTRPC } from 'electron-trpc-experimental/preload'
+import type { JsonValue } from '../src/types/json'
 
 process.once('loaded', () => {
   exposeElectronTRPC()
@@ -10,22 +11,22 @@ process.once('loaded', () => {
 contextBridge.exposeInMainWorld('ipcRenderer', {
   on(
     channel: string,
-    listener: (event: IpcRendererEvent, ...args: unknown[]) => void,
+    listener: (event: IpcRendererEvent, ...args: JsonValue[]) => void,
   ) {
-    return ipcRenderer.on(channel, (event: IpcRendererEvent, ...args: unknown[]) =>
+    return ipcRenderer.on(channel, (event: IpcRendererEvent, ...args: JsonValue[]) =>
       listener(event, ...args),
     )
   },
   off(
     channel: string,
-    listener: (event: IpcRendererEvent, ...args: unknown[]) => void,
+    listener: (event: IpcRendererEvent, ...args: JsonValue[]) => void,
   ) {
     return ipcRenderer.off(channel, listener)
   },
-  send(channel: string, ...args: unknown[]) {
+  send(channel: string, ...args: JsonValue[]) {
     return ipcRenderer.send(channel, ...args)
   },
-  invoke(channel: string, ...args: unknown[]) {
+  invoke(channel: string, ...args: JsonValue[]) {
     return ipcRenderer.invoke(channel, ...args)
   },
 

@@ -35,7 +35,6 @@ export default function FlowHeader({
 }: FlowHeaderProps) {
   const ToggleIcon = theme === "dark" ? Sun : Moon;
   const sourceUrl = import.meta.env.VITE_SOURCE_URL as string | undefined;
-  console.log(sourceUrl);
   const handleOpenSource = () => {
     if (sourceUrl) {
       window.open(sourceUrl, "_blank", "noopener,noreferrer");

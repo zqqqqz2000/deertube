@@ -3,12 +3,14 @@ import path from 'node:path'
 import fs from 'node:fs/promises'
 import { z } from 'zod'
 import { baseProcedure, createTRPCRouter } from '../init'
+import type { FlowEdge, FlowNode } from '../../../src/types/flow'
+import type { ChatMessage } from '../../../src/types/chat'
 
 interface ProjectState {
   version: number
-  nodes: unknown[]
-  edges: unknown[]
-  chat: unknown[]
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+  chat: ChatMessage[]
   autoLayoutLocked?: boolean
   updatedAt: string
 }
@@ -65,7 +67,7 @@ async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
   }
 }
 
-async function writeJsonFile(filePath: string, data: unknown) {
+async function writeJsonFile<T>(filePath: string, data: T) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8')
 }
@@ -186,9 +188,9 @@ export const projectRouter = createTRPCRouter({
         path: z.string(),
         state: z.object({
           version: z.number().optional(),
-          nodes: z.array(z.unknown()),
-          edges: z.array(z.unknown()),
-          chat: z.array(z.unknown()).optional(),
+          nodes: z.array(z.custom<FlowNode>()),
+          edges: z.array(z.custom<FlowEdge>()),
+          chat: z.array(z.custom<ChatMessage>()).optional(),
           autoLayoutLocked: z.boolean().optional(),
         }),
       }),

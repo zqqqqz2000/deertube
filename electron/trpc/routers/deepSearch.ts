@@ -6,12 +6,13 @@ import { generateText } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { baseProcedure, createTRPCRouter } from '../init'
 import { ensureProjectStore } from './project'
+import type { JsonObject, JsonValue } from '../../../src/types/json'
 
 const TavilySearchResultSchema = z.object({
   title: z.string().optional(),
   url: z.string().optional(),
   content: z.string().optional(),
-  raw_content: z.string().optional(),
+  raw_content: z.string().nullable().optional(),
   snippet: z.string().optional(),
   description: z.string().optional(),
 })
@@ -22,16 +23,16 @@ const TavilyResponseSchema = z.object({
   results: z.array(TavilySearchResultSchema).optional(),
 })
 
-const parseJson = (raw: string): unknown => {
+const parseJson = (raw: string): JsonValue | null => {
   try {
-    return JSON.parse(raw) as unknown
+    return JSON.parse(raw) as JsonValue
   }
   catch {
     return null
   }
 }
 
-async function writeJsonFile(filePath: string, data: unknown) {
+async function writeJsonFile(filePath: string, data: JsonValue) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8')
 }
@@ -53,11 +54,47 @@ async function fetchTavilySearch(query: string, maxResults: number): Promise<Tav
       search_depth: 'advanced',
     }),
   })
+  const raw = await response.text()
   if (!response.ok) {
+    console.warn('[tavily.search.error]', {
+      query,
+      status: response.status,
+      bodyPreview: raw.slice(0, 400),
+    })
     throw new Error(`Tavily search failed: ${response.status}`)
   }
-  const parsed = TavilyResponseSchema.safeParse(await response.json())
-  const results = parsed.success ? parsed.data.results ?? [] : []
+  let parsedJson: JsonValue
+  try {
+    parsedJson = JSON.parse(raw) as JsonValue
+  }
+  catch (error) {
+    console.warn('[tavily.search.parse]', {
+      query,
+      status: response.status,
+      error: error instanceof Error ? error.message : 'unknown',
+      bodyPreview: raw.slice(0, 400),
+    })
+    throw new Error('Tavily search response parse failed.')
+  }
+  const parsed = TavilyResponseSchema.safeParse(parsedJson)
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0]
+    console.warn('[tavily.search.schema]', {
+      query,
+      status: response.status,
+      issue: firstIssue ? `${firstIssue.path.join('.')}: ${firstIssue.message}` : 'invalid',
+      bodyPreview: raw.slice(0, 400),
+    })
+    throw new Error('Tavily search response schema invalid.')
+  }
+  const results = parsed.data.results ?? []
+  if (results.length === 0) {
+    console.warn('[tavily.search.empty]', {
+      query,
+      status: response.status,
+      bodyPreview: raw.slice(0, 400),
+    })
+  }
   return results
 }
 
@@ -79,11 +116,47 @@ async function fetchTavilySearchWithKey(
       search_depth: 'advanced',
     }),
   })
+  const raw = await response.text()
   if (!response.ok) {
+    console.warn('[tavily.search.error]', {
+      query,
+      status: response.status,
+      bodyPreview: raw.slice(0, 400),
+    })
     throw new Error(`Tavily search failed: ${response.status}`)
   }
-  const parsed = TavilyResponseSchema.safeParse(await response.json())
-  const results = parsed.success ? parsed.data.results ?? [] : []
+  let parsedJson: JsonValue
+  try {
+    parsedJson = JSON.parse(raw) as JsonValue
+  }
+  catch (error) {
+    console.warn('[tavily.search.parse]', {
+      query,
+      status: response.status,
+      error: error instanceof Error ? error.message : 'unknown',
+      bodyPreview: raw.slice(0, 400),
+    })
+    throw new Error('Tavily search response parse failed.')
+  }
+  const parsed = TavilyResponseSchema.safeParse(parsedJson)
+  if (!parsed.success) {
+    const firstIssue = parsed.error.issues[0]
+    console.warn('[tavily.search.schema]', {
+      query,
+      status: response.status,
+      issue: firstIssue ? `${firstIssue.path.join('.')}: ${firstIssue.message}` : 'invalid',
+      bodyPreview: raw.slice(0, 400),
+    })
+    throw new Error('Tavily search response schema invalid.')
+  }
+  const results = parsed.data.results ?? []
+  if (results.length === 0) {
+    console.warn('[tavily.search.empty]', {
+      query,
+      status: response.status,
+      bodyPreview: raw.slice(0, 400),
+    })
+  }
   return results
 }
 
@@ -112,13 +185,13 @@ async function fetchJinaReaderMarkdown(
     return parsed
   }
   if (typeof parsed === 'object') {
-    const obj = parsed as Record<string, unknown>
+    const obj = parsed as JsonObject
     if (typeof obj.content === 'string') {
       return obj.content
     }
     const nested = obj.data
     if (nested && typeof nested === 'object') {
-      const nestedContent = (nested as Record<string, unknown>).content
+      const nestedContent = (nested as JsonObject).content
       if (typeof nestedContent === 'string') {
         return nestedContent
       }

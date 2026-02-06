@@ -364,21 +364,23 @@ export const MarkdownRenderer = memo(
       return {
         ...mdxComponents,
         a: (
-          props: AnchorHTMLAttributes<HTMLAnchorElement> & { node?: unknown },
+          props: AnchorHTMLAttributes<HTMLAnchorElement> & {
+            node?: { url?: string; properties?: { href?: string } };
+          },
         ) => {
           const nodeProp = props.node;
           const { node: _node, ...restProps } = props;
           const rawHref =
             props.href ??
             (nodeProp && typeof nodeProp === "object" && "url" in nodeProp
-              ? String((nodeProp as { url?: string }).url ?? "")
+              ? String(nodeProp.url ?? "")
               : undefined) ??
             (nodeProp &&
             typeof nodeProp === "object" &&
             "properties" in nodeProp &&
-            (nodeProp as { properties?: { href?: string } }).properties?.href
+            nodeProp.properties?.href
               ? String(
-                  (nodeProp as { properties?: { href?: string } }).properties?.href,
+                  nodeProp.properties?.href,
                 )
               : undefined);
           const nodeId = parseNodeHref(rawHref);

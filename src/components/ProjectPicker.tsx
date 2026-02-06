@@ -3,14 +3,16 @@ import { trpc } from '../lib/trpc'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import type { FlowEdge, FlowNode } from '@/types/flow'
+import type { ChatMessage } from '@/types/chat'
 
 export interface ProjectOpenResult {
   path: string
   name: string
   state: {
-    nodes: unknown[]
-    edges: unknown[]
-    chat?: unknown[]
+    nodes: FlowNode[]
+    edges: FlowEdge[]
+    chat?: ChatMessage[]
     autoLayoutLocked?: boolean
   }
 }

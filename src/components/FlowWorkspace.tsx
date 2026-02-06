@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -13,6 +13,7 @@ import "reactflow/dist/style.css";
 import type { IJsonModel, IJsonTabNode } from "@massbug/flexlayout-react";
 import { Actions, DockLocation, Model } from "@massbug/flexlayout-react";
 import { trpc } from "../lib/trpc";
+import type { IpcRendererEvent } from "electron";
 import QuestionNode from "./nodes/QuestionNode";
 import SourceNode from "./nodes/SourceNode";
 import InsightNode from "./nodes/InsightNode";
@@ -33,7 +34,7 @@ import { useProfileSettings } from "./flow/useProfileSettings";
 import { useChatActions } from "./flow/useChatActions";
 import { QuestionActionProvider } from "./flow/QuestionActionProvider";
 import ChatHistoryPanel from "./chat/ChatHistoryPanel";
-import type { FlowEdge, FlowNode, InsightNodeData } from "../types/flow";
+import type { InsightNodeData } from "../types/flow";
 import type { ChatMessage } from "../types/chat";
 import { FlowFlexLayout } from "./flow/FlowFlexLayout";
 import { BrowserTab } from "./browser/BrowserTab";
@@ -52,15 +53,12 @@ const CHAT_DEFAULT_WEIGHT = 26;
 const TOTAL_LAYOUT_WEIGHT = 100;
 const BROWSER_TAB_PREFIX = "browser:";
 
-const coerceProjectState = (state: {
-  nodes: unknown[];
-  edges: unknown[];
-  chat?: unknown[];
-  autoLayoutLocked?: boolean;
-}): ProjectState => ({
-  nodes: state.nodes as FlowNode[],
-  edges: state.edges as FlowEdge[],
-  chat: (state.chat ?? []) as ChatMessage[],
+type ProjectStateInput = Omit<ProjectState, "chat"> & { chat?: ChatMessage[] };
+
+const coerceProjectState = (state: ProjectStateInput): ProjectState => ({
+  nodes: state.nodes,
+  edges: state.edges,
+  chat: state.chat ?? [],
   autoLayoutLocked:
     typeof state.autoLayoutLocked === "boolean" ? state.autoLayoutLocked : true,
 });
@@ -230,12 +228,9 @@ const normalizeLayoutModel = (model: IJsonModel): IJsonModel => {
       return;
     }
     if (node.type === "tabset" && node.children.length > 0) {
-      const selected =
-        typeof (node as { selected?: unknown }).selected === "number"
-          ? (node as { selected?: number }).selected
-          : undefined;
+      const selected = typeof node.selected === "number" ? node.selected : undefined;
       if (selected === undefined || selected < 0) {
-        (node as { selected?: number }).selected = 0;
+        node.selected = 0;
       }
     }
     node.children.forEach((child) => ensureSelected(child));
@@ -552,7 +547,11 @@ function FlowWorkspaceInner({
   const lastFailedMessageId = useMemo(() => {
     for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
       const message = chatMessages[index];
-      if (message.kind === "graph-event") {
+      if (
+        message.kind === "graph-event" ||
+        message.kind === "subagent-event" ||
+        message.kind === "deepsearch-event"
+      ) {
         continue;
       }
       return message.status === "failed" ? message.id : null;
@@ -832,7 +831,7 @@ function FlowWorkspaceInner({
       return;
     }
     const handleState = (
-      _event: unknown,
+      _event: IpcRendererEvent,
       payload: BrowserViewStatePayload,
     ) => {
       if (!payload?.tabId) {
@@ -853,7 +852,7 @@ function FlowWorkspaceInner({
       );
     };
     const handleSelection = (
-      _event: unknown,
+      _event: IpcRendererEvent,
       payload: BrowserViewSelection,
     ) => {
       if (!payload) {
@@ -1172,7 +1171,7 @@ function FlowWorkspaceInner({
   );
 
   const handleNodeDoubleClick = useCallback(
-    (_: unknown, node: { id: string }) => {
+    (_: MouseEvent, node: { id: string }) => {
       if (!flowInstance) {
         return;
       }

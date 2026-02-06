@@ -3,6 +3,7 @@ import { z } from "zod";
 import { generateText, tool } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { baseProcedure, createTRPCRouter } from "../init";
+import { isJsonObject } from "../../../src/types/json";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const logGraphTool = (label: string, payload: unknown) => {
@@ -19,6 +20,9 @@ const extractErrorMessage = (err: unknown): string => {
   if (typeof err === "string") {
     return err;
   }
+  if (typeof err === "number" || typeof err === "boolean") {
+    return String(err);
+  }
   try {
     return JSON.stringify(err);
   } catch {
@@ -31,8 +35,8 @@ const isMalformedFunctionCallError = (err: unknown): boolean => {
   if (/MALFORMED_FUNCTION_CALL/i.test(message)) {
     return true;
   }
-  if (err && typeof err === "object" && "cause" in err) {
-    const cause = (err as { cause?: unknown }).cause;
+  if (isJsonObject(err) && "cause" in err) {
+    const cause = err.cause;
     if (cause) {
       return /MALFORMED_FUNCTION_CALL/i.test(extractErrorMessage(cause));
     }

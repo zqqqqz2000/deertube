@@ -1,9 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, type MouseEvent } from "react";
 import { trpc } from "../../lib/trpc";
 import type { FlowNode, SourceNodeData } from "../../types/flow";
 
 export function usePreviewHover() {
-  const handleNodeEnter = useCallback((_: unknown, node: FlowNode) => {
+  const handleNodeEnter = useCallback((_: MouseEvent, node: FlowNode) => {
     if (node.type !== "source") {
       return;
     }

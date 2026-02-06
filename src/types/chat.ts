@@ -1,5 +1,68 @@
 export type ChatRole = 'user' | 'assistant'
 
+export interface GraphToolInput {
+  responseId?: string
+  selectedNodeId?: string | null
+  selectedNodeSummary?: string | null
+}
+
+export interface GraphRunNodePayload {
+  id: string
+  titleLong: string
+  titleShort: string
+  titleTiny: string
+  excerpt: string
+  parentId: string
+  responseId?: string
+}
+
+export interface GraphToolOutput {
+  nodesAdded?: number
+  nodes?: GraphRunNodePayload[]
+  explanation?: string
+}
+
+export interface ToolCallEventInput {
+  responseId: string
+  toolCallId: string
+}
+
+export interface SubagentStreamPayload {
+  toolCallId: string
+  toolName?: string
+  messages: unknown[]
+}
+
+export interface DeepSearchSourcePayload {
+  url?: string
+  title?: string
+  snippet?: string
+  excerpts?: string[]
+}
+
+export interface DeepSearchStreamPayload {
+  toolCallId: string
+  toolName?: string
+  query?: string
+  status?: 'running' | 'complete' | 'failed'
+  sources?: DeepSearchSourcePayload[]
+  conclusion?: string
+  error?: string
+  complete?: boolean
+}
+
+type Primitive = string | number | boolean | null
+
+export type ChatToolInput = GraphToolInput | ToolCallEventInput | Record<string, unknown>
+
+export type ChatToolOutput =
+  | GraphToolOutput
+  | SubagentStreamPayload
+  | DeepSearchStreamPayload
+  | Primitive
+  | ChatToolOutput[]
+  | Record<string, unknown>
+
 export interface ChatMessage {
   id: string
   role: ChatRole
@@ -8,9 +71,9 @@ export interface ChatMessage {
   status?: 'pending' | 'complete' | 'failed'
   error?: string
   requestText?: string
-  kind?: 'text' | 'graph-event' | 'subagent-event'
+  kind?: 'text' | 'graph-event' | 'subagent-event' | 'deepsearch-event'
   toolName?: string
-  toolInput?: unknown
-  toolOutput?: unknown
+  toolInput?: ChatToolInput
+  toolOutput?: ChatToolOutput
   toolStatus?: 'running' | 'complete' | 'failed'
 }

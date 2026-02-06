@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { UIMessage } from "ai";
-import type { ChatMessage } from "../../types/chat";
+import type { DeertubeUIMessage } from "@/modules/ai/tools";
+import { isJsonObject } from "@/types/json";
+import type {
+  ChatMessage,
+  DeepSearchStreamPayload,
+  GraphToolInput,
+  GraphToolOutput,
+  SubagentStreamPayload,
+} from "../../types/chat";
 import type {
   FlowNode,
   InsightNodeData,
@@ -58,18 +65,6 @@ interface ChatHistoryPanelProps {
   lastFailedMessageId?: string | null;
 }
 
-interface GraphToolInput {
-  responseId?: string;
-  selectedNodeId?: string | null;
-  selectedNodeSummary?: string | null;
-}
-
-interface SubagentStreamPayload {
-  toolCallId: string;
-  toolName?: string;
-  messages: UIMessage[];
-}
-
 interface SubagentEntry {
   kind: "call" | "result";
   label: string;
@@ -85,41 +80,37 @@ const parseToolPayload = (value: unknown): unknown => {
       return null;
     }
   }
-  return value;
+  return value ?? null;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
+  isJsonObject(value);
 
 const isSubagentPayload = (value: unknown): value is SubagentStreamPayload => {
-  if (!isRecord(value)) {
+  if (!value || !isRecord(value)) {
     return false;
   }
-  return (
-    typeof value.toolCallId === "string" &&
-    Array.isArray(value.messages)
-  );
+  return typeof value.toolCallId === "string" && Array.isArray(value.messages);
 };
+
+const isDeepSearchPayload = (value: unknown): value is DeepSearchStreamPayload => {
+  if (!value || !isRecord(value)) {
+    return false;
+  }
+  return "sources" in value || "conclusion" in value || "query" in value || "status" in value;
+};
+
+type DeertubeMessagePart = DeertubeUIMessage["parts"][number];
+type ToolMessagePart = Extract<
+  DeertubeMessagePart,
+  { type: `tool-${string}` | "dynamic-tool" }
+>;
 
 const isToolPart = (
-  part: unknown,
-): part is {
-  type: string;
-  input?: unknown;
-  output?: unknown;
-  toolName?: string;
-} => {
-  return (
-    typeof part === "object" &&
-    part !== null &&
-    "type" in part &&
-    typeof (part as { type?: unknown }).type === "string" &&
-    (((part as { type?: string }).type ?? "").startsWith("tool-") ||
-      (part as { type?: string }).type === "dynamic-tool")
-  );
-};
+  part: DeertubeMessagePart,
+): part is ToolMessagePart => part.type.startsWith("tool-") || part.type === "dynamic-tool";
 
-const getToolName = (part: { type: string; toolName?: string }): string | undefined => {
+const getToolName = (part: ToolMessagePart): string | undefined => {
   if (part.type.startsWith("tool-")) {
     return part.type.slice(5);
   }
@@ -172,7 +163,16 @@ const summarizeToolOutput = (
 const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] => {
   const entries: SubagentEntry[] = [];
   payload.messages.forEach((message) => {
-    (message.parts ?? []).forEach((part) => {
+    if (
+      !message ||
+      typeof message !== "object" ||
+      !("parts" in message) ||
+      !Array.isArray((message as { parts?: unknown }).parts)
+    ) {
+      return;
+    }
+    const parts = (message as { parts: DeertubeMessagePart[] }).parts;
+    parts.forEach((part) => {
       if (!isToolPart(part)) {
         return;
       }
@@ -198,23 +198,22 @@ const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] =
   return entries;
 };
 
-const parseGraphToolInput = (value: unknown): GraphToolInput | null => {
-  if (!value || typeof value !== "object") {
+const parseGraphToolInput = (value: ChatMessage["toolInput"]): GraphToolInput | null => {
+  if (!value || !isRecord(value)) {
     return null;
   }
-  const input = value as Record<string, unknown>;
   const responseId =
-    typeof input.responseId === "string" && input.responseId.length > 0
-      ? input.responseId
+    typeof value.responseId === "string" && value.responseId.length > 0
+      ? value.responseId
       : undefined;
   const selectedNodeId =
-    typeof input.selectedNodeId === "string" || input.selectedNodeId === null
-      ? input.selectedNodeId
+    typeof value.selectedNodeId === "string" || value.selectedNodeId === null
+      ? value.selectedNodeId
       : undefined;
   const selectedNodeSummary =
-    typeof input.selectedNodeSummary === "string" ||
-    input.selectedNodeSummary === null
-      ? input.selectedNodeSummary
+    typeof value.selectedNodeSummary === "string" ||
+    value.selectedNodeSummary === null
+      ? value.selectedNodeSummary
       : undefined;
   if (
     !responseId &&
@@ -226,7 +225,7 @@ const parseGraphToolInput = (value: unknown): GraphToolInput | null => {
   return { responseId, selectedNodeId, selectedNodeSummary };
 };
 
-const getGraphToolResponseId = (value: unknown): string | null =>
+const getGraphToolResponseId = (value: ChatMessage["toolInput"]): string | null =>
   parseGraphToolInput(value)?.responseId ?? null;
 
 export default function ChatHistoryPanel({
@@ -485,6 +484,7 @@ export default function ChatHistoryPanel({
       | { kind: "additional"; id: string; message: ChatMessage }
       | { kind: "graph"; id: string; message: ChatMessage }
       | { kind: "subagent"; id: string; message: ChatMessage }
+      | { kind: "deepsearch"; id: string; message: ChatMessage }
     )[] = [];
     let lastDateKey = "";
     let lastRole: ChatMessage["role"] | null = null;
@@ -514,6 +514,11 @@ export default function ChatHistoryPanel({
       }
       if (message.kind === "subagent-event") {
         items.push({ kind: "subagent", id: message.id, message });
+        lastRole = null;
+        return;
+      }
+      if (message.kind === "deepsearch-event") {
+        items.push({ kind: "deepsearch", id: message.id, message });
         lastRole = null;
         return;
       }
@@ -555,7 +560,11 @@ export default function ChatHistoryPanel({
     }
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
-      if (message.kind === "graph-event") {
+      if (
+        message.kind === "graph-event" ||
+        message.kind === "subagent-event" ||
+        message.kind === "deepsearch-event"
+      ) {
         continue;
       }
       return message.status === "failed" ? message.id : null;
@@ -598,60 +607,25 @@ export default function ChatHistoryPanel({
                       ? "Failed"
                       : "Complete";
 
-                const parseOutputPayload = (value: unknown): unknown => {
-                  if (typeof value === "string") {
-                    try {
-                      return JSON.parse(value) as unknown;
-                    } catch {
-                      return null;
-                    }
-                  }
-                  return value;
-                };
-
-                interface GraphNodeSummary {
-                  id?: string;
-                  titleShort?: string;
-                  titleLong?: string;
-                  excerpt?: string;
-                }
-
-                interface GraphOutputPayload {
-                  nodesAdded?: number;
-                  nodes?: GraphNodeSummary[];
-                  explanation?: string;
-                }
-
                 const isGraphOutputPayload = (
                   value: unknown,
-                ): value is GraphOutputPayload => {
-                  if (!value || typeof value !== "object") {
+                ): value is GraphToolOutput => {
+                  if (!value || !isRecord(value)) {
                     return false;
                   }
-                  if (
-                    "nodes" in value &&
-                    Array.isArray((value as { nodes?: unknown }).nodes)
-                  ) {
+                  if ("nodes" in value && Array.isArray(value.nodes)) {
                     return true;
                   }
-                  if (
-                    "nodesAdded" in value &&
-                    typeof (value as { nodesAdded?: unknown }).nodesAdded ===
-                      "number"
-                  ) {
+                  if ("nodesAdded" in value && typeof value.nodesAdded === "number") {
                     return true;
                   }
-                  if (
-                    "explanation" in value &&
-                    typeof (value as { explanation?: unknown }).explanation ===
-                      "string"
-                  ) {
+                  if ("explanation" in value && typeof value.explanation === "string") {
                     return true;
                   }
                   return false;
                 };
 
-                const outputPayloadRaw = parseOutputPayload(
+                const outputPayloadRaw = parseToolPayload(
                   eventMessage.toolOutput,
                 );
                 const outputPayload = isGraphOutputPayload(outputPayloadRaw)
@@ -871,6 +845,137 @@ export default function ChatHistoryPanel({
                                   </div>
                                 ))}
                               </div>
+                            </ChatEventContent>
+                          </CollapsibleContent>
+                        )}
+                      </Collapsible>
+                    </ChatEventBody>
+                  </ChatEvent>
+                );
+              }
+              if (item.kind === "deepsearch") {
+                const { message: eventMessage } = item;
+                const statusLabel =
+                  eventMessage.toolStatus === "running"
+                    ? "Running"
+                    : eventMessage.toolStatus === "failed"
+                      ? "Failed"
+                      : "Complete";
+
+                const outputPayloadRaw = parseToolPayload(
+                  eventMessage.toolOutput,
+                );
+                const outputPayload = isDeepSearchPayload(outputPayloadRaw)
+                  ? outputPayloadRaw
+                  : null;
+                const sources = Array.isArray(outputPayload?.sources)
+                  ? outputPayload?.sources ?? []
+                  : [];
+                const conclusion =
+                  typeof outputPayload?.conclusion === "string"
+                    ? outputPayload.conclusion
+                    : undefined;
+                const query =
+                  typeof outputPayload?.query === "string"
+                    ? outputPayload.query
+                    : undefined;
+                const error =
+                  typeof outputPayload?.error === "string"
+                    ? outputPayload.error
+                    : undefined;
+                const title =
+                  eventMessage.toolName ??
+                  outputPayload?.toolName ??
+                  "DeepSearch";
+                const hasDetails =
+                  !!query || sources.length > 0 || !!conclusion;
+
+                return (
+                  <ChatEvent key={item.id} className="items-start gap-2 px-2">
+                    <ChatEventBody>
+                      <Collapsible defaultOpen={false}>
+                        <div className="flex items-center justify-between gap-2">
+                          <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            {title}
+                          </ChatEventTitle>
+                          {hasDetails && (
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
+                          )}
+                        </div>
+                        <ChatEventDescription>
+                          {error ? error : statusLabel}
+                        </ChatEventDescription>
+                        {hasDetails && (
+                          <CollapsibleContent className="mt-2">
+                            <ChatEventContent className="space-y-2">
+                              <div className="space-y-1 text-[11px] text-muted-foreground">
+                                {query && <div>{`Query: ${query}`}</div>}
+                                {sources.length > 0 && (
+                                  <div>{`Sources: ${sources.length}`}</div>
+                                )}
+                              </div>
+                              {conclusion && (
+                                <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+                                  {conclusion}
+                                </div>
+                              )}
+                              {sources.length > 0 && (
+                                <div className="space-y-2">
+                                  {sources.map((source, index) => {
+                                    const url =
+                                      typeof source.url === "string"
+                                        ? source.url
+                                        : "";
+                                    const title =
+                                      typeof source.title === "string" &&
+                                      source.title.trim()
+                                        ? source.title
+                                        : url || `Source ${index + 1}`;
+                                    const snippet =
+                                      typeof source.snippet === "string"
+                                        ? source.snippet
+                                        : "";
+                                    return (
+                                      <button
+                                        key={`${item.id}-source-${index}`}
+                                        type="button"
+                                        className="w-full rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
+                                        onClick={() => {
+                                          if (url && onReferenceClick) {
+                                            onReferenceClick(url, title);
+                                          }
+                                        }}
+                                      >
+                                        <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                                          Source
+                                        </div>
+                                        <div className="text-sm font-semibold text-foreground">
+                                          {title}
+                                        </div>
+                                        {url && (
+                                          <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                                            {url}
+                                          </div>
+                                        )}
+                                        {snippet && (
+                                          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                            {snippet}
+                                          </div>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </ChatEventContent>
                           </CollapsibleContent>
                         )}

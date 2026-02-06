@@ -30,9 +30,9 @@ function App() {
   const handleOpen = (result: ProjectOpenResult) => {
     setProject({ path: result.path, name: result.name })
     setProjectState({
-      nodes: result.state.nodes as FlowNode[],
-      edges: result.state.edges as FlowEdge[],
-      chat: (result.state.chat ?? []) as ChatMessage[],
+      nodes: result.state.nodes,
+      edges: result.state.edges,
+      chat: result.state.chat ?? [],
       autoLayoutLocked:
         typeof result.state.autoLayoutLocked === 'boolean'
           ? result.state.autoLayoutLocked

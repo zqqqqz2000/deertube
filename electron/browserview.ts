@@ -1,6 +1,8 @@
 import { BrowserWindow, WebContentsView, ipcMain, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import type { JsonValue } from "../src/types/json";
+import { isJsonObject } from "../src/types/json";
 
 interface BrowserViewBounds {
   x: number;
@@ -10,10 +12,10 @@ interface BrowserViewBounds {
 }
 
 interface BrowserViewSelectionPayload {
-  text?: unknown;
-  url?: unknown;
-  title?: unknown;
-  rect?: unknown;
+  text?: JsonValue;
+  url?: JsonValue;
+  title?: JsonValue;
+  rect?: JsonValue;
 }
 
 interface BrowserViewState {
@@ -45,16 +47,16 @@ const sanitizeSelection = (payload: BrowserViewSelectionPayload) => {
   const rectRaw = payload.rect;
   const rect =
     rectRaw &&
-    typeof rectRaw === "object" &&
+    isJsonObject(rectRaw) &&
     "x" in rectRaw &&
     "y" in rectRaw &&
     "width" in rectRaw &&
     "height" in rectRaw
       ? {
-          x: Number((rectRaw as { x: unknown }).x),
-          y: Number((rectRaw as { y: unknown }).y),
-          width: Number((rectRaw as { width: unknown }).width),
-          height: Number((rectRaw as { height: unknown }).height),
+          x: Number(rectRaw.x),
+          y: Number(rectRaw.y),
+          width: Number(rectRaw.width),
+          height: Number(rectRaw.height),
         }
       : undefined;
 

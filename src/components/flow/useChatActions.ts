@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { UIMessage } from "ai";
 import type { ReactFlowInstance } from "reactflow";
 import { trpc } from "../../lib/trpc";
 import type {
@@ -11,11 +10,18 @@ import type {
   SourceNode as SourceNodeType,
 } from "../../types/flow";
 import type { ProviderProfile } from "../../lib/settings";
-import type { ChatMessage } from "../../types/chat";
+import type {
+  ChatMessage,
+  DeepSearchStreamPayload,
+  GraphRunNodePayload,
+  SubagentStreamPayload,
+  ToolCallEventInput,
+} from "../../types/chat";
 import { placeInsightNodes } from "../../lib/flowPlacement";
 import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
 import { useChat } from "@/lib/chat/use-electron-chat";
-import type { DeertubeUIMessage } from "@/modules/ai/tools";
+import type { DeertubeMessageMetadata, DeertubeUIMessage } from "@/modules/ai/tools";
+import { isJsonObject } from "@/types/json";
 import { useContextBuilder } from "./useContextBuilder";
 
 interface UseChatActionsOptions {
@@ -39,16 +45,6 @@ interface GraphSnapshot {
     excerpt?: string;
   }[];
   edges: { sourceIntId: number; targetIntId: number }[];
-}
-
-interface GraphRunNode {
-  id: string;
-  titleLong: string;
-  titleShort: string;
-  titleTiny: string;
-  excerpt: string;
-  parentId: string;
-  responseId?: string;
 }
 
 const isStartNode = (node: FlowNode | null) => {
@@ -185,6 +181,7 @@ export function useChatActions({
     () => initialMessages.filter((message) => message.kind === "graph-event"),
   );
   const loggedGraphEventsRef = useRef<Map<string, string>>(new Map());
+  const loggedStreamPartsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     graphEventMessages.forEach((event) => {
@@ -206,6 +203,7 @@ export function useChatActions({
       console.log("[graph-subagent]", event);
     });
   }, [graphEventMessages]);
+
 
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedId) ?? null,
@@ -238,7 +236,12 @@ export function useChatActions({
   const initialUiMessages = useMemo(
     () =>
       initialMessages
-        .filter((message) => message.kind !== "graph-event")
+        .filter(
+          (message) =>
+            message.kind !== "graph-event" &&
+            message.kind !== "subagent-event" &&
+            message.kind !== "deepsearch-event",
+        )
         .map(mapChatToUiMessage),
     [initialMessages],
   );
@@ -290,7 +293,7 @@ export function useChatActions({
             : undefined,
         });
 
-        const graphNodes = result.nodes as GraphRunNode[];
+        const graphNodes = result.nodes as GraphRunNodePayload[];
         const nodesAdded = graphNodes.length;
         setGraphEventMessages((prev) =>
           prev.map((event) =>
@@ -315,7 +318,7 @@ export function useChatActions({
         const workingNodes: FlowNode[] = [...nodes];
         const workingEdges: FlowEdge[] = [...edges];
         const positionMap = new Map<string, { x: number; y: number }>();
-        const pendingByParent = new Map<string, GraphRunNode[]>();
+        const pendingByParent = new Map<string, GraphRunNodePayload[]>();
         graphNodes.forEach((node) => {
           if (!node.parentId) {
             throw new Error("Graph node missing parentId.");
@@ -485,16 +488,65 @@ export function useChatActions({
     },
   });
 
+  useEffect(() => {
+    messages.forEach((message) => {
+      if (!Array.isArray(message.parts)) {
+        return;
+      }
+      message.parts.forEach((part) => {
+        const subagentPayload = readSubagentPartPayload(part);
+        const deepSearchPart = subagentPayload ? null : readDeepSearchPartPayload(part);
+        const deepSearchPayload = deepSearchPart?.payload;
+        const payload = subagentPayload ?? deepSearchPayload;
+        if (!payload) {
+          return;
+        }
+        const partType = subagentPayload ? "data-subagent-stream" : part.type;
+        const key = `${message.id}-${partType}-${payload.toolCallId}`;
+        const signature = JSON.stringify(payload);
+        const previous = loggedStreamPartsRef.current.get(key);
+        if (previous === signature) {
+          return;
+        }
+        loggedStreamPartsRef.current.set(key, signature);
+        if (subagentPayload) {
+          console.log("[ui.subagent.stream]", {
+            toolCallId: subagentPayload.toolCallId,
+            toolName: subagentPayload.toolName,
+            messages: subagentPayload.messages.length,
+          });
+        } else {
+          if (!deepSearchPayload) {
+            return;
+          }
+          console.log("[ui.deepsearch.stream]", {
+            toolCallId: deepSearchPayload.toolCallId,
+            toolName: deepSearchPayload.toolName,
+            status: deepSearchPayload.status,
+            query: deepSearchPayload.query,
+            sources: deepSearchPayload.sources?.length ?? 0,
+            conclusionLength: deepSearchPayload.conclusion?.length ?? 0,
+            error: deepSearchPayload.error,
+          });
+        }
+      });
+    });
+  }, [messages]);
+
   const derivedMessages = useMemo(() => {
     const mapped = mapUiMessagesToChat(messages, status, error);
     const withGraphEvents = graphEventMessages.length
       ? mergeGraphEvents(mapped, graphEventMessages)
       : mapped;
     const subagentEvents = buildSubagentEvents(messages, status);
-    if (!subagentEvents.length) {
-      return withGraphEvents;
+    const withSubagentEvents = subagentEvents.length
+      ? mergeSubagentEvents(withGraphEvents, subagentEvents)
+      : withGraphEvents;
+    const deepSearchEvents = buildDeepSearchEvents(messages, status);
+    if (!deepSearchEvents.length) {
+      return withSubagentEvents;
     }
-    return mergeSubagentEvents(withGraphEvents, subagentEvents);
+    return mergeDeepSearchEvents(withSubagentEvents, deepSearchEvents);
   }, [messages, status, error, graphEventMessages]);
 
   const sendPrompt = useCallback(
@@ -574,38 +626,70 @@ function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
 }
 
 function extractMessageMetadata(
-  metadata: unknown,
+  metadata: DeertubeMessageMetadata | null | undefined,
 ): { status?: ChatMessage["status"]; error?: string } {
-  if (!metadata || typeof metadata !== "object") {
+  if (!metadata) {
     return {};
   }
-  const value = metadata as Record<string, unknown>;
   const status =
-    value.status === "pending" || value.status === "complete" || value.status === "failed"
-      ? (value.status as ChatMessage["status"])
+    metadata.status === "pending" ||
+    metadata.status === "complete" ||
+    metadata.status === "failed"
+      ? metadata.status
       : undefined;
-  const error = typeof value.error === "string" ? value.error : undefined;
+  const error = typeof metadata.error === "string" ? metadata.error : undefined;
   return { status, error };
 }
 
-interface SubagentStreamPayload {
-  toolCallId: string;
-  toolName?: string;
-  messages: UIMessage[];
-}
+type DeertubeMessagePart = DeertubeUIMessage["parts"][number];
 
-const isSubagentDataPart = (
-  part: unknown,
-): part is {
-  type: "data-subagent-stream";
-  data: SubagentStreamPayload;
-} => {
+const isSubagentStreamPayload = (
+  value: unknown,
+): value is SubagentStreamPayload => {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
   return (
-    typeof part === "object" &&
-    part !== null &&
-    (part as { type?: string }).type === "data-subagent-stream" &&
-    "data" in part
+    typeof candidate.toolCallId === "string" &&
+    Array.isArray(candidate.messages)
   );
+};
+
+const isDeepSearchStreamPayload = (
+  value: unknown,
+): value is DeepSearchStreamPayload => {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.toolCallId === "string";
+};
+
+const readSubagentPartPayload = (
+  part: DeertubeMessagePart,
+): SubagentStreamPayload | null => {
+  if (part.type !== "data-subagent-stream") {
+    return null;
+  }
+  const payload = (part as { data?: unknown }).data;
+  return isSubagentStreamPayload(payload) ? payload : null;
+};
+
+const readDeepSearchPartPayload = (
+  part: DeertubeMessagePart,
+): { payload: DeepSearchStreamPayload; done: boolean } | null => {
+  if (part.type !== "data-deepsearch-stream" && part.type !== "data-deepsearch-done") {
+    return null;
+  }
+  const payload = (part as { data?: unknown }).data;
+  if (!isDeepSearchStreamPayload(payload)) {
+    return null;
+  }
+  return {
+    payload,
+    done: part.type === "data-deepsearch-done",
+  };
 };
 
 function extractUiMessageText(message: DeertubeUIMessage): string {
@@ -643,11 +727,8 @@ function buildSubagentEvents(
       return;
     }
     message.parts.forEach((part) => {
-      if (!isSubagentDataPart(part)) {
-        return;
-      }
-      const payload = part.data;
-      if (!payload || typeof payload.toolCallId !== "string") {
+      const payload = readSubagentPartPayload(part);
+      if (!payload) {
         return;
       }
       const createdAt =
@@ -675,6 +756,77 @@ function buildSubagentEvents(
     toolOutput: payload,
     toolStatus: isRunning ? "running" : "complete",
   }));
+}
+
+function buildDeepSearchEvents(
+  messages: DeertubeUIMessage[],
+  status: string,
+): ChatMessage[] {
+  const byToolCall = new Map<
+    string,
+    {
+      payload: DeepSearchStreamPayload;
+      parentMessageId: string;
+      createdAt: string;
+      done: boolean;
+    }
+  >();
+  const isRunning = status === "streaming" || status === "submitted";
+
+  messages.forEach((message) => {
+    if (!Array.isArray(message.parts)) {
+      return;
+    }
+    message.parts.forEach((part) => {
+      const deepSearchPart = readDeepSearchPartPayload(part);
+      if (!deepSearchPart) {
+        return;
+      }
+      const { payload, done: doneByPartType } = deepSearchPart;
+      const createdAt =
+        "createdAt" in message && message.createdAt
+          ? message.createdAt instanceof Date
+            ? message.createdAt.toISOString()
+          : String(message.createdAt)
+        : new Date().toISOString();
+      const done =
+        doneByPartType ||
+        payload.complete === true ||
+        payload.status === "complete" ||
+        payload.status === "failed";
+      byToolCall.set(payload.toolCallId, {
+        payload,
+        parentMessageId: message.id,
+        createdAt,
+        done,
+      });
+    });
+  });
+
+  return Array.from(byToolCall.values()).map(
+    ({ payload, parentMessageId, createdAt, done }) => {
+      const failed = payload.status === "failed" || !!payload.error;
+      const toolStatus = failed
+        ? "failed"
+        : done
+          ? "complete"
+          : isRunning
+            ? "running"
+            : "complete";
+      return {
+        id: `deepsearch-${payload.toolCallId}`,
+        role: "assistant",
+        content: "",
+        createdAt,
+        kind: "deepsearch-event",
+        toolName: payload.toolName,
+        toolInput: { responseId: parentMessageId, toolCallId: payload.toolCallId },
+        toolOutput: payload,
+        toolStatus,
+        error: failed ? payload.error : undefined,
+      };
+    },
+  );
 }
 
 function mapUiMessagesToChat(
@@ -807,30 +959,88 @@ function mergeSubagentEvents(
   return merged;
 }
 
+function mergeDeepSearchEvents(
+  messages: ChatMessage[],
+  deepSearchEvents: ChatMessage[],
+): ChatMessage[] {
+  if (deepSearchEvents.length === 0) {
+    return messages;
+  }
+  const byResponseId = new Map<string, ChatMessage[]>();
+  const unattached: ChatMessage[] = [];
+
+  deepSearchEvents.forEach((event) => {
+    const responseId = getDeepSearchEventResponseId(event);
+    if (!responseId) {
+      unattached.push(event);
+      return;
+    }
+    const list = byResponseId.get(responseId) ?? [];
+    list.push(event);
+    byResponseId.set(responseId, list);
+  });
+
+  const merged: ChatMessage[] = [];
+  messages.forEach((message) => {
+    merged.push(message);
+    const events = byResponseId.get(message.id);
+    if (events && events.length > 0) {
+      merged.push(...events);
+      byResponseId.delete(message.id);
+    }
+  });
+
+  if (byResponseId.size > 0) {
+    byResponseId.forEach((events) => merged.push(...events));
+  }
+  if (unattached.length > 0) {
+    merged.push(...unattached);
+  }
+
+  return merged;
+}
+
+function isToolCallEventInput(
+  input: ChatMessage["toolInput"],
+): input is ToolCallEventInput {
+  if (!input || !isJsonObject(input)) {
+    return false;
+  }
+  const candidate = input as Record<string, unknown>;
+  return (
+    typeof candidate.responseId === "string" &&
+    typeof candidate.toolCallId === "string"
+  );
+}
+
+function readResponseId(input: ChatMessage["toolInput"]): string | null {
+  if (isToolCallEventInput(input)) {
+    return input.responseId;
+  }
+  if (!input || !isJsonObject(input)) {
+    return null;
+  }
+  const responseId = input.responseId;
+  return typeof responseId === "string" ? responseId : null;
+}
+
 function getGraphEventResponseId(event: ChatMessage): string | null {
   if (event.kind !== "graph-event") {
     return null;
   }
-  if (!event.toolInput || typeof event.toolInput !== "object") {
-    return null;
-  }
-  if (!("responseId" in event.toolInput)) {
-    return null;
-  }
-  const responseId = (event.toolInput as { responseId?: unknown }).responseId;
-  return typeof responseId === "string" ? responseId : null;
+  return readResponseId(event.toolInput);
 }
 
 function getSubagentEventResponseId(event: ChatMessage): string | null {
   if (event.kind !== "subagent-event") {
     return null;
   }
-  if (!event.toolInput || typeof event.toolInput !== "object") {
+  return readResponseId(event.toolInput);
+}
+
+function getDeepSearchEventResponseId(event: ChatMessage): string | null {
+  if (event.kind !== "deepsearch-event") {
     return null;
   }
-  if (!("responseId" in event.toolInput)) {
-    return null;
-  }
-  const responseId = (event.toolInput as { responseId?: unknown }).responseId;
-  return typeof responseId === "string" ? responseId : null;
+  return readResponseId(event.toolInput);
 }

@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { convertToModelMessages, createUIMessageStream, generateText, streamText } from "ai";
+import {
+  convertToModelMessages,
+  createUIMessageStream,
+  generateText,
+  stepCountIs,
+  streamText,
+} from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { baseProcedure, createTRPCRouter } from "../init";
 import type { DeertubeUIMessage } from "../../../src/modules/ai/tools";
@@ -58,14 +64,29 @@ export const chatRouter = createTRPCRouter({
       }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
-        "When a question requires external evidence or sources, call the `search` tool.",
-        "If you used the `search` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use the `search` tool, do not include footnotes.",
+        "When a question requires external evidence or sources, call the `deepSearch` tool (it performs network search and uses a subagent for deep exploration).",
+        "If you used the `deepSearch` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use this tool, do not include footnotes.",
         ...contextLines,
       ]
         .filter(Boolean)
         .join("\n\n");
 
       const model = provider(llmModelId);
+      const lastUserMessage = [...input.messages]
+        .reverse()
+        .find((message) => message.role === "user");
+      const lastUserText =
+        lastUserMessage &&
+        "content" in lastUserMessage &&
+        typeof lastUserMessage.content === "string"
+          ? lastUserMessage.content.slice(0, 200)
+          : "";
+      console.log("[chat.send]", {
+        messageCount: input.messages.length,
+        lastUserText,
+        provider: llmProvider,
+        model: llmModelId,
+      });
       const result = await generateText({
         model,
         system: systemPrompt,
@@ -128,14 +149,29 @@ export const chatRouter = createTRPCRouter({
       }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
-        "When a question requires external evidence or sources, call the `search` tool.",
-        "If you used the `search` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use the `search` tool, do not include footnotes.",
+        "When a question requires external evidence or sources, call the `deepSearch` tool (it performs network search and uses a subagent for deep exploration).",
+        "If you used the `deepSearch` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use this tool, do not include footnotes.",
         ...contextLines,
       ]
         .filter(Boolean)
         .join("\n\n");
 
       const model = provider(llmModelId);
+      const lastUserMessage = [...input.messages]
+        .reverse()
+        .find((message) => message.role === "user");
+      const lastUserText =
+        lastUserMessage &&
+        "content" in lastUserMessage &&
+        typeof lastUserMessage.content === "string"
+          ? lastUserMessage.content.slice(0, 200)
+          : "";
+      console.log("[chat.stream]", {
+        messageCount: input.messages.length,
+        lastUserText,
+        provider: llmProvider,
+        model: llmModelId,
+      });
       const stream = createUIMessageStream<DeertubeUIMessage>({
         originalMessages: input.messages,
         execute: async ({ writer }) => {
@@ -153,6 +189,7 @@ export const chatRouter = createTRPCRouter({
             }),
             tools,
             toolChoice: "auto",
+            stopWhen: stepCountIs(8),
             abortSignal: signal,
           });
           writer.merge(result.toUIMessageStream());
