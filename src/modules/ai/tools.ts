@@ -18,9 +18,9 @@ interface SubagentStreamPayload {
   messages: UIMessage[];
 }
 
-export type SubagentUIDataParts = {
+export interface SubagentUIDataParts extends Record<string, unknown> {
   "subagent-stream": SubagentStreamPayload;
-};
+}
 
 export type DeertubeUIDataTypes = SubagentUIDataParts;
 
@@ -28,12 +28,12 @@ export type DeertubeUITools = InferUITools<ReturnType<typeof createTools>>;
 
 export type DeertubeUIMessage = UIMessage<unknown, DeertubeUIDataTypes, DeertubeUITools>;
 
-type ToolConfig = {
+interface ToolConfig {
   model?: LanguageModel;
   tavilyApiKey?: string;
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
-};
+}
 
 const TavilySearchResultSchema = z.object({
   title: z.string().optional(),
@@ -154,7 +154,7 @@ const extractText = (message: UIMessage): string => {
 
 const collectToolOutputs = (
   message: UIMessage,
-): Array<{ name?: string; output: unknown }> => {
+): { name?: string; output: unknown }[] => {
   if (!message.parts) return [];
   return message.parts
     .filter(isToolPart)
@@ -168,7 +168,7 @@ const collectToolOutputs = (
 const normalizeRanges = (
   ranges: unknown,
   maxLine: number,
-): Array<{ start: number; end: number }> => {
+): { start: number; end: number }[] => {
   if (!Array.isArray(ranges)) return [];
   return ranges
     .map((item) => {
@@ -198,7 +198,7 @@ const formatLineNumbered = (lines: string[], offset = 0, totalLines?: number): s
 
 const buildExcerptsFromRanges = (
   lines: string[],
-  ranges: Array<{ start: number; end: number }>,
+  ranges: { start: number; end: number }[],
 ): string[] => {
   const excerpts = ranges
     .map((range) => lines.slice(range.start - 1, range.end).join("\n").trim())
@@ -276,7 +276,9 @@ async function fetchJinaReaderMarkdown(
   return raw;
 }
 
-const normalizeSearchResults = (raw: unknown): Array<{ url: string; excerpts: string[]; broken?: boolean }> => {
+interface SearchResult { url: string; excerpts: string[]; broken?: boolean }
+
+const normalizeSearchResults = (raw: unknown): SearchResult[] => {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item) => {
@@ -287,18 +289,18 @@ const normalizeSearchResults = (raw: unknown): Array<{ url: string; excerpts: st
         : Array.isArray(item.paragraphs)
           ? item.paragraphs
           : [];
-      const excerpts = paragraphs.filter((entry) => typeof entry === "string") as string[];
+      const excerpts = paragraphs.filter((entry) => typeof entry === "string");
       const broken = typeof item.broken === "boolean" ? item.broken : undefined;
-      if (!url || (excerpts.length === 0 && !broken)) return null;
-      return { url, excerpts, broken };
+      if (!url || (excerpts.length === 0 && broken !== true)) return null;
+      return broken === undefined ? { url, excerpts } : { url, excerpts, broken };
     })
-    .filter((item): item is { url: string; excerpts: string[]; broken?: boolean } => item !== null);
+    .filter((item): item is SearchResult => item !== null);
 };
 
 const dedupeSearchResults = (
-  results: Array<{ url: string; excerpts: string[]; broken?: boolean }>,
-): Array<{ url: string; excerpts: string[]; broken?: boolean }> => {
-  const map = new Map<string, { url: string; excerpts: string[]; broken?: boolean }>();
+  results: SearchResult[],
+): SearchResult[] => {
+  const map = new Map<string, SearchResult>();
   for (const item of results) {
     const existing = map.get(item.url);
     if (!existing) {
@@ -325,7 +327,7 @@ async function runExtractSubagent({
   lines: string[];
   model: LanguageModel;
   abortSignal?: AbortSignal;
-}): Promise<{ ranges: Array<{ start: number; end: number }>; broken: boolean }> {
+}): Promise<{ ranges: { start: number; end: number }[]; broken: boolean }> {
   const lineCount = lines.length;
   if (lineCount === 0) {
     return { ranges: [], broken: true };
@@ -346,14 +348,14 @@ async function runExtractSubagent({
       after: z.number().min(0).max(8).optional(),
       maxMatches: z.number().min(1).max(40).optional(),
     }),
-    execute: async ({ pattern, flags, before = 2, after = 2, maxMatches = 20 }) => {
+    execute: ({ pattern, flags, before = 2, after = 2, maxMatches = 20 }) => {
       let regex: RegExp;
       try {
         regex = new RegExp(pattern, flags ?? "i");
       } catch (error) {
         return { error: error instanceof Error ? error.message : "Invalid regex" };
       }
-      const matches: Array<{ line: number; text: string; before: string[]; after: string[] }> = [];
+      const matches: { line: number; text: string; before: string[]; after: string[] }[] = [];
       for (let index = 0; index < lines.length; index += 1) {
         if (!regex.test(lines[index])) continue;
         const start = Math.max(0, index - before);
@@ -382,7 +384,7 @@ async function runExtractSubagent({
       start: z.number().min(1),
       end: z.number().min(1),
     }),
-    execute: async ({ start, end }) => {
+    execute: ({ start, end }) => {
       const safeStart = Math.max(1, Math.min(lineCount, Math.floor(start)));
       const safeEnd = Math.max(safeStart, Math.min(lineCount, Math.floor(end)));
       const slice = lines.slice(safeStart - 1, safeEnd);
@@ -433,10 +435,10 @@ async function runSearchSubagent({
   tavilyApiKey?: string;
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
-}): Promise<Array<{ url: string; excerpts: string[]; broken?: boolean }>> {
+}): Promise<{ url: string; excerpts: string[]; broken?: boolean }[]> {
   const accumulatedMessages: UIMessage[] = [];
   let lastText = "";
-  const extracted: Array<{ url: string; excerpts: string[]; broken?: boolean }> = [];
+  const extracted: { url: string; excerpts: string[]; broken?: boolean }[] = [];
 
   const searchTool = tool({
     description: "使用 Tavily 搜索网页，返回结果列表。",

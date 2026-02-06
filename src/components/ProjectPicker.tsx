@@ -11,6 +11,7 @@ export interface ProjectOpenResult {
     nodes: unknown[]
     edges: unknown[]
     chat?: unknown[]
+    autoLayoutLocked?: boolean
   }
 }
 

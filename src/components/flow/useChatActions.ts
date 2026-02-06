@@ -573,7 +573,6 @@ function mapChatToUiMessage(message: ChatMessage): DeertubeUIMessage {
   };
 }
 
-<<<<<<< HEAD
 function extractMessageMetadata(
   metadata: unknown,
 ): { status?: ChatMessage["status"]; error?: string } {
@@ -589,11 +588,11 @@ function extractMessageMetadata(
   return { status, error };
 }
 
-type SubagentStreamPayload = {
+interface SubagentStreamPayload {
   toolCallId: string;
   toolName?: string;
   messages: UIMessage[];
-};
+}
 
 const isSubagentDataPart = (
   part: unknown,

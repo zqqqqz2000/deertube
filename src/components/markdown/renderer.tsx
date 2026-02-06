@@ -46,8 +46,7 @@ const stripMarkdownSymbols = (input: string) => {
     return input;
   }
   const chars: string[] = [];
-  for (let i = 0; i < input.length; i += 1) {
-    const char = input[i];
+  for (const char of input) {
     if (markdownSymbolSet.has(char)) {
       continue;
     }

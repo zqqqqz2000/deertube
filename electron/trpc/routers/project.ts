@@ -9,6 +9,7 @@ interface ProjectState {
   nodes: unknown[]
   edges: unknown[]
   chat: unknown[]
+  autoLayoutLocked?: boolean
   updatedAt: string
 }
 
@@ -118,6 +119,7 @@ async function loadProjectState(projectPath: string): Promise<ProjectState> {
     nodes: [],
     edges: [],
     chat: [],
+    autoLayoutLocked: true,
     updatedAt: new Date().toISOString(),
   }
   const state = await readJsonFile(store.statePath, fallback)
@@ -133,6 +135,8 @@ async function saveProjectState(projectPath: string, state: ProjectState) {
     ...state,
     version: state.version ?? 1,
     chat: state.chat ?? [],
+    autoLayoutLocked:
+      typeof state.autoLayoutLocked === 'boolean' ? state.autoLayoutLocked : true,
     updatedAt: new Date().toISOString(),
   }
   await writeJsonFile(store.statePath, payload)
@@ -185,6 +189,7 @@ export const projectRouter = createTRPCRouter({
           nodes: z.array(z.unknown()),
           edges: z.array(z.unknown()),
           chat: z.array(z.unknown()).optional(),
+          autoLayoutLocked: z.boolean().optional(),
         }),
       }),
     )
@@ -194,6 +199,7 @@ export const projectRouter = createTRPCRouter({
         nodes: input.state.nodes,
         edges: input.state.edges,
         chat: input.state.chat ?? [],
+        autoLayoutLocked: input.state.autoLayoutLocked,
         updatedAt: new Date().toISOString(),
       })
       return { ok: true }

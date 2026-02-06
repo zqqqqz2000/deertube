@@ -18,7 +18,7 @@ import SourceNode from "./nodes/SourceNode";
 import InsightNode from "./nodes/InsightNode";
 import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
-import { Lock, LockOpen } from "lucide-react";
+import { LayoutGrid, Lock, LockOpen } from "lucide-react";
 import { createProfileDraft } from "../lib/settings";
 import { getNodeSize } from "../lib/elkLayout";
 import FlowHeader from "./flow/FlowHeader";
@@ -56,10 +56,13 @@ const coerceProjectState = (state: {
   nodes: unknown[];
   edges: unknown[];
   chat?: unknown[];
+  autoLayoutLocked?: boolean;
 }): ProjectState => ({
   nodes: state.nodes as FlowNode[],
   edges: state.edges as FlowEdge[],
   chat: (state.chat ?? []) as ChatMessage[],
+  autoLayoutLocked:
+    typeof state.autoLayoutLocked === "boolean" ? state.autoLayoutLocked : true,
 });
 
 interface FlexLayoutNode {
@@ -223,7 +226,7 @@ const normalizeLayoutModel = (model: IJsonModel): IJsonModel => {
   };
 
   const ensureSelected = (node: FlexLayoutNode | undefined) => {
-    if (!node || !node.children) {
+    if (!node?.children) {
       return;
     }
     if (node.type === "tabset" && node.children.length > 0) {
@@ -469,7 +472,9 @@ function FlowWorkspaceInner({
   );
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [isDragging, setIsDragging] = useState(false);
-  const [autoLayoutLocked, setAutoLayoutLocked] = useState(false);
+  const [autoLayoutLocked, setAutoLayoutLocked] = useState(
+    () => initialState.autoLayoutLocked ?? true,
+  );
   const [chatScrollSignal, setChatScrollSignal] = useState(0);
   const [chatFocusSignal, setChatFocusSignal] = useState(0);
   const [layoutModel, setLayoutModel] = useState<IJsonModel>(
@@ -493,6 +498,8 @@ function FlowWorkspaceInner({
   const autoLayoutWasRunningRef = useRef(false);
   const autoLayoutZoomingRef = useRef(false);
   const autoLayoutZoomTimeoutRef = useRef<number | null>(null);
+  const autoLayoutLockEntryPendingRef = useRef(autoLayoutLocked);
+  const autoLayoutLockPreviousRef = useRef(autoLayoutLocked);
   const autoLayoutLastSizesRef = useRef<
     Map<string, { width: number; height: number }> | null
   >(null);
@@ -674,10 +681,38 @@ function FlowWorkspaceInner({
   ]);
 
   useEffect(() => {
+    const previous = autoLayoutLockPreviousRef.current;
+    if (!previous && autoLayoutLocked) {
+      autoLayoutLockEntryPendingRef.current = true;
+    }
+    autoLayoutLockPreviousRef.current = autoLayoutLocked;
+  }, [autoLayoutLocked]);
+
+  useEffect(() => {
+    if (!autoLayoutLockEntryPendingRef.current) {
+      return;
+    }
+    if (!autoLayoutLocked) {
+      return;
+    }
+    if (!hydrated.current || !flowInstance || nodes.length === 0) {
+      return;
+    }
+    if (isLayouting) {
+      return;
+    }
+    autoLayoutLockEntryPendingRef.current = false;
+    void handleAutoLayout();
+  }, [autoLayoutLocked, flowInstance, handleAutoLayout, hydrated, isLayouting, nodes.length]);
+
+  useEffect(() => {
     const wasLayouting = autoLayoutWasRunningRef.current;
     autoLayoutWasRunningRef.current = isLayouting;
     if (!wasLayouting || isLayouting) {
       return;
+    }
+    if (autoLayoutLockEntryPendingRef.current) {
+      autoLayoutLockEntryPendingRef.current = false;
     }
     if (!autoLayoutLocked) {
       autoLayoutPendingRef.current = false;
@@ -1081,6 +1116,7 @@ function FlowWorkspaceInner({
             nodes,
             edges,
             chat: chatMessages,
+            autoLayoutLocked,
             version: 1,
           },
         })
@@ -1091,7 +1127,7 @@ function FlowWorkspaceInner({
         window.clearTimeout(saveTimer.current);
       }
     };
-  }, [chatMessages, edges, nodes, project.path, hydrated, saveEnabled]);
+  }, [autoLayoutLocked, chatMessages, edges, nodes, project.path, hydrated, saveEnabled]);
 
   const handleExit = () => {
     trpc.preview.hide.mutate().catch(() => undefined);
@@ -1357,6 +1393,21 @@ function FlowWorkspaceInner({
           >
             <Background gap={20} size={1} color="var(--flow-grid)" />
             <Panel position="top-right" className="flex items-center gap-2">
+              {!autoLayoutLocked ? (
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="h-9 w-9 border-border/70 bg-card/80 text-muted-foreground transition-colors hover:border-border hover:bg-accent/40 hover:text-foreground"
+                  onClick={() => {
+                    void handleAutoLayout();
+                  }}
+                  disabled={nodes.length === 0 || isLayouting}
+                  aria-label="Run auto layout"
+                  title="Run auto layout"
+                >
+                  <LayoutGrid />
+                </Button>
+              ) : null}
               <Button
                 size="icon"
                 variant="outline"

@@ -58,7 +58,8 @@ export const chatRouter = createTRPCRouter({
       }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
-        "When a question requires external evidence or sources, call the `search` tool and cite the returned excerpts.",
+        "When a question requires external evidence or sources, call the `search` tool.",
+        "If you used the `search` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use the `search` tool, do not include footnotes.",
         ...contextLines,
       ]
         .filter(Boolean)
@@ -127,7 +128,8 @@ export const chatRouter = createTRPCRouter({
       }
       const systemPrompt = [
         "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
-        "When a question requires external evidence or sources, call the `search` tool and cite the returned excerpts.",
+        "When a question requires external evidence or sources, call the `search` tool.",
+        "If you used the `search` tool, you must cite all supporting webpages and viewpoints with Markdown footnotes. Put a `[^n]` marker after every supported statement. At the end, list footnotes using this exact format: `[^n]: 引用来源：[https://www.example.com/source1](https://www.example.com/source1)` and replace the URL with the source URL. Reuse the same footnote number for repeat citations of the same URL. If you did not use the `search` tool, do not include footnotes.",
         ...contextLines,
       ]
         .filter(Boolean)

@@ -6,6 +6,7 @@ export interface ProjectState {
   nodes: FlowNode[];
   edges: FlowEdge[];
   chat: ChatMessage[];
+  autoLayoutLocked?: boolean;
 }
 
 export interface ProjectInfo {

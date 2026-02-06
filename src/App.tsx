@@ -14,6 +14,7 @@ interface ProjectState {
   nodes: FlowNode[]
   edges: FlowEdge[]
   chat: ChatMessage[]
+  autoLayoutLocked?: boolean
 }
 
 function App() {
@@ -32,6 +33,10 @@ function App() {
       nodes: result.state.nodes as FlowNode[],
       edges: result.state.edges as FlowEdge[],
       chat: (result.state.chat ?? []) as ChatMessage[],
+      autoLayoutLocked:
+        typeof result.state.autoLayoutLocked === 'boolean'
+          ? result.state.autoLayoutLocked
+          : true,
     })
   }
 

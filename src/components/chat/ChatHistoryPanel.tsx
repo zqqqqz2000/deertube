@@ -70,12 +70,12 @@ interface SubagentStreamPayload {
   messages: UIMessage[];
 }
 
-type SubagentEntry = {
+interface SubagentEntry {
   kind: "call" | "result";
   label: string;
   detail?: string;
   tone?: "warn";
-};
+}
 
 const parseToolPayload = (value: unknown): unknown => {
   if (typeof value === "string") {
@@ -813,10 +813,7 @@ export default function ChatHistoryPanel({
                 const entries = outputPayload
                   ? buildSubagentEntries(outputPayload)
                   : [];
-                const title =
-                  eventMessage.toolName ||
-                  outputPayload?.toolName ||
-                  "Subagent";
+                const title = eventMessage.toolName ?? outputPayload?.toolName ?? "Subagent";
                 const hasDetails = entries.length > 0;
 
                 return (
