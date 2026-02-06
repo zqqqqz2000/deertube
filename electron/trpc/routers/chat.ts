@@ -13,6 +13,22 @@ import { createDeepResearchPersistenceAdapter } from "../../deepresearch/store";
 
 const noStepLimit = () => false;
 
+const buildMainAgentSystemPrompt = (contextLines: string[]) =>
+  [
+    "You are a concise assistant. Answer clearly and directly. Use short paragraphs when helpful.",
+    "Always answer in the same language as the user's latest question.",
+    "For almost all user questions, call the `deepSearch` tool first and ground the answer in retrieved evidence.",
+    "Only skip `deepSearch` for fixed deterministic math/computation tasks that do not depend on external facts.",
+    "For any concept, entity, event, policy, recommendation, or factual claim, you must use `deepSearch` before answering.",
+    "Do not answer from intuition or prior belief. If evidence is insufficient, say so explicitly and continue searching.",
+    "If you used `deepSearch`, preserve citation markers exactly as provided, such as [1], [2].",
+    "Do not merge citations into one bracket like [1,2] or [1-2]; keep separate markers [1], [2].",
+    "When citations are present, append a final `References` section and list source URLs in academic style, e.g. `[1] https://...`.",
+    ...contextLines,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
 export const chatRouter = createTRPCRouter({
   send: baseProcedure
     .input(
@@ -64,18 +80,7 @@ export const chatRouter = createTRPCRouter({
           `Root-to-selected context:\n${input.context.selectedPathSummary}`,
         );
       }
-      const systemPrompt = [
-        "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
-        "Always answer in the same language as the user's latest question.",
-        "When a question requires external evidence or sources, call the `deepSearch` tool (it performs network search and uses a subagent for deep exploration).",
-        "Before providing any citation link or any non-speculative factual claim, you must call the `deepSearch` tool and ground the claim in its references.",
-        "If you used the `deepSearch` tool, keep citation markers like [1], [2] exactly as provided by the tool output and do not rewrite them into footnotes.",
-        "Do not merge citations into one bracket like [1,2] or [1-2]; keep separate markers [1], [2].",
-        "When citations are present, append a final `References` section at the end and list the corresponding source URLs in academic style, e.g. `[1] https://...`.",
-        ...contextLines,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+      const systemPrompt = buildMainAgentSystemPrompt(contextLines);
 
       const model = provider(llmModelId);
       const lastUserMessage = [...input.messages]
@@ -153,18 +158,7 @@ export const chatRouter = createTRPCRouter({
           `Root-to-selected context:\n${input.context.selectedPathSummary}`,
         );
       }
-      const systemPrompt = [
-        "You are a concise assistant. Answer clearly and directly. When relevant, structure the response in short paragraphs.",
-        "Always answer in the same language as the user's latest question.",
-        "When a question requires external evidence or sources, call the `deepSearch` tool (it performs network search and uses a subagent for deep exploration).",
-        "Before providing any citation link or any non-speculative factual claim, you must call the `deepSearch` tool and ground the claim in its references.",
-        "If you used the `deepSearch` tool, keep citation markers like [1], [2] exactly as provided by the tool output and do not rewrite them into footnotes.",
-        "Do not merge citations into one bracket like [1,2] or [1-2]; keep separate markers [1], [2].",
-        "When citations are present, append a final `References` section at the end and list the corresponding source URLs in academic style, e.g. `[1] https://...`.",
-        ...contextLines,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+      const systemPrompt = buildMainAgentSystemPrompt(contextLines);
 
       const model = provider(llmModelId);
       const lastUserMessage = [...input.messages]

@@ -121,28 +121,36 @@ const TavilyResponseSchema = z.object({
 });
 
 const SEARCH_SUBAGENT_SYSTEM = [
-  "你是 DeepResearch 子代理。你的任务是通过检索和抽取网页内容，返回结构化证据。",
-  "可用工具:",
-  "- search: Tavily 搜索，返回候选结果。",
-  "- extract: 对指定 URL 进行内容抽取，返回相关段落。",
-  "流程:",
-  "1) 调用 search 获取候选结果 (<=6)。",
-  "2) 选择高相关结果，逐个调用 extract(url, query)。",
-  "3) 输出 JSON 数组，每项: { url, excerpts: string[], broken?: boolean }。",
-  "要求: 仅输出 JSON，不要额外解释。",
+  "You are the DeepResearch subagent. Your task is to collect structured evidence through web search and page extraction.",
+  "Available tools:",
+  "- search: Use Tavily to find candidate pages.",
+  "- extract: Extract query-relevant passages from a specific URL.",
+  "Source quality policy:",
+  "- Prefer high-credibility sources: established media with strong editorial standards and low misinformation history, official institutions, peer-reviewed journals, top conferences, and expert domain publications.",
+  "- Avoid low-credibility or rumor-heavy sources unless they are necessary for contrast and clearly labeled.",
+  "Search strategy:",
+  "- For each task, search in both the original user-question language and English.",
+  "- Do not let off-topic result trends redirect your judgment. If results drift from the intended topic, reformulate and continue searching.",
+  "- If one search is insufficient, iterate with alternative keywords, synonyms, and related concepts.",
+  "Workflow:",
+  "1) Call search to gather candidates (<=6 per query, multiple query rounds allowed).",
+  "2) Select relevant high-quality URLs and call extract(url, query) for each.",
+  "3) Extraction is mandatory. Do not stop after search-only results.",
+  "4) Return a JSON array only: [{ url, excerpts: string[], broken?: boolean }].",
+  "Output rule: return JSON only, with no extra prose.",
 ].join("\n");
 
 const EXTRACT_SUBAGENT_SYSTEM = [
-  "你是 Extract 子代理。",
-  "输入: 查询词 + 带行号的 Markdown。",
-  "目标: 选出与查询最相关的段落行范围。",
-  "输出 JSON: { broken: boolean, ranges: [{ start, end }] }。",
-  "规则:",
-  "- 行号从 1 开始，start/end 为闭区间。",
-  "- 保持段落连贯，避免超大范围。",
-  "- 如果内容无法获取或明显损坏，broken=true 且 ranges=[]。",
-  "- Markdown 很大时，优先使用 grep/readLines 工具探索。",
-  "仅输出 JSON。",
+  "You are the Extract subagent.",
+  "Input: query + line-numbered markdown.",
+  "Goal: select the most relevant line ranges for the query.",
+  "Output JSON: { broken: boolean, ranges: [{ start, end }] }.",
+  "Rules:",
+  "- Line numbers start from 1. start/end are inclusive.",
+  "- Keep ranges coherent and avoid oversized spans.",
+  "- If content is unavailable or clearly corrupted, return broken=true and ranges=[].",
+  "- For large markdown, prioritize the grep/readLines tools to explore before deciding ranges.",
+  "Return JSON only.",
 ].join("\n");
 
 const DEEPSEARCH_SYSTEM = [
@@ -611,11 +619,11 @@ async function runExtractSubagent({
   const previewLines = tooLarge ? lines.slice(0, 200) : lines;
   const preview = formatLineNumbered(previewLines, 0, lineCount);
   const sizeNote = tooLarge
-    ? `Markdown 太大 (${lineCount} 行)，已截取前 200 行预览。可使用 grep/readLines 查找更多。`
-    : `Markdown 总行数: ${lineCount}。`;
+    ? `Markdown is large (${lineCount} lines). Only the first 200 lines are shown. Use grep/readLines to inspect more.`
+    : `Total markdown lines: ${lineCount}.`;
 
   const grepTool = tool({
-    description: "在全文中使用正则搜索行，返回命中的行号和上下文。",
+    description: "Search all lines with a regex and return matching line numbers with surrounding context.",
     inputSchema: z.object({
       pattern: z.string(),
       flags: z.string().optional(),
@@ -654,7 +662,7 @@ async function runExtractSubagent({
   });
 
   const readLinesTool = tool({
-    description: "读取指定行号范围的内容。",
+    description: "Read content by a specified inclusive line range.",
     inputSchema: z.object({
       start: z.number().min(1),
       end: z.number().min(1),
@@ -725,7 +733,7 @@ async function runSearchSubagent({
   const searchLookup = new Map<string, { title?: string; snippet?: string }>();
 
   const searchTool = tool({
-    description: "使用 Tavily 搜索网页，返回结果列表。",
+    description: "Search the web via Tavily and return ranked candidate results.",
     inputSchema: z.object({
       query: z.string().min(1),
       maxResults: z.number().min(1).max(8).optional(),
@@ -755,7 +763,7 @@ async function runSearchSubagent({
   });
 
   const extractTool = tool({
-    description: "读取指定 URL 的网页内容，抽取与查询相关的段落。",
+    description: "Fetch markdown from a URL and extract passages relevant to the query.",
     inputSchema: z.object({
       url: z.string().min(1),
       query: z.string().min(1),
