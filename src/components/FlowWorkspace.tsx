@@ -453,10 +453,13 @@ function FlowWorkspaceInner({
   const nodeZoomRef = useRef<Viewport | null>(null);
   const autoLayoutPendingRef = useRef(false);
   const autoLayoutWasRunningRef = useRef(false);
+  const autoLayoutZoomingRef = useRef(false);
+  const autoLayoutZoomTimeoutRef = useRef<number | null>(null);
   const autoLayoutLastSizesRef = useRef<
     Map<string, { width: number; height: number }> | null
   >(null);
   const autoLayoutLastCountRef = useRef<number | null>(null);
+  const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const { getNode } = useReactFlow();
   const flowStateOptions = useMemo(() => ({ autoSave: false }), []);
 
@@ -528,11 +531,42 @@ function FlowWorkspaceInner({
     [],
   );
 
+  const suspendAutoLayoutForZoom = useCallback(
+    (durationMs: number) => {
+      if (!autoLayoutLocked) {
+        return;
+      }
+      autoLayoutZoomingRef.current = true;
+      if (autoLayoutZoomTimeoutRef.current) {
+        window.clearTimeout(autoLayoutZoomTimeoutRef.current);
+      }
+      autoLayoutZoomTimeoutRef.current = window.setTimeout(() => {
+        autoLayoutZoomingRef.current = false;
+        autoLayoutZoomTimeoutRef.current = null;
+        if (!autoLayoutLocked) {
+          autoLayoutPendingRef.current = false;
+          return;
+        }
+        if (!autoLayoutPendingRef.current || isLayouting) {
+          return;
+        }
+        autoLayoutPendingRef.current = false;
+        void handleAutoLayout();
+      }, durationMs);
+    },
+    [autoLayoutLocked, handleAutoLayout, isLayouting],
+  );
+
   useEffect(() => {
     if (!autoLayoutLocked) {
       autoLayoutPendingRef.current = false;
       autoLayoutLastSizesRef.current = null;
       autoLayoutLastCountRef.current = null;
+      autoLayoutZoomingRef.current = false;
+      if (autoLayoutZoomTimeoutRef.current) {
+        window.clearTimeout(autoLayoutZoomTimeoutRef.current);
+        autoLayoutZoomTimeoutRef.current = null;
+      }
       return;
     }
     const resolveDimension = (value: number | null | undefined) =>
@@ -581,6 +615,10 @@ function FlowWorkspaceInner({
     autoLayoutLastCountRef.current = nodes.length;
 
     if (!shouldLayout) {
+      return;
+    }
+    if (autoLayoutZoomingRef.current) {
+      autoLayoutPendingRef.current = true;
       return;
     }
     if (isLayouting) {
@@ -1047,6 +1085,7 @@ function FlowWorkspaceInner({
       const centerX = position.x + width / 2;
       const centerY = position.y + height / 2;
       requestAnimationFrame(() => {
+        suspendAutoLayoutForZoom(450);
         flowInstance.setCenter(centerX, centerY, {
           zoom: Math.max(flowInstance.getZoom(), 1.05),
           duration: 400,
@@ -1055,7 +1094,7 @@ function FlowWorkspaceInner({
       setSelectedId(nodeId);
       setChatFocusSignal((prev) => prev + 1);
     },
-    [flowInstance, getNode, nodes, setNodes, setSelectedId],
+    [flowInstance, getNode, nodes, setNodes, setSelectedId, suspendAutoLayoutForZoom],
   );
 
   const handleNodeDoubleClick = useCallback(
@@ -1074,6 +1113,7 @@ function FlowWorkspaceInner({
       const centerX = position.x + width / 2;
       const centerY = position.y + height / 2;
       requestAnimationFrame(() => {
+        suspendAutoLayoutForZoom(520);
         flowInstance.setCenter(centerX, centerY, {
           zoom: Math.max(flowInstance.getZoom(), 1.6),
           duration: 450,
@@ -1082,7 +1122,7 @@ function FlowWorkspaceInner({
       setSelectedId(node.id);
       setChatFocusSignal((prev) => prev + 1);
     },
-    [flowInstance, getNode, setSelectedId],
+    [flowInstance, getNode, setSelectedId, suspendAutoLayoutForZoom],
   );
 
   const renderPanelInput = () => {
@@ -1121,6 +1161,7 @@ function FlowWorkspaceInner({
       const centerX = position.x + nodeWidth / 2;
       const centerY = position.y + nodeHeight / 2;
       requestAnimationFrame(() => {
+        suspendAutoLayoutForZoom(420);
         flowInstance.setCenter(centerX, centerY, {
           zoom: Math.max(flowInstance.getZoom(), 1.6),
           duration: 350,
@@ -1199,17 +1240,44 @@ function FlowWorkspaceInner({
             <ReactFlow
               nodes={nodes}
               edges={displayEdges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              nodeTypes={nodeTypes}
-              nodesDraggable={!autoLayoutLocked}
-              onInit={(instance) => {
-                setFlowInstance(instance);
-                setViewport(instance.getViewport());
-              }}
-            onMove={(_, nextViewport) => setViewport(nextViewport)}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            nodeTypes={nodeTypes}
+            nodesDraggable={!autoLayoutLocked}
+            onInit={(instance) => {
+              setFlowInstance(instance);
+              const nextViewport = instance.getViewport();
+              viewportRef.current = nextViewport;
+              setViewport(nextViewport);
+            }}
+            onMove={(_, nextViewport) => {
+              if (nextViewport.zoom !== viewportRef.current.zoom) {
+                autoLayoutZoomingRef.current = true;
+              }
+              viewportRef.current = nextViewport;
+              setViewport(nextViewport);
+            }}
             onMoveStart={() => setIsDragging(true)}
-            onMoveEnd={() => setIsDragging(false)}
+            onMoveEnd={() => {
+              setIsDragging(false);
+              if (!autoLayoutZoomingRef.current) {
+                return;
+              }
+              autoLayoutZoomingRef.current = false;
+              if (autoLayoutZoomTimeoutRef.current) {
+                window.clearTimeout(autoLayoutZoomTimeoutRef.current);
+                autoLayoutZoomTimeoutRef.current = null;
+              }
+              if (!autoLayoutLocked) {
+                autoLayoutPendingRef.current = false;
+                return;
+              }
+              if (!autoLayoutPendingRef.current || isLayouting) {
+                return;
+              }
+              autoLayoutPendingRef.current = false;
+              void handleAutoLayout();
+            }}
             onNodeClick={(_, node) => {
               setSelectedId(node.id);
               setPanelInput("");
@@ -1222,6 +1290,7 @@ function FlowWorkspaceInner({
                 const { viewport } = inputZoomRef.current;
                 inputZoomRef.current = null;
                 requestAnimationFrame(() => {
+                  suspendAutoLayoutForZoom(420);
                   flowInstance.setViewport(viewport, { duration: 350 });
                 });
               }
@@ -1229,6 +1298,7 @@ function FlowWorkspaceInner({
                 const viewport = nodeZoomRef.current;
                 nodeZoomRef.current = null;
                 requestAnimationFrame(() => {
+                  suspendAutoLayoutForZoom(420);
                   flowInstance.setViewport(viewport, { duration: 350 });
                 });
               }

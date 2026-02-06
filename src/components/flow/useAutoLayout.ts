@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactFlowInstance } from "reactflow";
 import { getNodeSize, layoutFlowWithElk } from "../../lib/elkLayout";
 import type { FlowEdge, FlowNode } from "../../types/flow";
@@ -19,6 +19,11 @@ export function useAutoLayout({
   focusNodeId = null,
 }: UseAutoLayoutOptions) {
   const [isLayouting, setIsLayouting] = useState(false);
+  const latestFocusIdRef = useRef<string | null>(focusNodeId);
+
+  useEffect(() => {
+    latestFocusIdRef.current = focusNodeId ?? null;
+  }, [focusNodeId]);
 
   const handleAutoLayout = useCallback(async () => {
     if (isLayouting || nodes.length === 0) {
@@ -52,11 +57,6 @@ export function useAutoLayout({
       direction: "RIGHT",
       useExistingPositions: true,
     });
-    const focusNode = focusNodeId
-      ? layoutNodes.find((node) => node.id === focusNodeId) ?? null
-      : null;
-    const focusPosition = focusNodeId ? positions[focusNodeId] ?? focusNode?.position : null;
-    const focusSize = getNodeSize(focusNode);
     setNodes((prev) =>
       prev.map((node) => ({
         ...node,
@@ -64,18 +64,37 @@ export function useAutoLayout({
       })),
     );
     requestAnimationFrame(() => {
-      if (!flowInstance || !focusNodeId || !focusPosition) {
+      const latestFocusId = latestFocusIdRef.current;
+      if (!flowInstance || !latestFocusId) {
         return;
       }
+      const focusPosition = positions[latestFocusId];
+      const internalNode = flowInstance.getNode(latestFocusId);
+      const node =
+        layoutNodes.find((item) => item.id === latestFocusId) ??
+        internalNode ??
+        null;
+      if (!node) {
+        return;
+      }
+      const resolvedPosition =
+        focusPosition ??
+        ("positionAbsolute" in node && node.positionAbsolute
+          ? node.positionAbsolute
+          : node.position);
+      if (!resolvedPosition) {
+        return;
+      }
+      const focusSize = getNodeSize(node);
       const zoom = flowInstance.getZoom();
       flowInstance.setCenter(
-        focusPosition.x + focusSize.width / 2,
-        focusPosition.y + focusSize.height / 2,
+        resolvedPosition.x + focusSize.width / 2,
+        resolvedPosition.y + focusSize.height / 2,
         { zoom, duration: 350 },
       );
     });
     setIsLayouting(false);
-  }, [edges, flowInstance, focusNodeId, isLayouting, nodes, setNodes]);
+  }, [edges, flowInstance, isLayouting, nodes, setNodes]);
 
   return { isLayouting, handleAutoLayout };
 }
