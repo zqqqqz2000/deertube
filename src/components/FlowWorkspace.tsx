@@ -1146,6 +1146,7 @@ function FlowWorkspaceInner({
 
   const handleFocusNode = useCallback(
     (nodeId: string) => {
+      openOrFocusTab("graph");
       if (!flowInstance) {
         return;
       }
@@ -1178,7 +1179,15 @@ function FlowWorkspaceInner({
       setSelectedId(nodeId);
       setChatFocusSignal((prev) => prev + 1);
     },
-    [flowInstance, getNode, nodes, setNodes, setSelectedId, suspendAutoLayoutForZoom],
+    [
+      flowInstance,
+      getNode,
+      nodes,
+      openOrFocusTab,
+      setNodes,
+      setSelectedId,
+      suspendAutoLayoutForZoom,
+    ],
   );
 
   const handleNodeDoubleClick = useCallback(
