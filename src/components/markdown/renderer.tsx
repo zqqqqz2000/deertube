@@ -1,7 +1,7 @@
 import "katex/dist/katex.min.css";
 import "@/assets/github-markdown.css";
 import "@/assets/mdx-renderer.css";
-import { memo, useCallback, useRef, useState, useMemo } from "react";
+import { memo, useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { isValidElement } from "react";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
@@ -45,6 +45,7 @@ const TOOLTIP_WIDTH = 320;
 const TOOLTIP_HEIGHT = 184;
 const TOOLTIP_MARGIN = 12;
 const TOOLTIP_GAP = 10;
+const TOOLTIP_HIDE_DELAY_MS = 220;
 
 const resolveReferenceTitle = (reference: MarkdownReferencePreview): string => {
   const trimmed = reference.title?.trim();
@@ -79,8 +80,108 @@ export const MarkdownRenderer = memo(
       new Map(),
     );
     const referencePreviewTokenRef = useRef(0);
+    const tooltipScrollRef = useRef<HTMLDivElement | null>(null);
+    const tooltipScrollTargetRef = useRef<number | null>(null);
+    const tooltipScrollRafRef = useRef<number | null>(null);
+    const tooltipHideTimerRef = useRef<number | null>(null);
+    const hoveredReferenceUriRef = useRef<string | null>(null);
     const [referenceTooltip, setReferenceTooltip] =
       useState<ReferenceTooltipState | null>(null);
+
+    const clearTooltipHideTimer = useCallback(() => {
+      if (tooltipHideTimerRef.current !== null) {
+        window.clearTimeout(tooltipHideTimerRef.current);
+        tooltipHideTimerRef.current = null;
+      }
+    }, []);
+
+    const stopTooltipScrollAnimation = useCallback(() => {
+      if (tooltipScrollRafRef.current !== null) {
+        window.cancelAnimationFrame(tooltipScrollRafRef.current);
+        tooltipScrollRafRef.current = null;
+      }
+      tooltipScrollTargetRef.current = null;
+    }, []);
+
+    useEffect(() => {
+      if (!referenceTooltip || referenceTooltip.status !== "ready") {
+        stopTooltipScrollAnimation();
+        return;
+      }
+
+      const handleWheel = (event: WheelEvent) => {
+        const scrollContainer = tooltipScrollRef.current;
+        if (!scrollContainer) {
+          return;
+        }
+
+        const hoveringReference = hoveredReferenceUriRef.current === referenceTooltip.uri;
+        const insideTooltip =
+          event.clientX >= referenceTooltip.left &&
+          event.clientX <= referenceTooltip.left + TOOLTIP_WIDTH &&
+          event.clientY >= referenceTooltip.top &&
+          event.clientY <= referenceTooltip.top + TOOLTIP_HEIGHT;
+        if (!insideTooltip && !hoveringReference) {
+          return;
+        }
+
+        let delta = event.deltaY;
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+          delta *= 16;
+        } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+          delta *= Math.max(1, scrollContainer.clientHeight);
+        }
+        if (delta === 0) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+        if (maxScrollTop <= 0) {
+          return;
+        }
+
+        const currentTarget = tooltipScrollTargetRef.current ?? scrollContainer.scrollTop;
+        const softenedDelta = delta * 0.35;
+        const nextTarget = Math.min(maxScrollTop, Math.max(0, currentTarget + softenedDelta));
+        tooltipScrollTargetRef.current = nextTarget;
+
+        if (tooltipScrollRafRef.current !== null) {
+          return;
+        }
+
+        const animate = () => {
+          const activeContainer = tooltipScrollRef.current;
+          if (!activeContainer) {
+            stopTooltipScrollAnimation();
+            return;
+          }
+          const maxTop = Math.max(0, activeContainer.scrollHeight - activeContainer.clientHeight);
+          const target = Math.min(
+            maxTop,
+            Math.max(0, tooltipScrollTargetRef.current ?? activeContainer.scrollTop),
+          );
+          const current = activeContainer.scrollTop;
+          const diff = target - current;
+          if (Math.abs(diff) < 0.4) {
+            activeContainer.scrollTop = target;
+            tooltipScrollRafRef.current = null;
+            return;
+          }
+          activeContainer.scrollTop = current + diff * 0.22;
+          tooltipScrollRafRef.current = window.requestAnimationFrame(animate);
+        };
+
+        tooltipScrollRafRef.current = window.requestAnimationFrame(animate);
+      };
+
+      window.addEventListener("wheel", handleWheel, { passive: false, capture: true });
+      return () => {
+        window.removeEventListener("wheel", handleWheel, true);
+      };
+    }, [referenceTooltip, stopTooltipScrollAnimation]);
 
     const resolveTooltipPosition = useCallback((target: HTMLElement) => {
       const rect = target.getBoundingClientRect();
@@ -103,16 +204,28 @@ export const MarkdownRenderer = memo(
       return { left, top };
     }, []);
 
-    const hideReferenceTooltip = useCallback(() => {
-      referencePreviewTokenRef.current += 1;
-      setReferenceTooltip(null);
-    }, []);
+    const scheduleHideReferenceTooltip = useCallback(() => {
+      clearTooltipHideTimer();
+      tooltipHideTimerRef.current = window.setTimeout(() => {
+        tooltipHideTimerRef.current = null;
+        referencePreviewTokenRef.current += 1;
+        setReferenceTooltip(null);
+      }, TOOLTIP_HIDE_DELAY_MS);
+    }, [clearTooltipHideTimer]);
+
+    useEffect(() => {
+      return () => {
+        clearTooltipHideTimer();
+        stopTooltipScrollAnimation();
+      };
+    }, [clearTooltipHideTimer, stopTooltipScrollAnimation]);
 
     const showReferenceTooltip = useCallback(
       async (uri: string, target: HTMLElement) => {
         if (!resolveReferencePreview) {
           return;
         }
+        clearTooltipHideTimer();
         const { left, top } = resolveTooltipPosition(target);
         const cached = referencePreviewCacheRef.current.get(uri);
         if (cached !== undefined) {
@@ -156,7 +269,7 @@ export const MarkdownRenderer = memo(
           reference: resolved,
         });
       },
-      [resolveReferencePreview, resolveTooltipPosition],
+      [clearTooltipHideTimer, resolveReferencePreview, resolveTooltipPosition],
     );
 
     const remarkPlugins = useMemo<Pluggable[]>(() => [remarkGfm, remarkMath], []);
@@ -349,15 +462,17 @@ export const MarkdownRenderer = memo(
                   if (!normalizedHref || !isDeertubeReference || !resolveReferencePreview) {
                     return;
                   }
+                  hoveredReferenceUriRef.current = normalizedHref;
+                  clearTooltipHideTimer();
                   void showReferenceTooltip(normalizedHref, event.currentTarget);
                 }}
                 onMouseLeave={() => {
                   if (isDeertubeReference) {
-                    hideReferenceTooltip();
+                    hoveredReferenceUriRef.current = null;
+                    scheduleHideReferenceTooltip();
                   }
                 }}
                 className={markdownLinkClassName}
-                title={normalizedHref ?? undefined}
               >
                 {children}
               </a>
@@ -381,11 +496,12 @@ export const MarkdownRenderer = memo(
         },
       };
     }, [
-      hideReferenceTooltip,
       onNodeLinkClick,
       onReferenceClick,
+      clearTooltipHideTimer,
       resolveNodeLabel,
       resolveReferencePreview,
+      scheduleHideReferenceTooltip,
       showReferenceTooltip,
     ]);
 
@@ -439,7 +555,7 @@ export const MarkdownRenderer = memo(
         className={cn("markdown-body text-sm leading-relaxed", className)}
         onClick={handleArticleClick}
         onKeyDown={handleArticleKeyDown}
-        onMouseLeave={hideReferenceTooltip}
+        onMouseLeave={scheduleHideReferenceTooltip}
       >
         <MarkdownHooks
           remarkPlugins={remarkPlugins}
@@ -452,11 +568,13 @@ export const MarkdownRenderer = memo(
         {referenceTooltip && typeof document !== "undefined"
           ? createPortal(
               <div
-                className="pointer-events-none fixed z-[2147483000] h-[184px] w-[320px] overflow-hidden rounded-lg border border-border/80 bg-popover/95 p-3 shadow-2xl backdrop-blur"
+                className="fixed z-[2147483000] h-[184px] w-[320px] overflow-hidden rounded-lg border border-border/80 bg-popover/95 p-3 shadow-2xl backdrop-blur"
                 style={{
                   left: `${referenceTooltip.left}px`,
                   top: `${referenceTooltip.top}px`,
                 }}
+                onMouseEnter={clearTooltipHideTimer}
+                onMouseLeave={scheduleHideReferenceTooltip}
               >
                 {referenceTooltip.status === "loading" ? (
                   <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
@@ -473,7 +591,10 @@ export const MarkdownRenderer = memo(
                     <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                       Lines {referenceTooltip.reference.startLine}-{referenceTooltip.reference.endLine}
                     </div>
-                    <div className="mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap pr-1 text-xs leading-relaxed text-foreground/90">
+                    <div
+                      ref={tooltipScrollRef}
+                      className="mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap pr-1 text-xs leading-relaxed text-foreground/90"
+                    >
                       {referenceTooltip.reference.text}
                     </div>
                   </div>
