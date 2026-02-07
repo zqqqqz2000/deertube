@@ -752,35 +752,6 @@ const extractDeepSearchToolText = (part: DeertubeMessagePart): string | null => 
   return null;
 };
 
-const extractUiMessageError = (message: DeertubeUIMessage): string | undefined => {
-  if (!("parts" in message) || !Array.isArray(message.parts)) {
-    return undefined;
-  }
-  for (const part of message.parts) {
-    if (
-      "errorText" in part &&
-      typeof part.errorText === "string" &&
-      part.errorText.trim().length > 0
-    ) {
-      return part.errorText;
-    }
-    const deepSearch = readDeepSearchPartPayload(part);
-    if (deepSearch) {
-      const payloadError = deepSearch.payload.error;
-      if (typeof payloadError === "string" && payloadError.trim().length > 0) {
-        return payloadError;
-      }
-    }
-    if ("output" in part && isJsonObject(part.output)) {
-      const outputError = part.output.error;
-      if (typeof outputError === "string" && outputError.trim().length > 0) {
-        return outputError;
-      }
-    }
-  }
-  return undefined;
-};
-
 function extractUiMessageText(message: DeertubeUIMessage): string {
   if ("content" in message && typeof message.content === "string") {
     return message.content;
@@ -921,14 +892,7 @@ function buildDeepSearchEvents(
 
   return Array.from(byToolCall.values()).map(
     ({ payload, parentMessageId, createdAt, done }) => {
-      const failed = payload.status === "failed" || !!payload.error;
-      const toolStatus = failed
-        ? "failed"
-        : done
-          ? "complete"
-          : isRunning
-            ? "running"
-            : "complete";
+      const toolStatus = done ? "complete" : isRunning ? "running" : "complete";
       return {
         id: `deepsearch-${payload.toolCallId}`,
         role: "assistant",
@@ -942,7 +906,10 @@ function buildDeepSearchEvents(
         },
         toolOutput: payload,
         toolStatus,
-        error: failed ? payload.error : undefined,
+        error:
+          typeof payload.error === "string" && payload.error.trim().length > 0
+            ? payload.error
+            : undefined,
       };
     },
   );
@@ -963,10 +930,8 @@ function mapUiMessagesToChat(
         : new Date().toISOString();
     const { status: persistedStatus, error: persistedError } =
       extractMessageMetadata(message.metadata);
-    const inferredError = extractUiMessageError(message);
-    const resolvedError = persistedError ?? inferredError;
-    const resolvedStatus =
-      persistedStatus ?? (resolvedError ? "failed" : undefined);
+    const resolvedError = persistedError;
+    const resolvedStatus = persistedStatus;
     return {
       id: message.id,
       role: message.role as ChatMessage["role"],

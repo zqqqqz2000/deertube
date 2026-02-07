@@ -39,6 +39,7 @@ export interface DeepSearchSourcePayload {
   snippet?: string
   excerpts?: string[]
   referenceIds?: number[]
+  error?: string
 }
 
 export interface DeepSearchReferencePayload {

@@ -17,13 +17,16 @@ const buildMainAgentSystemPrompt = (contextLines: string[]) =>
   [
     "You are a concise assistant. Answer clearly and directly. Use short paragraphs when helpful.",
     "Always answer in the same language as the user's latest question.",
+    "Unless the user explicitly requests translation, keep the response language identical to the user's question language.",
     "For almost all user questions, call the `deepSearch` tool first and ground the answer in retrieved evidence.",
     "Only skip `deepSearch` for fixed deterministic math/computation tasks that do not depend on external facts.",
     "For any concept, entity, event, policy, recommendation, or factual claim, you must use `deepSearch` before answering.",
     "Do not answer from intuition or prior belief. If evidence is insufficient, say so explicitly and continue searching.",
     "If you need citations or a `References` section, you must run `deepSearch` first. Never cite without search.",
     "Do not invent citation markers or URLs. Every citation must come from `deepSearch` output.",
-    "If you used `deepSearch`, preserve citation markers exactly as provided, such as [1], [2].",
+    "If `deepSearch` returns zero references, do not output **any** citation markers such as [1], [2] in result, and do not output a `References` section.",
+    "If `deepSearch` succeeds with non-empty references, preserve citation markers exactly as provided, such as [1], [2].",
+    "When citations are used, every marker like [n] must correspond to an existing reference id returned by `deepSearch` for this answer.",
     "Do not merge citations into one bracket like [1,2] or [1-2]; keep separate markers [1], [2].",
     "When citations are present, append a final `References` section and list source URLs in academic style, e.g. `[1] https://...`.",
     ...contextLines,
@@ -58,7 +61,8 @@ export const chatRouter = createTRPCRouter({
     )
     .mutation(async ({ input }) => {
       const rawProvider = input.settings?.llmProvider?.trim();
-      const llmProvider = rawProvider && rawProvider.length > 0 ? rawProvider : "openai";
+      const llmProvider =
+        rawProvider && rawProvider.length > 0 ? rawProvider : "openai";
       const llmModelId = input.settings?.llmModelId ?? "gpt-4o-mini";
       const providerApiKey = input.settings?.llmApiKey;
       const rawBaseUrl = input.settings?.llmBaseUrl?.trim();
@@ -136,7 +140,8 @@ export const chatRouter = createTRPCRouter({
     )
     .subscription(async function* ({ input, signal }) {
       const rawProvider = input.settings?.llmProvider?.trim();
-      const llmProvider = rawProvider && rawProvider.length > 0 ? rawProvider : "openai";
+      const llmProvider =
+        rawProvider && rawProvider.length > 0 ? rawProvider : "openai";
       const llmModelId = input.settings?.llmModelId ?? "gpt-4o-mini";
       const providerApiKey = input.settings?.llmApiKey;
       const rawBaseUrl = input.settings?.llmBaseUrl?.trim();
@@ -181,7 +186,9 @@ export const chatRouter = createTRPCRouter({
       const stream = createUIMessageStream<DeertubeUIMessage>({
         originalMessages: input.messages,
         execute: async ({ writer }) => {
-          const deepResearchStore = createDeepResearchPersistenceAdapter(input.projectPath);
+          const deepResearchStore = createDeepResearchPersistenceAdapter(
+            input.projectPath,
+          );
           const tools = createTools(writer, {
             model,
             tavilyApiKey: input.settings?.tavilyApiKey,

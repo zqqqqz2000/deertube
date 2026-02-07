@@ -1,5 +1,6 @@
 import {
   InferUITools,
+  Output,
   UIMessage,
   UIMessageStreamWriter,
   generateText,
@@ -45,6 +46,7 @@ export interface DeepSearchSource {
   snippet?: string;
   excerpts?: string[];
   referenceIds?: number[];
+  error?: string;
 }
 
 export interface DeepSearchReference {
@@ -98,28 +100,121 @@ const noStepLimit = () => false;
 
 const TavilyOptionalStringSchema = z.preprocess(
   (value) => (typeof value === "string" ? value : undefined),
-  z.string().optional(),
+  z
+    .string()
+    .optional()
+    .describe("Optional text field from Tavily; non-string values are ignored."),
 );
 
 const TavilyOptionalNullableStringSchema = z.preprocess(
   (value) => (typeof value === "string" || value === null ? value : undefined),
-  z.string().nullable().optional(),
+  z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Optional nullable text from Tavily; null is preserved, non-string values are ignored.",
+    ),
 );
 
 const TavilySearchResultSchema = z.object({
-  title: TavilyOptionalStringSchema,
-  url: TavilyOptionalStringSchema,
-  content: TavilyOptionalStringSchema,
-  raw_content: TavilyOptionalNullableStringSchema,
-  snippet: TavilyOptionalStringSchema,
-  description: TavilyOptionalStringSchema,
-});
+  title: TavilyOptionalStringSchema.describe(
+    "Result title as returned by Tavily.",
+  ),
+  url: TavilyOptionalStringSchema.describe(
+    "Canonical result URL for retrieval and extraction.",
+  ),
+  content: TavilyOptionalStringSchema.describe(
+    "Short content preview returned by Tavily.",
+  ),
+  raw_content: TavilyOptionalNullableStringSchema.describe(
+    "Optional full raw content from Tavily; can be null or absent.",
+  ),
+  snippet: TavilyOptionalStringSchema.describe(
+    "Alternative snippet field from Tavily.",
+  ),
+  description: TavilyOptionalStringSchema.describe(
+    "Alternative summary/description for the result.",
+  ),
+}).describe("Single Tavily search result item.");
 
 type TavilySearchResult = z.infer<typeof TavilySearchResultSchema>;
 
 const TavilyResponseSchema = z.object({
-  results: z.array(TavilySearchResultSchema).optional(),
-});
+  results: z
+    .array(TavilySearchResultSchema)
+    .optional()
+    .describe("List of Tavily search results when the API call succeeds."),
+}).describe("Tavily search response payload.");
+
+const LineRangeSchema = z.object({
+  start: z
+    .number()
+    .int()
+    .positive()
+    .describe("Inclusive 1-based start line number."),
+  end: z.number().int().positive().describe("Inclusive 1-based end line number."),
+}).describe("Inclusive line range over line-numbered markdown.");
+
+const LineSelectionSchema = LineRangeSchema.extend({
+  text: z
+    .string()
+    .min(1)
+    .describe("Raw markdown text cut from the corresponding line range."),
+}).describe("Extracted segment that includes line range and raw text.");
+
+const ExtractSubagentFinalSchema = z.object({
+  broken: z
+    .boolean()
+    .default(false)
+    .describe("Whether markdown is unavailable/corrupted/blocked for this page."),
+  inrelavate: z
+    .boolean()
+    .default(false)
+    .describe("Whether the page is unrelated to the query."),
+  ranges: z
+    .array(LineRangeSchema)
+    .default([])
+    .describe("Relevant inclusive line ranges."),
+  error: z
+    .string()
+    .optional()
+    .describe("Optional extraction error reason for this page."),
+}).describe("Final structured output of extract subagent.");
+
+const SearchSubagentFinalItemSchema = z.object({
+  url: z
+    .string()
+    .optional()
+    .describe("Source URL when available. Can be omitted for global errors."),
+  ranges: z
+    .array(LineRangeSchema)
+    .default([])
+    .describe("Relevant inclusive line ranges for this URL."),
+  broken: z
+    .boolean()
+    .optional()
+    .describe("Whether this URL is blocked/unavailable/corrupted."),
+  inrelavate: z
+    .boolean()
+    .optional()
+    .describe("Whether this URL is unrelated to the query."),
+  error: z
+    .string()
+    .optional()
+    .describe("Optional per-URL error reason."),
+}).describe("Single final output item of search subagent.");
+
+const SearchSubagentFinalSchema = z.object({
+  results: z
+    .array(SearchSubagentFinalItemSchema)
+    .default([])
+    .describe("Per-URL structured search-subagent results."),
+  errors: z
+    .array(z.string().describe("Global error message for failed search/extract attempts."))
+    .default([])
+    .describe("Global subagent errors not tied to a specific URL."),
+}).describe("Final structured output of search subagent.");
 
 const SEARCH_SUBAGENT_SYSTEM = [
   "You are the DeepResearch subagent. Your task is to collect structured evidence through web search and page extraction.",
@@ -133,11 +228,17 @@ const SEARCH_SUBAGENT_SYSTEM = [
   "- For each task, search in both the original user-question language and English.",
   "- Do not let off-topic result trends redirect your judgment. If results drift from the intended topic, reformulate and continue searching.",
   "- If one search is insufficient, iterate with alternative keywords, synonyms, and related concepts.",
+  "- If no reasonable results are found, proactively try multiple new keyword combinations before concluding failure.",
   "Workflow:",
   "1) Call search to gather candidates (<=6 per query, multiple query rounds allowed).",
   "2) Select relevant high-quality URLs and call extract(url, query) for each.",
   "3) Extraction is mandatory. Do not stop after search-only results.",
-  "4) Return a JSON array only: [{ url, excerpts: string[], broken?: boolean }].",
+  "4) In final JSON, use `ranges` as the evidence field for each URL.",
+  "5) Every returned range must come from the corresponding extract result for the same URL.",
+  "6) If a URL is unrelated, mark `inrelavate=true` and return `ranges=[]` for that URL.",
+  "7) If all attempted search calls fail, or all attempted extract calls fail, return those failure reasons in final JSON.",
+  "8) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
+  "9) Return a JSON object only: { results: [{ url?: string, ranges: [{ start, end }], broken?: boolean, inrelavate?: boolean, error?: string }], errors?: string[] }.",
   "Output rule: return JSON only, with no extra prose.",
 ].join("\n");
 
@@ -145,11 +246,12 @@ const EXTRACT_SUBAGENT_SYSTEM = [
   "You are the Extract subagent.",
   "Input: query + line-numbered markdown.",
   "Goal: select the most relevant line ranges for the query.",
-  "Output JSON: { broken: boolean, ranges: [{ start, end }] }.",
+  "Output JSON: { broken: boolean, inrelavate: boolean, ranges: [{ start, end }] }.",
   "Rules:",
   "- Line numbers start from 1. start/end are inclusive.",
   "- Keep ranges coherent and avoid oversized spans.",
   "- If content is unavailable or clearly corrupted, return broken=true and ranges=[].",
+  "- If the page is unrelated to query, return inrelavate=true and ranges=[].",
   "- For large markdown, prioritize the grep/readLines tools to explore before deciding ranges.",
   "Return JSON only.",
 ].join("\n");
@@ -157,59 +259,14 @@ const EXTRACT_SUBAGENT_SYSTEM = [
 const DEEPSEARCH_SYSTEM = [
   "You are a deep-research assistant.",
   "You are given numbered references.",
+  "Answer in the same language as the user's question.",
   "Write a concise answer and cite evidence inline using bracket indices like [1] and [2].",
+  "If there are zero references, do not output citation markers like [1] or [2], and do not output a `References` section.",
   "Only cite provided indices, do not invent new indices, and do not output footnotes.",
   "Do not group citations as [1,2] or [1-2]. Write separate markers like [1], [2].",
 ].join("\n");
 
 const parseJson = (raw: string): JsonValue => JSON.parse(raw) as JsonValue;
-
-const extractJsonFromText = (
-  text: string,
-  context: {
-    stage: "extract-subagent" | "search-subagent";
-    query?: string;
-    url?: string;
-  },
-): JsonValue => {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    throw new Error("Model output is empty; expected JSON.");
-  }
-  const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i);
-  if (fencedMatch) {
-    try {
-      return parseJson(fencedMatch[1].trim());
-    } catch (error) {
-      console.error("[subagent.json.parse.error]", {
-        ...context,
-        mode: "fenced-json",
-        textLength: trimmed.length,
-        rawText: trimmed,
-      });
-      throw new Error(
-        `Model output JSON parse failed (fenced block): ${
-          error instanceof Error ? error.message : "unknown"
-        }`,
-      );
-    }
-  }
-  try {
-    return parseJson(trimmed);
-  } catch (error) {
-    console.error("[subagent.json.parse.error]", {
-      ...context,
-      mode: "direct-json",
-      textLength: trimmed.length,
-      rawText: trimmed,
-    });
-    throw new Error(
-      `Model output JSON parse failed: ${
-        error instanceof Error ? error.message : "unknown"
-      }`,
-    );
-  }
-};
 
 const isRecord = (value: unknown): value is JsonObject => isJsonObject(value);
 
@@ -354,14 +411,21 @@ const buildSelectionsFromRanges = (
   return Array.from(unique.values());
 };
 
-const buildExcerptsFromSelections = (selections: LineSelection[]): string[] =>
-  Array.from(
-    new Set(
-      selections
-        .map((selection) => selection.text)
-        .filter((text) => text.length > 0),
-    ),
-  );
+const buildLineNumberedContentsFromRanges = (
+  lines: string[],
+  ranges: LineRange[],
+): string[] => {
+  const unique = new Map<string, string>();
+  ranges.forEach((range) => {
+    const slice = lines.slice(range.start - 1, range.end);
+    const text = formatLineNumbered(slice, range.start - 1, lines.length).trim();
+    if (!text) {
+      return;
+    }
+    unique.set(`${range.start}:${range.end}`, text);
+  });
+  return Array.from(unique.values());
+};
 
 const parseLineSelections = (value: unknown): LineSelection[] => {
   if (!Array.isArray(value)) {
@@ -386,6 +450,102 @@ const parseLineSelections = (value: unknown): LineSelection[] => {
     })
     .filter((entry): entry is LineSelection => entry !== null);
 };
+
+const parseLineRanges = (value: unknown): LineRange[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const dedupe = new Map<string, LineRange>();
+  value.forEach((entry) => {
+    if (!isRecord(entry)) {
+      return;
+    }
+    const start = Number(entry.start);
+    const end = Number(entry.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return;
+    }
+    const normalizedStart = Math.max(1, Math.floor(start));
+    const normalizedEnd = Math.max(1, Math.floor(end));
+    if (normalizedEnd < normalizedStart) {
+      return;
+    }
+    const range: LineRange = {
+      start: normalizedStart,
+      end: normalizedEnd,
+    };
+    dedupe.set(`${range.start}:${range.end}`, range);
+  });
+  return Array.from(dedupe.values());
+};
+
+const isRangeContainedBy = (candidate: LineRange, container: LineRange): boolean =>
+  candidate.start >= container.start && candidate.end <= container.end;
+
+const intersectRanges = (
+  left: LineRange,
+  right: LineRange,
+): LineRange | null => {
+  const start = Math.max(left.start, right.start);
+  const end = Math.min(left.end, right.end);
+  if (end < start) {
+    return null;
+  }
+  return { start, end };
+};
+
+const deriveNumberedContentForRange = (
+  target: LineRange,
+  contentsByRange: Map<string, string>,
+): string | undefined => {
+  const exact = contentsByRange.get(`${target.start}:${target.end}`);
+  if (exact && exact.trim().length > 0) {
+    return exact.trim();
+  }
+  for (const [key, content] of contentsByRange.entries()) {
+    const [startRaw, endRaw] = key.split(":");
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      continue;
+    }
+    if (!isRangeContainedBy(target, { start, end })) {
+      continue;
+    }
+    const selectedLines = content
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .filter((line) => {
+        const match = line.match(/^(\d+)\s+\|/);
+        if (!match) {
+          return false;
+        }
+        const lineNo = Number(match[1]);
+        return Number.isFinite(lineNo) && lineNo >= target.start && lineNo <= target.end;
+      });
+    if (selectedLines.length > 0) {
+      return selectedLines.join("\n");
+    }
+  }
+  return undefined;
+};
+
+const stripLineNumbers = (numbered: string): string =>
+  numbered
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\d+\s+\|\s?(.*)$/);
+      return match ? match[1] : line;
+    })
+    .join("\n")
+    .trim();
+
+const summarizeRanges = (ranges: LineRange[], limit = 6): string[] =>
+  ranges.slice(0, limit).map((range) => `${range.start}-${range.end}`);
+
+const summarizeContentsPreview = (contents: string[], limit = 2): string[] =>
+  contents.slice(0, limit).map((content) => clampText(content, 180));
 
 async function fetchTavilySearch(
   query: string,
@@ -513,9 +673,12 @@ interface SearchResult {
   title?: string;
   pageId?: string;
   lineCount?: number;
+  ranges: LineRange[];
   selections: LineSelection[];
-  excerpts: string[];
+  contents: string[];
   broken?: boolean;
+  inrelavate?: boolean;
+  error?: string;
 }
 
 const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
@@ -529,30 +692,29 @@ const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
     }
     const url = typeof item.url === "string" ? item.url : "";
     const title = typeof item.title === "string" ? item.title : undefined;
-    const paragraphs = Array.isArray(item.excerpts)
-      ? item.excerpts
-      : Array.isArray(item.paragraphs)
-        ? item.paragraphs
-        : [];
-    const excerpts = paragraphs.filter(
-      (entry: unknown): entry is string => typeof entry === "string",
-    );
-    const selections = parseLineSelections(item.selections);
+    const ranges = parseLineRanges(item.ranges);
     const broken = typeof item.broken === "boolean" ? item.broken : undefined;
+    const inrelavate =
+      typeof item.inrelavate === "boolean" ? item.inrelavate : undefined;
+    const error = typeof item.error === "string" ? item.error : undefined;
     if (
       !url ||
-      (excerpts.length === 0 && selections.length === 0 && broken !== true)
+      (ranges.length === 0 &&
+        broken !== true &&
+        inrelavate !== true &&
+        !error)
     ) {
       return;
     }
-    const normalizedExcerpts =
-      excerpts.length > 0 ? excerpts : buildExcerptsFromSelections(selections);
     normalized.push({
       url,
       title,
-      selections,
-      excerpts: normalizedExcerpts,
+      ranges,
+      selections: [],
+      contents: [],
       broken,
+      inrelavate,
+      error,
     });
   });
   return normalized;
@@ -560,47 +722,199 @@ const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
 
 const dedupeSearchResults = (results: SearchResult[]): SearchResult[] => {
   const map = new Map<string, SearchResult>();
+  const rangeKey = (range: LineRange): string => `${range.start}:${range.end}`;
+  const selectionKey = (selection: LineSelection): string =>
+    `${selection.start}:${selection.end}:${selection.text}`;
   for (const item of results) {
     const existing = map.get(item.url);
     if (!existing) {
       map.set(item.url, {
         ...item,
+        ranges: [...item.ranges],
         selections: [...item.selections],
-        excerpts: [...item.excerpts],
+        contents: [...item.contents],
       });
     } else {
-      const mergedExcerpts = Array.from(
-        new Set([...existing.excerpts, ...item.excerpts]),
+      const mergedContents = Array.from(
+        new Set([...existing.contents, ...item.contents]),
       );
+      const rangeMap = new Map<string, LineRange>();
+      [...existing.ranges, ...item.ranges].forEach((range) => {
+        rangeMap.set(rangeKey(range), range);
+      });
+      const mergedRanges = Array.from(rangeMap.values());
       const selectionMap = new Map<string, LineSelection>();
       [...existing.selections, ...item.selections].forEach((selection) => {
-        const key = `${selection.start}:${selection.end}:${selection.text}`;
-        selectionMap.set(key, selection);
+        selectionMap.set(selectionKey(selection), selection);
       });
       const mergedSelections = Array.from(selectionMap.values());
       const hasResolvedContent =
-        mergedExcerpts.length > 0 || mergedSelections.length > 0;
+        mergedContents.length > 0 ||
+        mergedSelections.length > 0 ||
+        mergedRanges.length > 0;
       map.set(item.url, {
         url: item.url,
         title: existing.title ?? item.title,
         pageId: existing.pageId ?? item.pageId,
         lineCount: existing.lineCount ?? item.lineCount,
+        ranges: mergedRanges,
         selections: mergedSelections,
-        excerpts: mergedExcerpts,
+        contents: mergedContents,
         broken: hasResolvedContent
           ? undefined
           : (existing.broken ?? item.broken),
+        inrelavate: hasResolvedContent
+          ? undefined
+          : (existing.inrelavate ?? item.inrelavate),
+        error: hasResolvedContent ? undefined : (existing.error ?? item.error),
       });
     }
   }
   return Array.from(map.values());
 };
 
+const validateNormalizedSearchResultsAgainstExtractedContents = (
+  query: string,
+  normalized: SearchResult[],
+  extractedEvidenceByUrl: Map<
+    string,
+    {
+      ranges: LineRange[];
+      selections: LineSelection[];
+      contents: Set<string>;
+      contentsByRange: Map<string, string>;
+    }
+  >,
+): SearchResult[] =>
+  normalized.flatMap((item) => {
+    if (item.broken ?? false) {
+      return [{
+        ...item,
+        ranges: [],
+        selections: [],
+        contents: [],
+      }];
+    }
+    if (item.inrelavate ?? false) {
+      return [{
+        ...item,
+        ranges: [],
+        selections: [],
+        contents: [],
+      }];
+    }
+    const evidence = extractedEvidenceByUrl.get(item.url);
+    if (!evidence || evidence.ranges.length === 0) {
+      if (item.ranges.length === 0) {
+        return [{
+          ...item,
+          selections: [],
+          contents: [],
+        }];
+      }
+      console.warn("[subagent.search.validate.drop.noEvidence]", {
+        query,
+        url: item.url,
+        ranges: item.ranges.length,
+      });
+      return [];
+    }
+    if (item.ranges.length === 0) {
+      return [{
+        ...item,
+        selections: [],
+        contents: [],
+      }];
+    }
+    const rangeKey = (range: LineRange): string => `${range.start}:${range.end}`;
+    const convergedRangeMap = new Map<string, LineRange>();
+    item.ranges.forEach((range) => {
+      evidence.ranges.forEach((evidenceRange) => {
+        const overlap = intersectRanges(range, evidenceRange);
+        if (!overlap) {
+          return;
+        }
+        convergedRangeMap.set(rangeKey(overlap), overlap);
+      });
+    });
+    const convergedRanges = Array.from(convergedRangeMap.values()).sort((a, b) =>
+      a.start === b.start ? a.end - b.end : a.start - b.start,
+    );
+    if (convergedRanges.length === 0) {
+      console.warn("[subagent.search.validate.drop.noOverlap]", {
+        query,
+        url: item.url,
+        requestedRanges: item.ranges,
+        evidenceRanges: evidence.ranges,
+      });
+      return [];
+    }
+    const selectionByRange = new Map<string, LineSelection>();
+    evidence.selections.forEach((selection) => {
+      selectionByRange.set(rangeKey(selection), selection);
+    });
+    const resolvedSelectionsMap = new Map<string, LineSelection>();
+    const resolvedContents: string[] = [];
+    const resolvedRangesMap = new Map<string, LineRange>();
+    convergedRanges.forEach((range) => {
+      const key = rangeKey(range);
+      const selection = selectionByRange.get(key);
+      const numberedContent = deriveNumberedContentForRange(
+        range,
+        evidence.contentsByRange,
+      );
+      if (!selection) {
+        if (numberedContent) {
+          resolvedRangesMap.set(key, range);
+          resolvedContents.push(numberedContent);
+          const text = stripLineNumbers(numberedContent);
+          if (text.length > 0) {
+            resolvedSelectionsMap.set(
+              `${range.start}:${range.end}:${text}`,
+              {
+                start: range.start,
+                end: range.end,
+                text,
+              },
+            );
+          }
+        }
+        return;
+      }
+      resolvedSelectionsMap.set(
+        `${selection.start}:${selection.end}:${selection.text}`,
+        selection,
+      );
+      const preferredContent = numberedContent ?? selection.text;
+      resolvedRangesMap.set(key, range);
+      resolvedContents.push(preferredContent);
+    });
+    const resolvedRanges = Array.from(resolvedRangesMap.values()).sort((a, b) =>
+      a.start === b.start ? a.end - b.end : a.start - b.start,
+    );
+    const resolvedSelections = Array.from(resolvedSelectionsMap.values());
+    const contents = resolvedContents.filter((content) => content.length > 0);
+    if (resolvedRanges.length === 0 || contents.length === 0) {
+      console.warn("[subagent.search.validate.drop.noResolvedContent]", {
+        query,
+        url: item.url,
+        convergedRanges,
+      });
+      return [];
+    }
+    return [{
+      ...item,
+      ranges: resolvedRanges,
+      selections: resolvedSelections,
+      contents,
+    }];
+  });
+
 const clampText = (value: string, maxLength: number): string =>
   value.length > maxLength ? `${value.slice(0, maxLength).trimEnd()}…` : value;
 
-const normalizeExcerpts = (excerpts: string[]): string[] => {
-  const cleaned = excerpts
+const normalizeContents = (contents: string[]): string[] => {
+  const cleaned = contents
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   const limited: string[] = [];
@@ -623,9 +937,9 @@ const deriveSourceTitle = (url: string, fallback?: string): string => {
   return parsed.hostname || (fallback ?? url);
 };
 
-const buildSnippet = (excerpts: string[]): string => {
-  if (excerpts.length === 0) return "";
-  return clampText(excerpts.join("\n"), 400);
+const buildSnippet = (contents: string[]): string => {
+  if (contents.length === 0) return "";
+  return clampText(contents.join("\n"), 400);
 };
 
 const buildDeepSearchSources = (
@@ -639,18 +953,34 @@ const buildDeepSearchSources = (
     referenceIdsByUrl.set(reference.url, current);
   });
   return results
-    .filter((item) => !item.broken && item.excerpts.length > 0)
+    .filter((item) => {
+      const referenceIds = referenceIdsByUrl.get(item.url) ?? [];
+      return referenceIds.length > 0;
+    })
     .map((item) => {
-      const excerpts = normalizeExcerpts(item.excerpts);
-      const snippet = buildSnippet(excerpts);
+      const referenceIds = referenceIdsByUrl.get(item.url) ?? [];
+      if (item.error) {
+        const title = item.title ?? deriveSourceTitle(item.url, item.url);
+        return {
+          url: item.url,
+          title,
+          snippet: `Extraction error: ${clampText(item.error, 260)}`,
+          error: item.error,
+          excerpts: [],
+          referenceIds,
+        };
+      }
+      const contents = normalizeContents(item.contents);
+      const snippet = buildSnippet(contents);
       const title =
         item.title ?? deriveSourceTitle(item.url, snippet.split("\n")[0]);
       return {
         url: item.url,
         title,
         snippet,
-        excerpts,
-        referenceIds: referenceIdsByUrl.get(item.url) ?? [],
+        excerpts: contents,
+        referenceIds,
+        error: item.error,
       };
     });
 };
@@ -665,33 +995,109 @@ async function runExtractSubagent({
   lines: string[];
   model: LanguageModel;
   abortSignal?: AbortSignal;
-}): Promise<{ ranges: LineRange[]; broken: boolean; rawModelOutput: string }> {
+}): Promise<{
+  ranges: LineRange[];
+  broken: boolean;
+  inrelavate: boolean;
+  contents: string[];
+  error?: string;
+  rawModelOutput: string;
+}> {
   const lineCount = lines.length;
+  const markdownCharCount = lines.reduce(
+    (total, line) => total + line.length + 1,
+    0,
+  );
+  console.log("[subagent.extract.agent.start]", {
+    query: clampText(query, 160),
+    lineCount,
+    markdownCharCount,
+  });
   if (lineCount === 0) {
+    console.log("[subagent.extract.agent.empty]", {
+      query,
+      lineCount,
+    });
     return {
       ranges: [],
       broken: true,
+      inrelavate: false,
+      contents: [],
       rawModelOutput: "Empty markdown input.",
     };
   }
-  const tooLarge = lineCount > 2200 || lines.join("\n").length > 180000;
+  const tooLarge = lineCount > 2200 || markdownCharCount > 180000;
   const previewLines = tooLarge ? lines.slice(0, 200) : lines;
   const preview = formatLineNumbered(previewLines, 0, lineCount);
   const sizeNote = tooLarge
     ? `Markdown is large (${lineCount} lines). Only the first 200 lines are shown. Use grep/readLines to inspect more.`
     : `Total markdown lines: ${lineCount}.`;
+  let grepCallCount = 0;
+  let readLinesCallCount = 0;
 
   const grepTool = tool({
     description:
       "Search all lines with a regex and return matching line numbers with surrounding context.",
     inputSchema: z.object({
-      pattern: z.string(),
-      flags: z.string().optional(),
-      before: z.number().min(0).max(8).optional(),
-      after: z.number().min(0).max(8).optional(),
-      maxMatches: z.number().min(1).max(40).optional(),
-    }),
+      pattern: z
+        .string()
+        .describe("JavaScript regular-expression pattern used to search lines."),
+      flags: z
+        .string()
+        .optional()
+        .describe("Optional regex flags such as i, m, or g."),
+      before: z
+        .number()
+        .min(0)
+        .max(8)
+        .optional()
+        .describe("Number of context lines to include before each match."),
+      after: z
+        .number()
+        .min(0)
+        .max(8)
+        .optional()
+        .describe("Number of context lines to include after each match."),
+      maxMatches: z
+        .number()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe("Maximum number of matches returned in one tool call."),
+    }).describe("Input arguments for line-level regex grep."),
+    outputSchema: z.object({
+      matches: z.array(
+        z.object({
+          line: z.number().int().positive().describe("1-based line number of match."),
+          text: z.string().describe("Exact line text that matched the pattern."),
+          before: z
+            .array(z.string().describe("Context line prefixed with its line number."))
+            .describe("Context lines before the matched line."),
+          after: z
+            .array(z.string().describe("Context line prefixed with its line number."))
+            .describe("Context lines after the matched line."),
+        }),
+      ).describe("Matched lines with local context."),
+      total: z
+        .number()
+        .int()
+        .nonnegative()
+        .describe("Total number of matches returned."),
+    }).describe("Grep output payload for extract subagent exploration."),
     execute: ({ pattern, flags, before = 2, after = 2, maxMatches = 20 }) => {
+      grepCallCount += 1;
+      const shouldLogGrepDetail =
+        grepCallCount <= 5 || grepCallCount % 10 === 0;
+      if (shouldLogGrepDetail) {
+        console.log("[subagent.extract.agent.grep]", {
+          call: grepCallCount,
+          pattern: clampText(pattern, 120),
+          flags: flags ?? "i",
+          before,
+          after,
+          maxMatches,
+        });
+      }
       let regex: RegExp;
       try {
         regex = new RegExp(pattern, flags ?? "i");
@@ -726,6 +1132,21 @@ async function runExtractSubagent({
         });
         if (matches.length >= maxMatches) break;
       }
+      if (shouldLogGrepDetail) {
+        console.log("[subagent.extract.agent.grep.done]", {
+          call: grepCallCount,
+          pattern: clampText(pattern, 120),
+          matches: matches.length,
+          sample: matches.slice(0, 2).map((match) => ({
+            line: match.line,
+            text: clampText(match.text, 120),
+          })),
+        });
+      } else if (grepCallCount === 6) {
+        console.log("[subagent.extract.agent.grep.sampled]", {
+          message: "Further grep logs are sampled (every 10th call).",
+        });
+      }
       return { matches, total: matches.length };
     },
   });
@@ -733,13 +1154,52 @@ async function runExtractSubagent({
   const readLinesTool = tool({
     description: "Read content by a specified inclusive line range.",
     inputSchema: z.object({
-      start: z.number().min(1),
-      end: z.number().min(1),
-    }),
+      start: z
+        .number()
+        .min(1)
+        .describe("Requested inclusive 1-based start line."),
+      end: z.number().min(1).describe("Requested inclusive 1-based end line."),
+    }).describe("Input arguments for reading a block of line-numbered markdown."),
+    outputSchema: z.object({
+      start: z
+        .number()
+        .int()
+        .positive()
+        .describe("Effective clamped inclusive 1-based start line."),
+      end: z
+        .number()
+        .int()
+        .positive()
+        .describe("Effective clamped inclusive 1-based end line."),
+      lines: z
+        .string()
+        .describe("Line-numbered markdown slice covering start..end."),
+    }).describe("Read-lines output with normalized bounds and text."),
     execute: ({ start, end }) => {
+      readLinesCallCount += 1;
+      const shouldLogReadLinesDetail =
+        readLinesCallCount <= 5 || readLinesCallCount % 10 === 0;
       const safeStart = Math.max(1, Math.min(lineCount, Math.floor(start)));
       const safeEnd = Math.max(safeStart, Math.min(lineCount, Math.floor(end)));
       const slice = lines.slice(safeStart - 1, safeEnd);
+      if (shouldLogReadLinesDetail) {
+        console.log("[subagent.extract.agent.readLines]", {
+          call: readLinesCallCount,
+          requestedStart: start,
+          requestedEnd: end,
+          start: safeStart,
+          end: safeEnd,
+          lineCount: slice.length,
+          preview: summarizeContentsPreview(
+            [formatLineNumbered(slice, safeStart - 1, lineCount)],
+            1,
+          ),
+        });
+      } else if (readLinesCallCount === 6) {
+        console.log("[subagent.extract.agent.readLines.sampled]", {
+          message: "Further readLines logs are sampled (every 10th call).",
+        });
+      }
       return {
         start: safeStart,
         end: safeEnd,
@@ -748,6 +1208,12 @@ async function runExtractSubagent({
     },
   });
 
+  console.log("[subagent.extract.agent.model]", {
+    query,
+    lineCount,
+    tooLarge,
+    previewLines: previewLines.length,
+  });
   const result = await generateText({
     model,
     system: EXTRACT_SUBAGENT_SYSTEM,
@@ -760,20 +1226,59 @@ async function runExtractSubagent({
     stopWhen: noStepLimit,
     abortSignal,
   });
-
-  const parsed = extractJsonFromText(result.text, {
-    stage: "extract-subagent",
-    query,
+  console.log("[subagent.extract.agent.raw]", {
+    query: clampText(query, 160),
+    rawLength: result.text.length,
+    rawPreview: clampText(result.text, 240),
   });
-  const broken =
-    isRecord(parsed) && typeof parsed.broken === "boolean"
-      ? parsed.broken
-      : false;
-  const ranges = normalizeRanges(
-    isRecord(parsed) ? parsed.ranges : null,
-    lineCount,
-  );
-  return { ranges, broken, rawModelOutput: result.text };
+
+  const structured = await generateText({
+    model,
+    output: Output.object({
+      schema: ExtractSubagentFinalSchema,
+      name: "extract_subagent_result",
+      description:
+        "Final structured extract result with flags, ranges, and optional error.",
+    }),
+    system:
+      "Convert the raw extract-subagent output into valid JSON that strictly matches the schema.",
+    prompt: [
+      `Query: ${query}`,
+      `Line count: ${lineCount}`,
+      "Raw extract-subagent output:",
+      result.text,
+    ].join("\n\n"),
+    abortSignal,
+  });
+  const parsed = structured.output;
+  const broken = parsed.broken;
+  const inrelavate = parsed.inrelavate;
+  const parsedRanges = normalizeRanges(parsed.ranges as unknown as JsonValue, lineCount);
+  const errorMessage =
+    typeof parsed.error === "string" && parsed.error.trim().length > 0
+      ? parsed.error.trim()
+      : undefined;
+  const ranges = inrelavate ? [] : parsedRanges;
+  const numberedContents = buildLineNumberedContentsFromRanges(lines, ranges);
+  console.log("[subagent.extract.agent.parsed]", {
+    query: clampText(query, 160),
+    broken,
+    inrelavate,
+    error: errorMessage ? clampText(errorMessage, 240) : undefined,
+    ranges: ranges.length,
+    rangeSummary: summarizeRanges(ranges),
+    contents: numberedContents.length,
+    contentsPreview: summarizeContentsPreview(numberedContents),
+    rawModelOutputPreview: clampText(result.text, 220),
+  });
+  return {
+    ranges,
+    broken,
+    inrelavate,
+    error: errorMessage,
+    contents: numberedContents,
+    rawModelOutput: result.text,
+  };
 }
 
 async function runSearchSubagent({
@@ -808,123 +1313,299 @@ async function runSearchSubagent({
   const accumulatedMessages: DeertubeUIMessage[] = [];
   let lastText = "";
   const extracted: SearchResult[] = [];
+  const searchToolErrors: string[] = [];
+  const extractToolErrors: string[] = [];
+  let searchToolCallCount = 0;
+  let searchToolErrorCount = 0;
+  let extractToolCallCount = 0;
+  let extractToolErrorCount = 0;
+  const extractedEvidenceByUrl = new Map<
+    string,
+    {
+      ranges: LineRange[];
+      selections: LineSelection[];
+      contents: Set<string>;
+      contentsByRange: Map<string, string>;
+    }
+  >();
   const searchLookup = new Map<string, { title?: string; snippet?: string }>();
 
   const searchTool = tool({
     description:
       "Search the web via Tavily and return ranked candidate results.",
     inputSchema: z.object({
-      query: z.string().min(1),
-    }),
+      query: z.string().min(1).describe("Natural-language web search query."),
+    }).describe("Input payload for Tavily web search."),
+    outputSchema: z.object({
+      results: z
+        .array(TavilySearchResultSchema)
+        .describe("Ranked Tavily search results."),
+      error: z
+        .string()
+        .optional()
+        .describe("Search error reason when this tool call fails."),
+    }).describe("Tavily search tool output."),
     execute: async ({ query: inputQuery }) => {
+      searchToolCallCount += 1;
       console.log("[subagent.search]", {
         query: inputQuery,
         maxResults: 20,
       });
-      const results = await fetchTavilySearch(inputQuery, 20, tavilyApiKey);
-      results.forEach((item) => {
-        const url = item.url?.trim();
-        if (!url) {
-          return;
-        }
-        searchLookup.set(url, {
-          title: item.title ?? item.description ?? undefined,
-          snippet: item.content ?? item.snippet ?? undefined,
+      try {
+        const results = await fetchTavilySearch(inputQuery, 20, tavilyApiKey);
+        results.forEach((item) => {
+          const url = item.url?.trim();
+          if (!url) {
+            return;
+          }
+          searchLookup.set(url, {
+            title: item.title ?? item.description ?? undefined,
+            snippet: item.content ?? item.snippet ?? undefined,
+          });
         });
-      });
-      console.log("[subagent.search.results]", {
-        count: results.length,
-        top: results
-          .slice(0, 3)
-          .map((item) => item.url ?? item.title ?? "unknown"),
-      });
-      return { results };
+        console.log("[subagent.search.results]", {
+          count: results.length,
+          top: results
+            .slice(0, 3)
+            .map((item) => item.url ?? item.title ?? "unknown"),
+        });
+        return { results };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        searchToolErrorCount += 1;
+        searchToolErrors.push(message);
+        console.error("[subagent.search.error]", {
+          query: inputQuery,
+          error: clampText(message, 260),
+        });
+        return {
+          results: [],
+          error: message,
+        };
+      }
     },
   });
+
+  const ExtractToolOutputSchema = z.object({
+    url: z.string().min(1).describe("Source URL that was extracted."),
+    title: z
+      .string()
+      .optional()
+      .describe("Resolved page title when available."),
+    pageId: z
+      .string()
+      .optional()
+      .describe("Persisted page identifier in DeepResearch storage."),
+    lineCount: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("Total line count of fetched markdown."),
+    broken: z
+      .boolean()
+      .describe("Whether page content is unavailable/corrupted/blocked."),
+    inrelavate: z
+      .boolean()
+      .describe("Whether the page is judged unrelated to query."),
+    ranges: z
+      .array(LineRangeSchema)
+      .describe("Relevant inclusive line ranges selected by extract subagent."),
+    selections: z
+      .array(LineSelectionSchema)
+      .describe("Range selections with line metadata and raw text."),
+    contents: z
+      .array(
+        z
+          .string()
+          .describe(
+            "Line-numbered markdown segment for the selected range; each entry aligns with ranges[index].",
+          ),
+      )
+      .describe("Line-numbered extracted content chunks used by search subagent."),
+    error: z
+      .string()
+      .optional()
+      .describe("Extraction error message when this URL cannot be extracted."),
+    rawModelOutput: z
+      .string()
+      .describe("Raw text output returned by extract subagent model."),
+  }).describe("Extraction result for one URL.");
 
   const extractTool = tool({
     description:
       "Fetch markdown from a URL and extract passages relevant to the query.",
     inputSchema: z.object({
-      url: z.string().min(1),
-      query: z.string().min(1),
-    }),
-    execute: async ({ url, query: extractQuery }, options) => {
-      console.log("[subagent.extract]", {
-        url,
-        query: extractQuery,
-      });
+      url: z.string().min(1).describe("Target page URL to fetch and extract from."),
+      query: z
+        .string()
+        .min(1)
+        .describe("User query used to locate relevant passages."),
+    }).describe("Input payload for single-URL extraction."),
+    outputSchema: ExtractToolOutputSchema,
+    execute: async (
+      { url, query: extractQuery },
+      options,
+    ): Promise<z.infer<typeof ExtractToolOutputSchema>> => {
+      extractToolCallCount += 1;
+      const extractStartedAt = Date.now();
+      let stage = "init";
       const lookup = searchLookup.get(url);
-      const markdown = await fetchJinaReaderMarkdown(
-        url,
-        jinaReaderBaseUrl,
-        jinaReaderApiKey,
-      );
-      if (!markdown.trim()) {
-        throw new Error("Jina content unavailable.");
-      }
-      const fetchedAt = new Date().toISOString();
-      const lines = splitLines(markdown);
       let pageId: string | undefined;
-      let lineCount = lines.length;
-      if (deepResearchStore) {
-        const persistedPage = await deepResearchStore.savePage({
-          searchId,
+      let lineCount = 0;
+      let rawModelOutput = "";
+      console.log("[subagent.extract]", {
+        url: clampText(url, 220),
+        query: clampText(extractQuery, 160),
+      });
+      try {
+        stage = "fetch-markdown";
+        const markdownFetchStartedAt = Date.now();
+        console.log("[subagent.extract.fetch.start]", {
+          url: clampText(url, 220),
+          query: clampText(extractQuery, 160),
+        });
+        const markdown = await fetchJinaReaderMarkdown(
+          url,
+          jinaReaderBaseUrl,
+          jinaReaderApiKey,
+        );
+        console.log("[subagent.extract.fetch.done]", {
+          url: clampText(url, 220),
+          elapsedMs: Date.now() - markdownFetchStartedAt,
+          markdownCharCount: markdown.length,
+        });
+        if (!markdown.trim()) {
+          throw new Error("Jina content unavailable.");
+        }
+        const fetchedAt = new Date().toISOString();
+        const lines = splitLines(markdown);
+        lineCount = lines.length;
+        console.log("[subagent.extract.markdown]", {
+          url: clampText(url, 220),
+          lineCount: lines.length,
+          markdownCharCount: markdown.length,
+          markdownPreview: clampText(markdown, 240),
+        });
+        if (deepResearchStore) {
+          stage = "save-page";
+          const persistedPage = await deepResearchStore.savePage({
+            searchId,
+            query: extractQuery,
+            url,
+            title: lookup?.title,
+            markdown,
+            fetchedAt,
+          });
+          pageId = persistedPage.pageId;
+          lineCount = persistedPage.lineCount;
+          console.log("[subagent.extract.pageSaved]", {
+            url: clampText(url, 220),
+            pageId,
+            lineCount,
+          });
+        }
+
+        stage = "extract-agent";
+        const {
+          ranges,
+          broken: extractedBroken,
+          inrelavate,
+          error: extractedError,
+          contents,
+          rawModelOutput: extractRawModelOutput,
+        } = await runExtractSubagent({
           query: extractQuery,
+          lines,
+          model,
+          abortSignal: options.abortSignal,
+        });
+        rawModelOutput = extractRawModelOutput;
+        const selections = buildSelectionsFromRanges(lines, ranges);
+        if (deepResearchStore && pageId) {
+          stage = "save-extraction";
+          await deepResearchStore.saveExtraction({
+            searchId,
+            pageId,
+            query: extractQuery,
+            url,
+            broken: extractedBroken,
+            lineCount,
+            ranges,
+            selections,
+            rawModelOutput,
+            extractedAt: new Date().toISOString(),
+          });
+          console.log("[subagent.extract.extractionSaved]", {
+            url: clampText(url, 220),
+            pageId,
+            ranges: ranges.length,
+            selections: selections.length,
+          });
+        }
+        console.log("[subagent.extract.done]", {
+          url: clampText(url, 220),
+          broken: extractedBroken,
+          inrelavate,
+          error: extractedError ? clampText(extractedError, 220) : undefined,
+          ranges: ranges.length,
+          rangeSummary: summarizeRanges(ranges),
+          selections: selections.length,
+          contents: contents.length,
+          contentsPreview: summarizeContentsPreview(contents),
+          elapsedMs: Date.now() - extractStartedAt,
+        });
+        const result = {
           url,
           title: lookup?.title,
-          markdown,
-          fetchedAt,
-        });
-        pageId = persistedPage.pageId;
-        lineCount = persistedPage.lineCount;
-      }
-
-      const {
-        ranges,
-        broken: extractedBroken,
-        rawModelOutput,
-      } = await runExtractSubagent({
-        query: extractQuery,
-        lines,
-        model,
-        abortSignal: options.abortSignal,
-      });
-      const selections = buildSelectionsFromRanges(lines, ranges);
-      const excerpts = buildExcerptsFromSelections(selections);
-      if (deepResearchStore && pageId) {
-        await deepResearchStore.saveExtraction({
-          searchId,
           pageId,
-          query: extractQuery,
-          url,
-          broken: extractedBroken,
           lineCount,
+          broken: extractedBroken,
+          inrelavate,
           ranges,
           selections,
+          contents,
+          error: extractedError,
           rawModelOutput,
-          extractedAt: new Date().toISOString(),
+        };
+        console.log("[subagent.extract.result]", {
+          url: clampText(url, 220),
+          title: lookup?.title ? clampText(lookup.title, 140) : undefined,
+          pageId,
+          lineCount,
+          broken: extractedBroken,
+          inrelavate,
+          ranges: ranges.length,
+          selections: selections.length,
+          contents: contents.length,
+          error: extractedError ? clampText(extractedError, 220) : undefined,
         });
+        return result;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const errorMessage = `${stage}: ${message}`;
+        extractToolErrorCount += 1;
+        extractToolErrors.push(errorMessage);
+        console.error("[subagent.extract.error]", {
+          url: clampText(url, 220),
+          query: clampText(extractQuery, 160),
+          stage,
+          elapsedMs: Date.now() - extractStartedAt,
+          error: clampText(errorMessage, 300),
+        });
+        return {
+          url,
+          title: lookup?.title,
+          pageId,
+          lineCount,
+          broken: true,
+          inrelavate: false,
+          ranges: [],
+          selections: [],
+          contents: [],
+          error: errorMessage,
+          rawModelOutput,
+        };
       }
-      console.log("[subagent.extract.done]", {
-        url,
-        broken: extractedBroken,
-        ranges: ranges.length,
-        excerpts: excerpts.length,
-      });
-      const result = {
-        url,
-        title: lookup?.title,
-        pageId,
-        lineCount,
-        broken: extractedBroken,
-        ranges,
-        selections,
-        excerpts,
-        rawModelOutput,
-      };
-      console.log("[subagent.extract.result]", result);
-      return result;
     },
   });
 
@@ -958,12 +1639,25 @@ async function runSearchSubagent({
       lastText = extractText(uiMessage);
       const outputs = collectToolOutputs(uiMessage);
       outputs.forEach((output) => {
+        if (output.name === "search") {
+          if (isRecord(output.output)) {
+            const errorMessage =
+              typeof output.output.error === "string"
+                ? output.output.error.trim()
+                : "";
+            if (errorMessage.length > 0) {
+              searchToolErrors.push(errorMessage);
+            }
+          }
+          return;
+        }
         if (output.name !== "extract") return;
         if (!isRecord(output.output)) return;
         const url =
           typeof output.output.url === "string" ? output.output.url : "";
-        const excerpts = Array.isArray(output.output.excerpts)
-          ? output.output.excerpts.filter(
+        const ranges = parseLineRanges(output.output.ranges);
+        const contents = Array.isArray(output.output.contents)
+          ? output.output.contents.filter(
               (item: unknown): item is string => typeof item === "string",
             )
           : [];
@@ -985,39 +1679,164 @@ async function runSearchSubagent({
           typeof output.output.broken === "boolean"
             ? output.output.broken
             : undefined;
+        const inrelavate =
+          typeof output.output.inrelavate === "boolean"
+            ? output.output.inrelavate
+            : undefined;
+        const errorMessage =
+          typeof output.output.error === "string"
+            ? output.output.error
+            : undefined;
+        const normalizedContents = contents;
         if (
           !url ||
-          (excerpts.length === 0 && selections.length === 0 && !broken)
+          (ranges.length === 0 &&
+            normalizedContents.length === 0 &&
+            selections.length === 0 &&
+            !broken &&
+            !inrelavate &&
+            !errorMessage)
         )
           return;
+        const existingEvidence = extractedEvidenceByUrl.get(url) ?? {
+          ranges: [],
+          selections: [],
+          contents: new Set<string>(),
+          contentsByRange: new Map<string, string>(),
+        };
+        const mergedRangeMap = new Map<string, LineRange>();
+        [...existingEvidence.ranges, ...ranges].forEach((range) => {
+          mergedRangeMap.set(`${range.start}:${range.end}`, range);
+        });
+        const mergedSelectionMap = new Map<string, LineSelection>();
+        [...existingEvidence.selections, ...selections].forEach((selection) => {
+          mergedSelectionMap.set(
+            `${selection.start}:${selection.end}:${selection.text}`,
+            selection,
+          );
+        });
+        normalizedContents.forEach((content) =>
+          existingEvidence.contents.add(content),
+        );
+        selections.forEach((selection) =>
+          existingEvidence.contents.add(selection.text),
+        );
+        ranges.forEach((range, index) => {
+          const content = normalizedContents[index];
+          if (typeof content !== "string" || content.length === 0) {
+            return;
+          }
+          existingEvidence.contentsByRange.set(
+            `${range.start}:${range.end}`,
+            content,
+          );
+        });
+        selections.forEach((selection) => {
+          const key = `${selection.start}:${selection.end}`;
+          if (!existingEvidence.contentsByRange.has(key)) {
+            existingEvidence.contentsByRange.set(key, selection.text);
+          }
+        });
+        extractedEvidenceByUrl.set(url, {
+          ranges: Array.from(mergedRangeMap.values()),
+          selections: Array.from(mergedSelectionMap.values()),
+          contents: existingEvidence.contents,
+          contentsByRange: existingEvidence.contentsByRange,
+        });
         extracted.push({
           url,
           title,
           pageId,
           lineCount,
+          ranges,
           selections,
-          excerpts:
-            excerpts.length > 0
-              ? excerpts
-              : buildExcerptsFromSelections(selections),
+          contents: normalizedContents,
           broken,
+          inrelavate,
+          error: errorMessage,
         });
       });
     }
   }
 
-  const parsed = extractJsonFromText(lastText, {
-    stage: "search-subagent",
-    query,
+  const searchStructured = await generateText({
+    model,
+    output: Output.object({
+      schema: SearchSubagentFinalSchema,
+      name: "search_subagent_result",
+      description:
+        "Final search-subagent result object with URL items and global errors.",
+    }),
+    system:
+      "Convert the raw search-subagent output into a valid JSON object that strictly matches the schema.",
+    prompt: [
+      `User query: ${query}`,
+      "Raw search-subagent output:",
+      lastText,
+    ].join("\n\n"),
+    abortSignal,
   });
-  const normalized = normalizeSearchResults(parsed).map((item) => {
+  const parsed = searchStructured.output;
+  const normalizedGlobalErrors = [
+    ...parsed.errors
+      .map((error) => error.trim())
+      .filter((error) => error.length > 0),
+    ...searchToolErrors,
+    ...extractToolErrors,
+  ];
+  const globalErrorResults = normalizedGlobalErrors.map((error, index) => ({
+    url: `search://subagent-error/${index + 1}`,
+    title: "Search subagent",
+    ranges: [],
+    selections: [],
+    contents: [],
+    broken: true,
+    inrelavate: false,
+    error,
+  })) satisfies SearchResult[];
+  const normalized = validateNormalizedSearchResultsAgainstExtractedContents(
+    query,
+    normalizeSearchResults(parsed.results as unknown as JsonValue),
+    extractedEvidenceByUrl,
+  ).map((item) => {
     const lookup = searchLookup.get(item.url);
     return {
       ...item,
       title: item.title ?? lookup?.title,
     };
   });
-  const mergedResults = dedupeSearchResults([...extracted, ...normalized]);
+  const mergedResults = dedupeSearchResults([
+    ...extracted,
+    ...normalized,
+    ...globalErrorResults,
+  ]);
+  const hasUsableEvidence = mergedResults.some(
+    (item) =>
+      !item.error &&
+      !(item.broken ?? false) &&
+      !(item.inrelavate ?? false) &&
+      item.ranges.length > 0 &&
+      item.contents.length > 0,
+  );
+  const allSearchCallsFailed =
+    searchToolCallCount > 0 && searchToolErrorCount === searchToolCallCount;
+  const allExtractCallsFailed =
+    extractToolCallCount > 0 && extractToolErrorCount === extractToolCallCount;
+  if ((allSearchCallsFailed || allExtractCallsFailed) && !hasUsableEvidence) {
+    const fatalErrors = Array.from(
+      new Set(
+        [...normalizedGlobalErrors]
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0),
+      ),
+    );
+    console.warn("[subagent.runSearch.fatalToolFailure]", {
+      query,
+      allSearchCallsFailed,
+      allExtractCallsFailed,
+      fatalErrors: fatalErrors.map((entry) => clampText(entry, 180)),
+    });
+  }
   if (mergedResults.length > 0) {
     console.log("[subagent.runSearch.done]", {
       query,
@@ -1044,13 +1863,13 @@ const buildDeepSearchReferences = (
   const dedupe = new Set<string>();
 
   for (const result of results) {
-    if (result.broken) {
+    if ((result.broken ?? false) || (result.inrelavate ?? false)) {
       continue;
     }
-    const fallbackSelections = result.excerpts.map((excerpt) => ({
+    const fallbackSelections = result.contents.map((content) => ({
       start: 1,
       end: 1,
-      text: excerpt,
+      text: content,
     }));
     const candidates = (
       result.selections.length > 0 ? result.selections : fallbackSelections
@@ -1291,30 +2110,53 @@ async function runDeepSearchTool({
 
     let prompt = "";
     let conclusionRaw = "";
+    const sourceErrors = Array.from(
+      new Set(
+        results
+          .map((item) =>
+            typeof item.error === "string" ? item.error.trim() : "",
+          )
+          .filter((error) => error.length > 0),
+      ),
+    );
     if (sources.length === 0 || references.length === 0) {
-      prompt = `Question: ${normalizedQuery}\n\nNo references available.`;
-      conclusionRaw = "No relevant sources found.";
+      const errorDetails =
+        sourceErrors.length > 0
+          ? [
+              "",
+              "Observed tool errors:",
+              ...sourceErrors.map((error, index) => `${index + 1}. ${error}`),
+              "Explain these failures in user language and suggest practical next steps.",
+            ].join("\n")
+          : "";
+      prompt = [
+        `Question: ${normalizedQuery}`,
+        "",
+        "No validated references are currently available.",
+        "Explain the current evidence status and what additional search directions would help.",
+        errorDetails,
+      ].join("\n");
     } else {
       prompt = buildDeepSearchContext(normalizedQuery, references);
-      const result = streamText({
-        model,
-        system: DEEPSEARCH_SYSTEM,
+    }
+    const result = streamText({
+      model,
+      system: DEEPSEARCH_SYSTEM,
+      prompt,
+      abortSignal,
+    });
+    for await (const delta of result.textStream) {
+      conclusionRaw += delta;
+      writeDeepSearchStream(writer, toolCallId, toolName, {
+        query: normalizedQuery,
+        projectId,
+        searchId,
+        sources,
+        references,
         prompt,
-        abortSignal,
+        conclusion: linkifyCitationMarkers(conclusionRaw, references),
+        status: "running",
       });
-      for await (const delta of result.textStream) {
-        conclusionRaw += delta;
-        writeDeepSearchStream(writer, toolCallId, toolName, {
-          query: normalizedQuery,
-          projectId,
-          searchId,
-          sources,
-          references,
-          prompt,
-          conclusion: linkifyCitationMarkers(conclusionRaw, references),
-          status: "running",
-        });
-      }
     }
 
     const finalConclusionRaw =
@@ -1403,8 +2245,91 @@ export function createTools(
       description:
         "Run deep research via network search and a subagent, returning a concise conclusion with sources.",
       inputSchema: z.object({
-        query: z.string().min(1),
-      }),
+        query: z
+          .string()
+          .min(1)
+          .describe("User research question to answer with cited evidence."),
+      }).describe("Input payload for the deepSearch tool."),
+      outputSchema: z.object({
+        conclusion: z
+          .string()
+          .describe("Final concise answer with inline bracket citations."),
+        answer: z
+          .string()
+          .describe("Alias of conclusion for compatibility with existing callers."),
+        sources: z.array(
+          z.object({
+            url: z.string().describe("Source page URL."),
+            title: z
+              .string()
+              .optional()
+              .describe("Source title, if available."),
+            snippet: z
+              .string()
+              .optional()
+              .describe("Short source summary or preview text."),
+            excerpts: z
+              .array(
+                z
+                  .string()
+                  .describe("Evidence excerpt used for synthesis/citation."),
+              )
+              .optional()
+              .describe("Selected evidence excerpts from the source page."),
+            referenceIds: z
+              .array(
+                z
+                  .number()
+                  .int()
+                  .positive()
+                  .describe("Reference ID pointing into references list."),
+              )
+              .optional()
+              .describe("Reference IDs tied to this source."),
+            error: z
+              .string()
+              .optional()
+              .describe("Extraction error for this source when retrieval failed."),
+          }).describe("Aggregated source entry used by deep search output."),
+        ).describe("Only source pages that are actually used by returned references."),
+        references: z.array(
+          z.object({
+            refId: z
+              .number()
+              .int()
+              .positive()
+              .describe("Sequential reference number used in inline citations."),
+            uri: z.string().describe("Canonical URI for locating highlighted range."),
+            pageId: z
+              .string()
+              .describe("Persisted page identifier for deep-research page record."),
+            url: z.string().describe("Original page URL."),
+            title: z
+              .string()
+              .optional()
+              .describe("Page title for display."),
+            startLine: z
+              .number()
+              .int()
+              .positive()
+              .describe("Inclusive 1-based start line for highlighted reference."),
+            endLine: z
+              .number()
+              .int()
+              .positive()
+              .describe("Inclusive 1-based end line for highlighted reference."),
+            text: z.string().describe("Reference text shown to end users."),
+          }).describe("Resolved citation reference entry."),
+        ).describe("All numbered references that can be cited as [n]."),
+        searchId: z.string().describe("Unique identifier of this deep-search run."),
+        projectId: z
+          .string()
+          .optional()
+          .describe("Optional project identifier when search is project-scoped."),
+        prompt: z
+          .string()
+          .describe("Prompt sent to synthesis model for this deep-search run."),
+      }).describe("Structured deep-search result returned to the caller."),
       execute: async ({ query }, options) => {
         if (!config.model) {
           throw new Error("DeepSearch tool is not configured with a model.");
