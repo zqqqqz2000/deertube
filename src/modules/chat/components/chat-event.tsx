@@ -6,7 +6,7 @@ export function ChatEvent({
   ...props
 }: React.ComponentProps<"div">) {
   return (
-    <div className={cn("flex gap-2 px-2", className)} {...props}>
+    <div className={cn("flex min-w-0 gap-2 px-2", className)} {...props}>
       {children}
     </div>
   );
@@ -30,7 +30,7 @@ export function ChatEventBody({
   ...props
 }: React.ComponentProps<"div">) {
   return (
-    <div className={cn("flex flex-1 flex-col", className)} {...props}>
+    <div className={cn("flex min-w-0 flex-1 flex-col", className)} {...props}>
       {children}
     </div>
   );
@@ -42,7 +42,7 @@ export function ChatEventContent({
   ...props
 }: React.ComponentProps<"div">) {
   return (
-    <div className={cn("text-sm @md/chat:text-base", className)} {...props}>
+    <div className={cn("min-w-0 text-sm @md/chat:text-base", className)} {...props}>
       {children}
     </div>
   );

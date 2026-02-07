@@ -1,0 +1,99 @@
+import type { LanguageModel, UIMessage, UITools } from "ai";
+import type {
+  DeepResearchPersistenceAdapter,
+  LineRange,
+  LineSelection,
+} from "../../../shared/deepresearch";
+
+export interface DeertubeMessageMetadata {
+  status?: "pending" | "complete" | "failed";
+  error?: string;
+}
+
+interface SubagentStreamPayload {
+  toolCallId: string;
+  toolName?: string;
+  messages: SubagentUIMessage[];
+}
+
+export interface DeepSearchSource {
+  url: string;
+  title?: string;
+  snippet?: string;
+  excerpts?: string[];
+  referenceIds?: number[];
+  error?: string;
+}
+
+export interface DeepSearchReference {
+  refId: number;
+  uri: string;
+  pageId: string;
+  url: string;
+  title?: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+}
+
+interface DeepSearchStreamPayload {
+  toolCallId: string;
+  toolName?: string;
+  query?: string;
+  projectId?: string;
+  searchId?: string;
+  status?: "running" | "complete" | "failed";
+  sources?: DeepSearchSource[];
+  references?: DeepSearchReference[];
+  prompt?: string;
+  conclusion?: string;
+  error?: string;
+  complete?: boolean;
+}
+
+export interface SubagentUIDataParts {
+  "subagent-stream": SubagentStreamPayload;
+}
+
+export interface DeepSearchUIDataParts {
+  "deepsearch-stream": DeepSearchStreamPayload;
+  "deepsearch-done": DeepSearchStreamPayload;
+}
+
+export type DeertubeUIDataTypes = Record<string, unknown> &
+  SubagentUIDataParts &
+  DeepSearchUIDataParts;
+
+export type SubagentUIMessage = UIMessage<
+  DeertubeMessageMetadata,
+  DeertubeUIDataTypes,
+  UITools
+>;
+
+export interface ToolConfig {
+  model?: LanguageModel;
+  tavilyApiKey?: string;
+  jinaReaderBaseUrl?: string;
+  jinaReaderApiKey?: string;
+  deepResearchStore?: DeepResearchPersistenceAdapter;
+}
+
+export interface SearchResult {
+  url: string;
+  title?: string;
+  pageId?: string;
+  lineCount?: number;
+  ranges: LineRange[];
+  selections: LineSelection[];
+  contents: string[];
+  broken?: boolean;
+  inrelavate?: boolean;
+  error?: string;
+}
+
+export interface ExtractedEvidence {
+  ranges: LineRange[];
+  selections: LineSelection[];
+  contents: Set<string>;
+  contentsByRange: Map<string, string>;
+}

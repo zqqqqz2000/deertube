@@ -836,9 +836,9 @@ export default function ChatHistoryPanel({
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("subagent")}</ChatEventAddon>
                     <ChatEventBody>
-                      <Collapsible defaultOpen={false}>
-                        <div className="flex items-center justify-between gap-2">
-                          <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      <Collapsible defaultOpen={false} className="min-w-0">
+                        <div className="flex min-w-0 items-center justify-between gap-2">
+                          <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
                             {title}
                           </ChatEventTitle>
                           {hasDetails && (
@@ -867,20 +867,20 @@ export default function ChatHistoryPanel({
                                   <div
                                     key={`${item.id}-subagent-${index}`}
                                     className={cn(
-                                      "flex items-start gap-2 rounded-md border border-border/60 bg-card/40 px-2 py-1",
+                                      "flex min-w-0 items-start gap-2 rounded-md border border-border/60 bg-card/40 px-2 py-1",
                                       entry.tone === "warn" &&
                                         "border-amber-400/40 bg-amber-500/10 text-amber-700",
                                     )}
                                   >
-                                    <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/60">
+                                    <span className="shrink-0 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/60">
                                       {entry.kind === "call" ? "Call" : "Result"}
                                     </span>
-                                    <div className="min-w-0">
-                                      <div className="text-xs font-medium text-foreground/80">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="truncate text-xs font-medium text-foreground/80">
                                         {entry.label}
                                       </div>
                                       {entry.detail && (
-                                        <div className="text-[11px] text-muted-foreground">
+                                        <div className="break-words [overflow-wrap:anywhere] text-[11px] text-muted-foreground">
                                           {entry.detail}
                                         </div>
                                       )}
@@ -937,9 +937,9 @@ export default function ChatHistoryPanel({
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("deepsearch")}</ChatEventAddon>
                     <ChatEventBody>
-                      <Collapsible defaultOpen={false}>
-                        <div className="flex items-center justify-between gap-2">
-                          <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      <Collapsible defaultOpen={false} className="min-w-0">
+                        <div className="flex min-w-0 items-center justify-between gap-2">
+                          <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
                             {title}
                           </ChatEventTitle>
                           {hasDetails && (
@@ -959,21 +959,21 @@ export default function ChatHistoryPanel({
                           {error ? error : statusLabel}
                         </ChatEventDescription>
                         {hasDetails && (
-                          <CollapsibleContent className="mt-2">
-                            <ChatEventContent className="space-y-2">
-                              <div className="space-y-1 text-[11px] text-muted-foreground">
-                                {query && <div>{`Query: ${query}`}</div>}
+                          <CollapsibleContent className="mt-2 min-w-0">
+                            <ChatEventContent className="min-w-0 space-y-2">
+                              <div className="space-y-1 break-words text-[11px] text-muted-foreground">
+                                {query && <div className="break-words">{`Query: ${query}`}</div>}
                                 {sources.length > 0 && (
                                   <div>{`Sources: ${sources.length}`}</div>
                                 )}
                               </div>
                               {conclusion && (
-                                <div className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+                                <div className="break-words rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
                                   {conclusion}
                                 </div>
                               )}
                               {sources.length > 0 && (
-                                <div className="space-y-2">
+                                <div className="min-w-0 space-y-2">
                                   {sources.map((source, index) => {
                                     const url =
                                       typeof source.url === "string"
@@ -992,7 +992,7 @@ export default function ChatHistoryPanel({
                                       <button
                                         key={`${item.id}-source-${index}`}
                                         type="button"
-                                        className="w-full rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
+                                        className="min-w-0 max-w-full w-full overflow-hidden rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
                                         onClick={() => {
                                           if (url && onReferenceClick) {
                                             onReferenceClick(url, title);
@@ -1002,16 +1002,16 @@ export default function ChatHistoryPanel({
                                         <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
                                           Source
                                         </div>
-                                        <div className="text-sm font-semibold text-foreground">
+                                        <div className="break-words text-sm font-semibold text-foreground">
                                           {title}
                                         </div>
                                         {url && (
-                                          <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                                          <div className="mt-1 max-w-full truncate text-[11px] text-muted-foreground">
                                             {url}
                                           </div>
                                         )}
                                         {snippet && (
-                                          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                          <div className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">
                                             {snippet}
                                           </div>
                                         )}
