@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-export const noStepLimit = () => false;
-
 const TavilyOptionalStringSchema = z.preprocess(
   (value) => (typeof value === "string" ? value : undefined),
   z
@@ -106,6 +104,18 @@ export const SearchSubagentFinalItemSchema = z
       .string()
       .optional()
       .describe("Source URL when available. Can be omitted for global errors."),
+    viewpoint: z
+      .string()
+      .default("")
+      .describe(
+        "Specific claim/viewpoint this evidence supports in the final answer.",
+      ),
+    content: z
+      .string()
+      .default("")
+      .describe(
+        "Short evidence summary/quote aligned with the selected ranges.",
+      ),
     ranges: z
       .array(LineRangeSchema)
       .default([])
@@ -152,12 +162,16 @@ export const SEARCH_SUBAGENT_SYSTEM = [
   "1) Call search to gather candidates (<=6 per query, multiple query rounds allowed).",
   "2) Select relevant high-quality URLs and call extract(url, query) for each.",
   "3) Extraction is mandatory. Do not stop after search-only results.",
-  "4) In final JSON, use `ranges` as the evidence field for each URL.",
-  "5) Every returned range must come from the corresponding extract result for the same URL.",
-  "6) If a URL is unrelated, mark `inrelavate=true` and return `ranges=[]` for that URL.",
-  "7) If all attempted search calls fail, or all attempted extract calls fail, return those failure reasons in final JSON.",
-  "8) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
-  "9) Return a JSON object only: { results: [{ url?: string, ranges: [{ start, end }], broken?: boolean, inrelavate?: boolean, error?: string }], errors?: string[] }.",
+  "4) First decide your answer claims; then choose only the smallest sufficient evidence for each claim.",
+  "5) In final JSON, each result item should include: url, viewpoint, content, ranges.",
+  "6) `extract` returns line-numbered contents. All chosen ranges must map to those numbered lines.",
+  "7) Prefer small precise spans (typically 2-12 lines). Avoid broad/full-page ranges unless strictly necessary.",
+  "8) The same source can support multiple claims: keep multiple ranges for one URL when needed.",
+  "9) Every returned range must come from the corresponding extract result for the same URL.",
+  "10) If a URL is unrelated, mark `inrelavate=true` and return `ranges=[]` for that URL.",
+  "11) If all attempted search calls fail, or all attempted extract calls fail, return those failure reasons in final JSON.",
+  "12) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
+  "13) Return a JSON object only: { results: [{ url?: string, viewpoint: string, content: string, ranges: [{ start, end }], broken?: boolean, inrelavate?: boolean, error?: string }], errors?: string[] }.",
   "Output rule: return JSON only, with no extra prose.",
 ].join("\n");
 

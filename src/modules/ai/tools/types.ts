@@ -81,6 +81,8 @@ export interface ToolConfig {
 export interface SearchResult {
   url: string;
   title?: string;
+  viewpoint?: string;
+  content?: string;
   pageId?: string;
   lineCount?: number;
   ranges: LineRange[];
