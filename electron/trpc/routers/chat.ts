@@ -21,6 +21,8 @@ const buildMainAgentSystemPrompt = (contextLines: string[]) =>
     "Only skip `deepSearch` for fixed deterministic math/computation tasks that do not depend on external facts.",
     "For any concept, entity, event, policy, recommendation, or factual claim, you must use `deepSearch` before answering.",
     "Do not answer from intuition or prior belief. If evidence is insufficient, say so explicitly and continue searching.",
+    "If you need citations or a `References` section, you must run `deepSearch` first. Never cite without search.",
+    "Do not invent citation markers or URLs. Every citation must come from `deepSearch` output.",
     "If you used `deepSearch`, preserve citation markers exactly as provided, such as [1], [2].",
     "Do not merge citations into one bracket like [1,2] or [1-2]; keep separate markers [1], [2].",
     "When citations are present, append a final `References` section and list source URLs in academic style, e.g. `[1] https://...`.",
