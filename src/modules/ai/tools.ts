@@ -82,8 +82,9 @@ export interface DeepSearchUIDataParts {
   "deepsearch-done": DeepSearchStreamPayload;
 }
 
-export type DeertubeUIDataTypes =
-  Record<string, unknown> & SubagentUIDataParts & DeepSearchUIDataParts;
+export type DeertubeUIDataTypes = Record<string, unknown> &
+  SubagentUIDataParts &
+  DeepSearchUIDataParts;
 
 interface ToolConfig {
   model?: LanguageModel;
@@ -161,38 +162,53 @@ const DEEPSEARCH_SYSTEM = [
   "Do not group citations as [1,2] or [1-2]. Write separate markers like [1], [2].",
 ].join("\n");
 
-const parseJson = (raw: string): JsonValue | null => {
-  try {
-    return JSON.parse(raw) as JsonValue;
-  } catch {
-    return null;
-  }
-};
+const parseJson = (raw: string): JsonValue => JSON.parse(raw) as JsonValue;
 
-const extractJsonFromText = (text: string): JsonValue | null => {
+const extractJsonFromText = (
+  text: string,
+  context: {
+    stage: "extract-subagent" | "search-subagent";
+    query?: string;
+    url?: string;
+  },
+): JsonValue => {
   const trimmed = text.trim();
-  const direct = parseJson(trimmed);
-  if (direct) return direct;
+  if (!trimmed) {
+    throw new Error("Model output is empty; expected JSON.");
+  }
   const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i);
   if (fencedMatch) {
-    const fenced = parseJson(fencedMatch[1].trim());
-    if (fenced) return fenced;
+    try {
+      return parseJson(fencedMatch[1].trim());
+    } catch (error) {
+      console.error("[subagent.json.parse.error]", {
+        ...context,
+        mode: "fenced-json",
+        textLength: trimmed.length,
+        rawText: trimmed,
+      });
+      throw new Error(
+        `Model output JSON parse failed (fenced block): ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
   }
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
-    const parsed = parseJson(candidate);
-    if (parsed) return parsed;
+  try {
+    return parseJson(trimmed);
+  } catch (error) {
+    console.error("[subagent.json.parse.error]", {
+      ...context,
+      mode: "direct-json",
+      textLength: trimmed.length,
+      rawText: trimmed,
+    });
+    throw new Error(
+      `Model output JSON parse failed: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
   }
-  const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  if (firstBracket >= 0 && lastBracket > firstBracket) {
-    const candidate = trimmed.slice(firstBracket, lastBracket + 1);
-    const parsed = parseJson(candidate);
-    if (parsed) return parsed;
-  }
-  return null;
 };
 
 const isRecord = (value: unknown): value is JsonObject => isJsonObject(value);
@@ -233,7 +249,9 @@ const writeDeepSearchStream = (
 
 type AnyUIMessagePart = NonNullable<DeertubeUIMessage["parts"]>[number];
 
-const isTextPart = (part: AnyUIMessagePart): part is AnyUIMessagePart & { text: string } =>
+const isTextPart = (
+  part: AnyUIMessagePart,
+): part is AnyUIMessagePart & { text: string } =>
   part.type === "text" && "text" in part;
 
 const isToolPart = (part: AnyUIMessagePart): boolean =>
@@ -243,7 +261,11 @@ const getToolName = (part: AnyUIMessagePart): string | undefined => {
   if (part.type.startsWith("tool-")) {
     return part.type.slice(5);
   }
-  if (part.type === "dynamic-tool" && "toolName" in part && typeof part.toolName === "string") {
+  if (
+    part.type === "dynamic-tool" &&
+    "toolName" in part &&
+    typeof part.toolName === "string"
+  ) {
     return part.toolName;
   }
   return undefined;
@@ -259,21 +281,19 @@ const extractText = (message: DeertubeUIMessage): string => {
 
 const collectToolOutputs = (
   message: DeertubeUIMessage,
-) : { name?: string; output: unknown }[] => {
+): { name?: string; output: unknown }[] => {
   if (!message.parts) return [];
-  return message.parts
-    .filter(isToolPart)
-    .flatMap((part) => {
-      if (!("output" in part) || part.output === undefined) {
-        return [];
-      }
-      return [
-        {
-          name: getToolName(part),
-          output: part.output,
-        },
-      ];
-    });
+  return message.parts.filter(isToolPart).flatMap((part) => {
+    if (!("output" in part) || part.output === undefined) {
+      return [];
+    }
+    return [
+      {
+        name: getToolName(part),
+        output: part.output,
+      },
+    ];
+  });
 };
 
 const normalizeRanges = (
@@ -297,7 +317,11 @@ const normalizeRanges = (
 
 const splitLines = (markdown: string): string[] => markdown.split(/\r?\n/);
 
-const formatLineNumbered = (lines: string[], offset = 0, totalLines?: number): string => {
+const formatLineNumbered = (
+  lines: string[],
+  offset = 0,
+  totalLines?: number,
+): string => {
   const width = String(totalLines ?? lines.length + offset).length;
   return lines
     .map((line, index) => {
@@ -313,7 +337,10 @@ const buildSelectionsFromRanges = (
 ): LineSelection[] => {
   const unique = new Map<string, LineSelection>();
   ranges.forEach((range) => {
-    const text = lines.slice(range.start - 1, range.end).join("\n").trim();
+    const text = lines
+      .slice(range.start - 1, range.end)
+      .join("\n")
+      .trim();
     if (!text) {
       return;
     }
@@ -328,7 +355,13 @@ const buildSelectionsFromRanges = (
 };
 
 const buildExcerptsFromSelections = (selections: LineSelection[]): string[] =>
-  Array.from(new Set(selections.map((selection) => selection.text).filter((text) => text.length > 0)));
+  Array.from(
+    new Set(
+      selections
+        .map((selection) => selection.text)
+        .filter((text) => text.length > 0),
+    ),
+  );
 
 const parseLineSelections = (value: unknown): LineSelection[] => {
   if (!Array.isArray(value)) {
@@ -403,7 +436,9 @@ async function fetchTavilySearch(
     console.warn("[tavily.search.schema]", {
       query,
       status: response.status,
-      issue: firstIssue ? `${firstIssue.path.join(".")}: ${firstIssue.message}` : "invalid",
+      issue: firstIssue
+        ? `${firstIssue.path.join(".")}: ${firstIssue.message}`
+        : "invalid",
       bodyPreview: raw.slice(0, 400),
     });
     throw new Error("Tavily search response schema invalid.");
@@ -424,7 +459,10 @@ async function fetchJinaReaderMarkdown(
   baseUrl?: string,
   apiKey?: string,
 ): Promise<string> {
-  const normalizedBase = baseUrl && baseUrl.trim().length > 0 ? baseUrl.trim() : "https://r.jina.ai/";
+  const normalizedBase =
+    baseUrl && baseUrl.trim().length > 0
+      ? baseUrl.trim()
+      : "https://r.jina.ai/";
   const readerUrl = `${normalizedBase}${url}`;
   const response = await fetch(readerUrl, {
     headers: {
@@ -436,9 +474,19 @@ async function fetchJinaReaderMarkdown(
     throw new Error(`Jina reader failed: ${response.status}`);
   }
   const raw = await response.text();
-  const parsed = parseJson(raw);
-  if (parsed === null) {
+  const compact = raw.trim();
+  if (!compact.startsWith("{")) {
     return raw;
+  }
+  let parsed: JsonValue;
+  try {
+    parsed = parseJson(raw);
+  } catch (error) {
+    throw new Error(
+      `Jina response JSON parse failed for ${url}: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
   }
   if (typeof parsed === "string") {
     return parsed;
@@ -470,9 +518,9 @@ interface SearchResult {
   broken?: boolean;
 }
 
-const normalizeSearchResults = (raw: JsonValue | null): SearchResult[] => {
+const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
   if (!Array.isArray(raw)) {
-    return [];
+    throw new Error("Search subagent output must be a JSON array.");
   }
   const normalized: SearchResult[] = [];
   raw.forEach((item) => {
@@ -491,10 +539,14 @@ const normalizeSearchResults = (raw: JsonValue | null): SearchResult[] => {
     );
     const selections = parseLineSelections(item.selections);
     const broken = typeof item.broken === "boolean" ? item.broken : undefined;
-    if (!url || (excerpts.length === 0 && selections.length === 0 && broken !== true)) {
+    if (
+      !url ||
+      (excerpts.length === 0 && selections.length === 0 && broken !== true)
+    ) {
       return;
     }
-    const normalizedExcerpts = excerpts.length > 0 ? excerpts : buildExcerptsFromSelections(selections);
+    const normalizedExcerpts =
+      excerpts.length > 0 ? excerpts : buildExcerptsFromSelections(selections);
     normalized.push({
       url,
       title,
@@ -506,9 +558,7 @@ const normalizeSearchResults = (raw: JsonValue | null): SearchResult[] => {
   return normalized;
 };
 
-const dedupeSearchResults = (
-  results: SearchResult[],
-): SearchResult[] => {
+const dedupeSearchResults = (results: SearchResult[]): SearchResult[] => {
   const map = new Map<string, SearchResult>();
   for (const item of results) {
     const existing = map.get(item.url);
@@ -519,14 +569,17 @@ const dedupeSearchResults = (
         excerpts: [...item.excerpts],
       });
     } else {
-      const mergedExcerpts = Array.from(new Set([...existing.excerpts, ...item.excerpts]));
+      const mergedExcerpts = Array.from(
+        new Set([...existing.excerpts, ...item.excerpts]),
+      );
       const selectionMap = new Map<string, LineSelection>();
       [...existing.selections, ...item.selections].forEach((selection) => {
         const key = `${selection.start}:${selection.end}:${selection.text}`;
         selectionMap.set(key, selection);
       });
       const mergedSelections = Array.from(selectionMap.values());
-      const hasResolvedContent = mergedExcerpts.length > 0 || mergedSelections.length > 0;
+      const hasResolvedContent =
+        mergedExcerpts.length > 0 || mergedSelections.length > 0;
       map.set(item.url, {
         url: item.url,
         title: existing.title ?? item.title,
@@ -534,7 +587,9 @@ const dedupeSearchResults = (
         lineCount: existing.lineCount ?? item.lineCount,
         selections: mergedSelections,
         excerpts: mergedExcerpts,
-        broken: hasResolvedContent ? undefined : existing.broken ?? item.broken,
+        broken: hasResolvedContent
+          ? undefined
+          : (existing.broken ?? item.broken),
       });
     }
   }
@@ -545,7 +600,9 @@ const clampText = (value: string, maxLength: number): string =>
   value.length > maxLength ? `${value.slice(0, maxLength).trimEnd()}…` : value;
 
 const normalizeExcerpts = (excerpts: string[]): string[] => {
-  const cleaned = excerpts.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  const cleaned = excerpts
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
   const limited: string[] = [];
   let total = 0;
   for (const entry of cleaned) {
@@ -559,12 +616,11 @@ const normalizeExcerpts = (excerpts: string[]): string[] => {
 };
 
 const deriveSourceTitle = (url: string, fallback?: string): string => {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname || (fallback ?? url);
-  } catch {
+  if (!URL.canParse(url)) {
     return fallback ?? url;
   }
+  const parsed = new URL(url);
+  return parsed.hostname || (fallback ?? url);
 };
 
 const buildSnippet = (excerpts: string[]): string => {
@@ -574,7 +630,6 @@ const buildSnippet = (excerpts: string[]): string => {
 
 const buildDeepSearchSources = (
   results: SearchResult[],
-  maxResults: number,
   references: DeepSearchReference[],
 ): DeepSearchSource[] => {
   const referenceIdsByUrl = new Map<string, number[]>();
@@ -585,11 +640,11 @@ const buildDeepSearchSources = (
   });
   return results
     .filter((item) => !item.broken && item.excerpts.length > 0)
-    .slice(0, maxResults)
     .map((item) => {
       const excerpts = normalizeExcerpts(item.excerpts);
       const snippet = buildSnippet(excerpts);
-      const title = item.title ?? deriveSourceTitle(item.url, snippet.split("\n")[0]);
+      const title =
+        item.title ?? deriveSourceTitle(item.url, snippet.split("\n")[0]);
       return {
         url: item.url,
         title,
@@ -613,7 +668,11 @@ async function runExtractSubagent({
 }): Promise<{ ranges: LineRange[]; broken: boolean; rawModelOutput: string }> {
   const lineCount = lines.length;
   if (lineCount === 0) {
-    return { ranges: [], broken: true, rawModelOutput: "Empty markdown input." };
+    return {
+      ranges: [],
+      broken: true,
+      rawModelOutput: "Empty markdown input.",
+    };
   }
   const tooLarge = lineCount > 2200 || lines.join("\n").length > 180000;
   const previewLines = tooLarge ? lines.slice(0, 200) : lines;
@@ -623,7 +682,8 @@ async function runExtractSubagent({
     : `Total markdown lines: ${lineCount}.`;
 
   const grepTool = tool({
-    description: "Search all lines with a regex and return matching line numbers with surrounding context.",
+    description:
+      "Search all lines with a regex and return matching line numbers with surrounding context.",
     inputSchema: z.object({
       pattern: z.string(),
       flags: z.string().optional(),
@@ -636,9 +696,18 @@ async function runExtractSubagent({
       try {
         regex = new RegExp(pattern, flags ?? "i");
       } catch (error) {
-        return { error: error instanceof Error ? error.message : "Invalid regex" };
+        throw new Error(
+          `Invalid regex pattern for grep tool: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
+        );
       }
-      const matches: { line: number; text: string; before: string[]; after: string[] }[] = [];
+      const matches: {
+        line: number;
+        text: string;
+        before: string[];
+        after: string[];
+      }[] = [];
       for (let index = 0; index < lines.length; index += 1) {
         if (!regex.test(lines[index])) continue;
         const start = Math.max(0, index - before);
@@ -692,9 +761,18 @@ async function runExtractSubagent({
     abortSignal,
   });
 
-  const parsed = extractJsonFromText(result.text);
-  const broken = isRecord(parsed) && typeof parsed.broken === "boolean" ? parsed.broken : false;
-  const ranges = normalizeRanges(isRecord(parsed) ? parsed.ranges : null, lineCount);
+  const parsed = extractJsonFromText(result.text, {
+    stage: "extract-subagent",
+    query,
+  });
+  const broken =
+    isRecord(parsed) && typeof parsed.broken === "boolean"
+      ? parsed.broken
+      : false;
+  const ranges = normalizeRanges(
+    isRecord(parsed) ? parsed.ranges : null,
+    lineCount,
+  );
   return { ranges, broken, rawModelOutput: result.text };
 }
 
@@ -733,17 +811,17 @@ async function runSearchSubagent({
   const searchLookup = new Map<string, { title?: string; snippet?: string }>();
 
   const searchTool = tool({
-    description: "Search the web via Tavily and return ranked candidate results.",
+    description:
+      "Search the web via Tavily and return ranked candidate results.",
     inputSchema: z.object({
       query: z.string().min(1),
-      maxResults: z.number().min(1).max(8).optional(),
     }),
-    execute: async ({ query: inputQuery, maxResults }) => {
+    execute: async ({ query: inputQuery }) => {
       console.log("[subagent.search]", {
         query: inputQuery,
-        maxResults: maxResults ?? 6,
+        maxResults: 20,
       });
-      const results = await fetchTavilySearch(inputQuery, maxResults ?? 6, tavilyApiKey);
+      const results = await fetchTavilySearch(inputQuery, 20, tavilyApiKey);
       results.forEach((item) => {
         const url = item.url?.trim();
         if (!url) {
@@ -756,14 +834,17 @@ async function runSearchSubagent({
       });
       console.log("[subagent.search.results]", {
         count: results.length,
-        top: results.slice(0, 3).map((item) => item.url ?? item.title ?? "unknown"),
+        top: results
+          .slice(0, 3)
+          .map((item) => item.url ?? item.title ?? "unknown"),
       });
       return { results };
     },
   });
 
   const extractTool = tool({
-    description: "Fetch markdown from a URL and extract passages relevant to the query.",
+    description:
+      "Fetch markdown from a URL and extract passages relevant to the query.",
     inputSchema: z.object({
       url: z.string().min(1),
       query: z.string().min(1),
@@ -774,21 +855,19 @@ async function runSearchSubagent({
         query: extractQuery,
       });
       const lookup = searchLookup.get(url);
-      let markdown = "";
-      let broken = false;
-      try {
-        markdown = await fetchJinaReaderMarkdown(url, jinaReaderBaseUrl, jinaReaderApiKey);
-      } catch {
-        broken = true;
-      }
+      const markdown = await fetchJinaReaderMarkdown(
+        url,
+        jinaReaderBaseUrl,
+        jinaReaderApiKey,
+      );
       if (!markdown.trim()) {
-        broken = true;
+        throw new Error("Jina content unavailable.");
       }
       const fetchedAt = new Date().toISOString();
-      const lines = markdown ? splitLines(markdown) : [];
+      const lines = splitLines(markdown);
       let pageId: string | undefined;
       let lineCount = lines.length;
-      if (markdown && deepResearchStore) {
+      if (deepResearchStore) {
         const persistedPage = await deepResearchStore.savePage({
           searchId,
           query: extractQuery,
@@ -801,34 +880,11 @@ async function runSearchSubagent({
         lineCount = persistedPage.lineCount;
       }
 
-      if (broken || lines.length === 0) {
-        if (deepResearchStore && pageId) {
-          await deepResearchStore.saveExtraction({
-            searchId,
-            pageId,
-            query: extractQuery,
-            url,
-            broken: true,
-            lineCount,
-            ranges: [],
-            selections: [],
-            rawModelOutput: "Jina content unavailable.",
-            extractedAt: new Date().toISOString(),
-          });
-        }
-        return {
-          url,
-          title: lookup?.title,
-          pageId,
-          lineCount,
-          broken: true,
-          ranges: [],
-          selections: [],
-          excerpts: [],
-          rawModelOutput: "Jina content unavailable.",
-        };
-      }
-      const { ranges, broken: extractedBroken, rawModelOutput } = await runExtractSubagent({
+      const {
+        ranges,
+        broken: extractedBroken,
+        rawModelOutput,
+      } = await runExtractSubagent({
         query: extractQuery,
         lines,
         model,
@@ -856,7 +912,7 @@ async function runSearchSubagent({
         ranges: ranges.length,
         excerpts: excerpts.length,
       });
-      return {
+      const result = {
         url,
         title: lookup?.title,
         pageId,
@@ -867,6 +923,8 @@ async function runSearchSubagent({
         excerpts,
         rawModelOutput,
       };
+      console.log("[subagent.extract.result]", result);
+      return result;
     },
   });
 
@@ -887,7 +945,9 @@ async function runSearchSubagent({
   const uiMessages = readUIMessageStream<DeertubeUIMessage>({ stream });
 
   for await (const uiMessage of uiMessages) {
-    const existingIndex = accumulatedMessages.findIndex((item) => item.id === uiMessage.id);
+    const existingIndex = accumulatedMessages.findIndex(
+      (item) => item.id === uiMessage.id,
+    );
     if (existingIndex >= 0) {
       accumulatedMessages[existingIndex] = uiMessage;
     } else {
@@ -900,37 +960,56 @@ async function runSearchSubagent({
       outputs.forEach((output) => {
         if (output.name !== "extract") return;
         if (!isRecord(output.output)) return;
-        const url = typeof output.output.url === "string" ? output.output.url : "";
+        const url =
+          typeof output.output.url === "string" ? output.output.url : "";
         const excerpts = Array.isArray(output.output.excerpts)
           ? output.output.excerpts.filter(
               (item: unknown): item is string => typeof item === "string",
             )
           : [];
         const selections = parseLineSelections(output.output.selections);
-        const title = typeof output.output.title === "string" ? output.output.title : undefined;
-        const pageId = typeof output.output.pageId === "string" ? output.output.pageId : undefined;
+        const title =
+          typeof output.output.title === "string"
+            ? output.output.title
+            : undefined;
+        const pageId =
+          typeof output.output.pageId === "string"
+            ? output.output.pageId
+            : undefined;
         const lineCountRaw = Number(output.output.lineCount);
         const lineCount =
           Number.isFinite(lineCountRaw) && lineCountRaw > 0
             ? Math.floor(lineCountRaw)
             : undefined;
         const broken =
-          typeof output.output.broken === "boolean" ? output.output.broken : undefined;
-        if (!url || (excerpts.length === 0 && selections.length === 0 && !broken)) return;
+          typeof output.output.broken === "boolean"
+            ? output.output.broken
+            : undefined;
+        if (
+          !url ||
+          (excerpts.length === 0 && selections.length === 0 && !broken)
+        )
+          return;
         extracted.push({
           url,
           title,
           pageId,
           lineCount,
           selections,
-          excerpts: excerpts.length > 0 ? excerpts : buildExcerptsFromSelections(selections),
+          excerpts:
+            excerpts.length > 0
+              ? excerpts
+              : buildExcerptsFromSelections(selections),
           broken,
         });
       });
     }
   }
 
-  const parsed = extractJsonFromText(lastText);
+  const parsed = extractJsonFromText(lastText, {
+    stage: "search-subagent",
+    query,
+  });
   const normalized = normalizeSearchResults(parsed).map((item) => {
     const lookup = searchLookup.get(item.url);
     return {
@@ -960,7 +1039,6 @@ const buildDeepSearchReferences = (
   results: SearchResult[],
   projectId: string | undefined,
   searchId: string,
-  maxReferences: number,
 ): DeepSearchReference[] => {
   const references: DeepSearchReference[] = [];
   const dedupe = new Set<string>();
@@ -974,7 +1052,9 @@ const buildDeepSearchReferences = (
       end: 1,
       text: excerpt,
     }));
-    const candidates = (result.selections.length > 0 ? result.selections : fallbackSelections)
+    const candidates = (
+      result.selections.length > 0 ? result.selections : fallbackSelections
+    )
       .map((selection) => ({
         start: Math.max(1, selection.start),
         end: Math.max(1, selection.end),
@@ -984,9 +1064,6 @@ const buildDeepSearchReferences = (
       .slice(0, 3);
 
     for (const candidate of candidates) {
-      if (references.length >= maxReferences) {
-        return references;
-      }
       const dedupeKey = `${result.url}::${normalizeKeyText(candidate.text)}`;
       if (dedupe.has(dedupeKey)) {
         continue;
@@ -1056,14 +1133,21 @@ const linkifyCitationMarkers = (
     if (!compact) {
       return [];
     }
-    const tokens = compact.split(/[,\s，、;；]+/).filter((token) => token.length > 0);
+    const tokens = compact
+      .split(/[,\s，、;；]+/)
+      .filter((token) => token.length > 0);
     const ids: number[] = [];
     tokens.forEach((token) => {
       const rangeMatch = token.match(/^(\d+)-(\d+)$/);
       if (rangeMatch) {
         const start = Number.parseInt(rangeMatch[1], 10);
         const end = Number.parseInt(rangeMatch[2], 10);
-        if (Number.isFinite(start) && Number.isFinite(end) && end >= start && end - start <= 8) {
+        if (
+          Number.isFinite(start) &&
+          Number.isFinite(end) &&
+          end >= start &&
+          end - start <= 8
+        ) {
           for (let index = start; index <= end; index += 1) {
             ids.push(index);
           }
@@ -1098,14 +1182,17 @@ const linkifyCitationMarkers = (
       return linked.join(", ");
     },
   );
-  const linkifiedSingle = linkifiedGroups.replace(/\[(\d+)\](?!\()/g, (full, rawRefId: string) => {
-    const refId = Number.parseInt(rawRefId, 10);
-    const uri = uriById.get(refId);
-    if (!uri) {
-      return full;
-    }
-    return `[${refId}](${uri})`;
-  });
+  const linkifiedSingle = linkifiedGroups.replace(
+    /\[(\d+)\](?!\()/g,
+    (full, rawRefId: string) => {
+      const refId = Number.parseInt(rawRefId, 10);
+      const uri = uriById.get(refId);
+      if (!uri) {
+        return full;
+      }
+      return `[${refId}](${uri})`;
+    },
+  );
   return linkifiedSingle.replace(/\[\^(\d+)\]/g, (full, rawRefId: string) => {
     const refId = Number.parseInt(rawRefId, 10);
     const uri = uriById.get(refId);
@@ -1118,7 +1205,6 @@ const linkifyCitationMarkers = (
 
 async function runDeepSearchTool({
   query,
-  maxResults,
   model,
   writer,
   toolCallId,
@@ -1130,7 +1216,6 @@ async function runDeepSearchTool({
   deepResearchStore,
 }: {
   query: string;
-  maxResults?: number;
   model: LanguageModel;
   writer?: UIMessageStreamWriter;
   toolCallId?: string;
@@ -1147,7 +1232,6 @@ async function runDeepSearchTool({
   searchId: string;
   projectId?: string;
   prompt: string;
-  error?: string;
 }> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) {
@@ -1164,16 +1248,8 @@ async function runDeepSearchTool({
       },
       true,
     );
-    return {
-      conclusion: message,
-      sources: [],
-      references: [],
-      searchId: "",
-      prompt: "",
-      error: message,
-    };
+    throw new Error(message);
   }
-  const resolvedMax = Math.max(1, Math.min(8, maxResults ?? 5));
   const fallbackCreatedAt = new Date().toISOString();
   const searchSession = deepResearchStore
     ? await deepResearchStore.createSearchSession(normalizedQuery)
@@ -1202,13 +1278,8 @@ async function runDeepSearchTool({
       jinaReaderApiKey,
       deepResearchStore,
     });
-    const references = buildDeepSearchReferences(
-      results,
-      projectId,
-      searchId,
-      Math.max(resolvedMax * 3, 6),
-    );
-    const sources = buildDeepSearchSources(results, resolvedMax, references);
+    const references = buildDeepSearchReferences(results, projectId, searchId);
+    const sources = buildDeepSearchSources(results, references);
     writeDeepSearchStream(writer, toolCallId, toolName, {
       query: normalizedQuery,
       projectId,
@@ -1246,19 +1317,25 @@ async function runDeepSearchTool({
       }
     }
 
-    const finalConclusionRaw = conclusionRaw.trim() || "No conclusion generated.";
-    const finalConclusionLinked = linkifyCitationMarkers(finalConclusionRaw, references);
+    const finalConclusionRaw =
+      conclusionRaw.trim() || "No conclusion generated.";
+    const finalConclusionLinked = linkifyCitationMarkers(
+      finalConclusionRaw,
+      references,
+    );
     if (deepResearchStore) {
-      const persistedReferences: DeepResearchReferenceRecord[] = references.map((reference) => ({
-        refId: reference.refId,
-        uri: reference.uri,
-        pageId: reference.pageId,
-        url: reference.url,
-        title: reference.title,
-        startLine: reference.startLine,
-        endLine: reference.endLine,
-        text: reference.text,
-      }));
+      const persistedReferences: DeepResearchReferenceRecord[] = references.map(
+        (reference) => ({
+          refId: reference.refId,
+          uri: reference.uri,
+          pageId: reference.pageId,
+          url: reference.url,
+          title: reference.title,
+          startLine: reference.startLine,
+          endLine: reference.endLine,
+          text: reference.text,
+        }),
+      );
       await deepResearchStore.finalizeSearch({
         searchId,
         query: normalizedQuery,
@@ -1297,7 +1374,8 @@ async function runDeepSearchTool({
       prompt,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Deep search failed.";
+    const message =
+      error instanceof Error ? error.message : "Deep search failed.";
     writeDeepSearchStream(
       writer,
       toolCallId,
@@ -1312,34 +1390,27 @@ async function runDeepSearchTool({
       },
       true,
     );
-    return {
-      conclusion: message,
-      sources: [],
-      references: [],
-      searchId,
-      projectId,
-      prompt: "",
-      error: message,
-    };
+    throw error instanceof Error ? error : new Error(message);
   }
 }
 
-export function createTools(writer: UIMessageStreamWriter, config: ToolConfig = {}) {
+export function createTools(
+  writer: UIMessageStreamWriter,
+  config: ToolConfig = {},
+) {
   return {
     deepSearch: tool({
       description:
         "Run deep research via network search and a subagent, returning a concise conclusion with sources.",
       inputSchema: z.object({
         query: z.string().min(1),
-        maxResults: z.number().min(1).max(8).optional(),
       }),
-      execute: async ({ query, maxResults }, options) => {
+      execute: async ({ query }, options) => {
         if (!config.model) {
           throw new Error("DeepSearch tool is not configured with a model.");
         }
         const result = await runDeepSearchTool({
           query,
-          maxResults,
           model: config.model,
           writer,
           toolCallId: options.toolCallId,
@@ -1350,9 +1421,6 @@ export function createTools(writer: UIMessageStreamWriter, config: ToolConfig = 
           jinaReaderApiKey: config.jinaReaderApiKey,
           deepResearchStore: config.deepResearchStore,
         });
-        if (result.error) {
-          throw new Error(result.error);
-        }
         return {
           conclusion: result.conclusion,
           answer: result.conclusion,

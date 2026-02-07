@@ -736,15 +736,9 @@ const extractDeepSearchToolText = (part: DeertubeMessagePart): string | null => 
       "toolName" in part &&
       part.toolName === "deepSearch");
   if (!isDeepSearchToolPart || !("output" in part)) {
-    if ("errorText" in part && typeof part.errorText === "string" && part.errorText.trim().length > 0) {
-      return part.errorText;
-    }
     return null;
   }
   if (!isJsonObject(part.output)) {
-    if ("errorText" in part && typeof part.errorText === "string" && part.errorText.trim().length > 0) {
-      return part.errorText;
-    }
     return null;
   }
   const answer = part.output.answer;
@@ -755,11 +749,36 @@ const extractDeepSearchToolText = (part: DeertubeMessagePart): string | null => 
   if (typeof conclusion === "string" && conclusion.trim().length > 0) {
     return conclusion;
   }
-  const error = part.output.error;
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
   return null;
+};
+
+const extractUiMessageError = (message: DeertubeUIMessage): string | undefined => {
+  if (!("parts" in message) || !Array.isArray(message.parts)) {
+    return undefined;
+  }
+  for (const part of message.parts) {
+    if (
+      "errorText" in part &&
+      typeof part.errorText === "string" &&
+      part.errorText.trim().length > 0
+    ) {
+      return part.errorText;
+    }
+    const deepSearch = readDeepSearchPartPayload(part);
+    if (deepSearch) {
+      const payloadError = deepSearch.payload.error;
+      if (typeof payloadError === "string" && payloadError.trim().length > 0) {
+        return payloadError;
+      }
+    }
+    if ("output" in part && isJsonObject(part.output)) {
+      const outputError = part.output.error;
+      if (typeof outputError === "string" && outputError.trim().length > 0) {
+        return outputError;
+      }
+    }
+  }
+  return undefined;
 };
 
 function extractUiMessageText(message: DeertubeUIMessage): string {
@@ -781,10 +800,6 @@ function extractUiMessageText(message: DeertubeUIMessage): string {
     const conclusion = deepSearch.payload.conclusion;
     if (typeof conclusion === "string" && conclusion.trim().length > 0) {
       return conclusion;
-    }
-    const error = deepSearch.payload.error;
-    if (typeof error === "string" && error.trim().length > 0) {
-      return error;
     }
   }
   const text = message.parts
@@ -948,13 +963,17 @@ function mapUiMessagesToChat(
         : new Date().toISOString();
     const { status: persistedStatus, error: persistedError } =
       extractMessageMetadata(message.metadata);
+    const inferredError = extractUiMessageError(message);
+    const resolvedError = persistedError ?? inferredError;
+    const resolvedStatus =
+      persistedStatus ?? (resolvedError ? "failed" : undefined);
     return {
       id: message.id,
       role: message.role as ChatMessage["role"],
       content,
       createdAt,
-      status: persistedStatus,
-      error: persistedError,
+      status: resolvedStatus,
+      error: resolvedError,
     };
   });
 
