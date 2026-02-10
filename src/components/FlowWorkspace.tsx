@@ -488,6 +488,7 @@ function FlowWorkspaceInner({
 }: FlowWorkspaceProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [developerMode, setDeveloperMode] = useState(false);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(
     null,
   );
@@ -513,6 +514,7 @@ function FlowWorkspaceInner({
   const browserTabsRef = useRef<BrowserViewTabState[]>([]);
   const browserBoundsRef = useRef<Record<string, BrowserViewBounds>>({});
   const browserHighlightTimersRef = useRef<Set<number>>(new Set());
+  const projectTitleClickTimestampsRef = useRef<number[]>([]);
   const referenceResolveCacheRef = useRef<
     Map<string, DeepResearchResolvedReference | null>
   >(new Map());
@@ -1443,6 +1445,7 @@ function FlowWorkspaceInner({
     if (tabId === "chat" || tabId === CHAT_TAB_ID) {
       return (
         <ChatHistoryPanel
+          developerMode={developerMode}
           messages={chatMessages}
           selectedResponseId={selectedResponseId}
           selectedNode={selectedNode}
@@ -1655,6 +1658,21 @@ function FlowWorkspaceInner({
     [browserTabMap, chatMessages.length],
   );
 
+  const handleProjectNameClick = useCallback(() => {
+    const now = Date.now();
+    const windowMs = 2000;
+    const requiredClicks = 5;
+    const recent = projectTitleClickTimestampsRef.current.filter(
+      (timestamp) => now - timestamp <= windowMs,
+    );
+    recent.push(now);
+    projectTitleClickTimestampsRef.current = recent;
+    if (recent.length >= requiredClicks) {
+      setDeveloperMode((previous) => !previous);
+      projectTitleClickTimestampsRef.current = [];
+    }
+  }, []);
+
 
   return (
     <QuestionActionProvider value={{ retryQuestion, busy }}>
@@ -1662,7 +1680,9 @@ function FlowWorkspaceInner({
         <FlowHeader
           projectName={project.name}
           projectPath={project.path}
+          developerMode={developerMode}
           busy={busy}
+          onProjectNameClick={handleProjectNameClick}
           onOpenSettings={() => setSettingsOpen(true)}
           onFocusChat={() => openOrFocusTab("chat")}
           onFocusGraph={() => openOrFocusTab("graph")}

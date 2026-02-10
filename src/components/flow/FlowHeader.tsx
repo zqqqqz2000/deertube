@@ -13,7 +13,9 @@ import type { Theme } from "@/lib/theme";
 interface FlowHeaderProps {
   projectName: string;
   projectPath: string;
+  developerMode: boolean;
   busy: boolean;
+  onProjectNameClick: () => void;
   onOpenSettings: () => void;
   onExit: () => void;
   onFocusChat: () => void;
@@ -25,7 +27,9 @@ interface FlowHeaderProps {
 export default function FlowHeader({
   projectName,
   projectPath,
+  developerMode,
   busy,
+  onProjectNameClick,
   onOpenSettings,
   onExit,
   onFocusChat,
@@ -42,12 +46,23 @@ export default function FlowHeader({
   };
   return (
     <header className="flex flex-wrap items-center justify-between gap-6 border-b border-border/60 bg-background/70 px-6 py-4 backdrop-blur-xl">
-      <div>
-        <div className="text-lg font-semibold text-foreground">
+      <button
+        type="button"
+        onClick={onProjectNameClick}
+        className="min-w-0 text-left"
+        aria-label="Project information"
+        title={developerMode ? "Developer mode enabled" : projectName}
+      >
+        <div className="flex items-center gap-2 text-lg font-semibold text-foreground">
           {projectName}
+          {developerMode ? (
+            <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-emerald-500">
+              Dev
+            </span>
+          ) : null}
         </div>
         <div className="text-xs text-muted-foreground">{projectPath}</div>
-      </div>
+      </button>
       <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="ghost"

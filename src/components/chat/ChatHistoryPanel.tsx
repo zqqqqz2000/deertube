@@ -41,6 +41,7 @@ import {
 } from "@/modules/chat/components/chat-toolbar";
 import {
   ArrowDown,
+  Check,
   ChevronDown,
   Globe,
   Loader2,
@@ -58,6 +59,7 @@ import {
 import type { BrowserViewSelection } from "@/types/browserview";
 
 interface ChatHistoryPanelProps {
+  developerMode?: boolean;
   messages: ChatMessage[];
   selectedResponseId: string | null;
   selectedNode?: FlowNode | null;
@@ -84,9 +86,20 @@ interface ChatHistoryPanelProps {
 interface SubagentEntry {
   kind: "call" | "result";
   label: string;
-  detail?: string;
+  compactDetail?: string;
+  fullDetail?: string;
   tone?: "warn";
 }
+
+const TOOL_DETAIL_MAX_CHARS = 120;
+
+const truncateInline = (value: string, maxChars = TOOL_DETAIL_MAX_CHARS): string => {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= maxChars) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, Math.max(0, maxChars - 3))}...`;
+};
 
 const parseToolPayload = (value: unknown): unknown => {
   if (typeof value === "string") {
@@ -157,7 +170,7 @@ const summarizeToolInput = (toolName: string | undefined, input: unknown) => {
     return `url: ${input.url}`;
   }
   const preview = JSON.stringify(input);
-  return preview.length > 160 ? `${preview.slice(0, 160)}…` : preview;
+  return preview.length > 160 ? `${preview.slice(0, 160)}...` : preview;
 };
 
 const summarizeToolOutput = (
@@ -186,6 +199,30 @@ const summarizeToolOutput = (
   return { detail: undefined };
 };
 
+const stringifyToolDetail = (value: unknown): string | undefined => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = parseToolPayload(trimmed);
+    if (parsed !== null && typeof parsed !== "string") {
+      const serialized = JSON.stringify(parsed, null, 2);
+      return serialized ?? trimmed;
+    }
+    return trimmed;
+  }
+  try {
+    const serialized = JSON.stringify(value, null, 2);
+    return serialized ?? String(value);
+  } catch {
+    return String(value);
+  }
+};
+
 const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] => {
   const entries: SubagentEntry[] = [];
   payload.messages.forEach((message) => {
@@ -207,7 +244,8 @@ const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] =
         entries.push({
           kind: "call",
           label: toolName ?? "tool",
-          detail: summarizeToolInput(toolName, part.input),
+          compactDetail: summarizeToolInput(toolName, part.input),
+          fullDetail: stringifyToolDetail(part.input),
         });
       }
       if ("output" in part && part.output !== undefined) {
@@ -215,7 +253,8 @@ const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] =
         entries.push({
           kind: "result",
           label: toolName ?? "tool",
-          detail: summary.detail,
+          compactDetail: summary.detail,
+          fullDetail: stringifyToolDetail(part.output),
           tone: summary.tone,
         });
       }
@@ -251,10 +290,8 @@ const parseGraphToolInput = (value: ChatMessage["toolInput"]): GraphToolInput | 
   return { responseId, selectedNodeId, selectedNodeSummary };
 };
 
-const getGraphToolResponseId = (value: ChatMessage["toolInput"]): string | null =>
-  parseGraphToolInput(value)?.responseId ?? null;
-
 export default function ChatHistoryPanel({
+  developerMode = false,
   messages,
   selectedResponseId,
   selectedNode,
@@ -278,6 +315,7 @@ export default function ChatHistoryPanel({
   const { scrollRef, contentRef } = useStickToBottom();
   const highlightedId = selectedResponseId;
   const ignoreHighlightRef = useRef(false);
+  const [subagentOpenById, setSubagentOpenById] = useState<Record<string, boolean>>({});
   const nodeLookup = useMemo(() => {
     const map = new Map<string, FlowNode>();
     nodes.forEach((node) => map.set(node.id, node));
@@ -352,18 +390,32 @@ export default function ChatHistoryPanel({
         .filter((item) => item.text.trim().length > 0),
     [nodes],
   );
-  const runningGraphByResponseId = useMemo(() => {
-    const running = new Set<string>();
-    messages.forEach((message) => {
-      if (message.kind !== "graph-event" || message.toolStatus !== "running") {
-        return;
+  useEffect(() => {
+    setSubagentOpenById((previous) => {
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      messages.forEach((message) => {
+        if (message.kind !== "subagent-event") {
+          return;
+        }
+        const shouldOpen = message.toolStatus === "running";
+        const prior = previous[message.id];
+        if (prior !== undefined && prior === shouldOpen) {
+          next[message.id] = prior;
+          return;
+        }
+        next[message.id] = shouldOpen;
+        changed = true;
+      });
+      const previousIds = Object.keys(previous);
+      if (previousIds.length !== Object.keys(next).length) {
+        changed = true;
       }
-      const responseId = getGraphToolResponseId(message.toolInput);
-      if (responseId) {
-        running.add(responseId);
+      if (!changed) {
+        return previous;
       }
+      return next;
     });
-    return running;
   }, [messages]);
   const handleNodeLinkClick = useCallback(
     (nodeId: string) => {
@@ -607,6 +659,34 @@ export default function ChatHistoryPanel({
     onSend();
   }, [lastFailedMessageId, onRetry, onSend, showRetry]);
 
+  const getToolStatusLabel = useCallback((status: ChatMessage["toolStatus"]) => {
+    if (status === "running") {
+      return "Running";
+    }
+    if (status === "failed") {
+      return "Failed";
+    }
+    return "Complete";
+  }, []);
+
+  const getToolCardClassName = useCallback((status: ChatMessage["toolStatus"]) => {
+    if (status === "running") {
+      return "message-marquee border-sky-400/50 bg-sky-500/5";
+    }
+    if (status === "failed") {
+      return "border-destructive/40 bg-destructive/10";
+    }
+    return "border-border/60 bg-card/25";
+  }, []);
+
+  const renderCompleteIcon = useCallback(
+    (status: ChatMessage["toolStatus"]) =>
+      status === "complete" ? (
+        <Check className="h-4 w-4 shrink-0 text-emerald-500" aria-label="Complete" />
+      ) : null,
+    [],
+  );
+
   const renderEventLogo = useCallback(
     (kind: "graph" | "subagent" | "deepsearch") => {
       if (kind === "graph") {
@@ -651,12 +731,9 @@ export default function ChatHistoryPanel({
               }
               if (item.kind === "graph") {
                 const { message: eventMessage } = item;
-                const statusLabel =
-                  eventMessage.toolStatus === "running"
-                    ? "Running"
-                    : eventMessage.toolStatus === "failed"
-                      ? "Failed"
-                      : "Complete";
+                const statusLabel = eventMessage.error
+                  ? eventMessage.error
+                  : getToolStatusLabel(eventMessage.toolStatus);
 
                 const isGraphOutputPayload = (
                   value: unknown,
@@ -713,122 +790,172 @@ export default function ChatHistoryPanel({
                   logLines.push(`Selected ${selectedLabel}`);
                 }
 
+                const compactCallParts: string[] = [];
+                if (responseId) {
+                  compactCallParts.push(`response: ${responseId.slice(0, 8)}`);
+                }
+                if (selectedLabel) {
+                  compactCallParts.push(`selected: ${selectedLabel}`);
+                }
+                const compactCall = truncateInline(compactCallParts.join(" | "));
+                const callDetail = stringifyToolDetail(eventMessage.toolInput);
+                const resultDetail = stringifyToolDetail(eventMessage.toolOutput);
                 const hasDetails =
                   logLines.length > 0 ||
                   nodesAdded !== undefined ||
                   nodesFromOutput.length > 0 ||
-                  !!explanation;
+                  !!explanation ||
+                  Boolean(callDetail) ||
+                  Boolean(resultDetail);
 
                 return (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("graph")}</ChatEventAddon>
-                    <ChatEventBody>
-                      <Collapsible defaultOpen={false}>
-                        <div className="flex items-center justify-between gap-2">
-                          <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                            Graph Update
-                          </ChatEventTitle>
+                    <ChatEventBody
+                      className={cn(
+                        "rounded-md border px-3 py-2",
+                        getToolCardClassName(eventMessage.toolStatus),
+                      )}
+                    >
+                      {developerMode ? (
+                        <Collapsible defaultOpen={eventMessage.toolStatus === "running"}>
+                          <div className="flex items-center justify-between gap-2">
+                            <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                              Graph Update
+                            </ChatEventTitle>
+                            <div className="flex items-center gap-1">
+                              {renderCompleteIcon(eventMessage.toolStatus)}
+                              {hasDetails && (
+                                <CollapsibleTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                                  >
+                                    <ChevronDown className="h-4 w-4" />
+                                  </Button>
+                                </CollapsibleTrigger>
+                              )}
+                            </div>
+                          </div>
+                          <ChatEventDescription>{statusLabel}</ChatEventDescription>
                           {hasDetails && (
-                            <CollapsibleTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
-                              >
-                                <ChevronDown className="h-4 w-4" />
-                              </Button>
-                            </CollapsibleTrigger>
-                          )}
-                        </div>
-                        <ChatEventDescription>
-                          {eventMessage.error
-                            ? eventMessage.error
-                            : statusLabel}
-                        </ChatEventDescription>
-                        {hasDetails && (
-                          <CollapsibleContent className="mt-2">
-                            <ChatEventContent className="space-y-2">
-                              {logLines.length > 0 && (
-                                <div className="space-y-1 text-[11px] text-muted-foreground">
-                                  {logLines.map((line, index) => (
-                                    <div key={`${item.id}-log-${index}`}>
-                                      {line}
+                            <CollapsibleContent className="mt-2">
+                              <ChatEventContent className="space-y-2">
+                                {logLines.length > 0 && (
+                                  <div className="space-y-1 text-[11px] text-muted-foreground">
+                                    {logLines.map((line, index) => (
+                                      <div key={`${item.id}-log-${index}`}>
+                                        {line}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {callDetail && (
+                                  <div className="rounded-md border border-border/60 bg-card/40 p-2">
+                                    <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                                      Call
                                     </div>
-                                  ))}
-                                </div>
-                              )}
-                              {nodesAdded !== undefined && (
-                                <div className="text-xs text-muted-foreground">
-                                  Added {nodesAdded} node
-                                  {nodesAdded === 1 ? "" : "s"}
-                                </div>
-                              )}
-                              {explanation && (
-                                <div className="text-xs text-muted-foreground">
-                                  {explanation}
-                                </div>
-                              )}
-                              {nodesFromOutput.length > 0 && (
-                                <div className="space-y-2">
-                                  {nodesFromOutput.map((node, index) => {
-                                    const nodeId =
-                                      typeof node.id === "string"
-                                        ? node.id
-                                        : "";
-                                    const title =
-                                      typeof node.titleShort === "string"
-                                        ? node.titleShort
-                                        : typeof node.titleLong === "string"
-                                          ? node.titleLong
-                                          : "Insight";
-                                    const excerpt =
-                                      typeof node.excerpt === "string"
-                                        ? node.excerpt
-                                        : "";
-                                    return (
-                                      <button
-                                        key={nodeId || `${item.id}-${index}`}
-                                        type="button"
-                                        className="w-full rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
-                                        onClick={() => {
-                                          if (nodeId && onFocusNode) {
-                                            onFocusNode(nodeId);
-                                          }
-                                        }}
-                                      >
-                                        <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                                          Node
-                                        </div>
-                                        <div className="text-sm font-semibold text-foreground">
-                                          {title}
-                                        </div>
-                                        {excerpt && (
-                                          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                                            {excerpt}
+                                    <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/90">
+                                      {callDetail}
+                                    </pre>
+                                  </div>
+                                )}
+                                {resultDetail && (
+                                  <div className="rounded-md border border-border/60 bg-card/40 p-2">
+                                    <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                                      Result
+                                    </div>
+                                    <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/90">
+                                      {resultDetail}
+                                    </pre>
+                                  </div>
+                                )}
+                                {nodesAdded !== undefined && (
+                                  <div className="text-xs text-muted-foreground">
+                                    Added {nodesAdded} node
+                                    {nodesAdded === 1 ? "" : "s"}
+                                  </div>
+                                )}
+                                {explanation && (
+                                  <div className="text-xs text-muted-foreground">
+                                    {explanation}
+                                  </div>
+                                )}
+                                {nodesFromOutput.length > 0 && (
+                                  <div className="space-y-2">
+                                    {nodesFromOutput.map((node, index) => {
+                                      const nodeId =
+                                        typeof node.id === "string"
+                                          ? node.id
+                                          : "";
+                                      const title =
+                                        typeof node.titleShort === "string"
+                                          ? node.titleShort
+                                          : typeof node.titleLong === "string"
+                                            ? node.titleLong
+                                            : "Insight";
+                                      const excerpt =
+                                        typeof node.excerpt === "string"
+                                          ? node.excerpt
+                                          : "";
+                                      return (
+                                        <button
+                                          key={nodeId || `${item.id}-${index}`}
+                                          type="button"
+                                          className="w-full rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
+                                          onClick={() => {
+                                            if (nodeId && onFocusNode) {
+                                              onFocusNode(nodeId);
+                                            }
+                                          }}
+                                        >
+                                          <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                                            Node
                                           </div>
-                                        )}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </ChatEventContent>
-                          </CollapsibleContent>
-                        )}
-                      </Collapsible>
+                                          <div className="text-sm font-semibold text-foreground">
+                                            {title}
+                                          </div>
+                                          {excerpt && (
+                                            <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                              {excerpt}
+                                            </div>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </ChatEventContent>
+                            </CollapsibleContent>
+                          )}
+                        </Collapsible>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between gap-2">
+                            <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                              Graph Update
+                            </ChatEventTitle>
+                            {renderCompleteIcon(eventMessage.toolStatus)}
+                          </div>
+                          <ChatEventDescription>{statusLabel}</ChatEventDescription>
+                          {compactCall && (
+                            <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                              {compactCall}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </ChatEventBody>
                   </ChatEvent>
                 );
               }
               if (item.kind === "subagent") {
                 const { message: eventMessage } = item;
-                const statusLabel =
-                  eventMessage.toolStatus === "running"
-                    ? "Running"
-                    : eventMessage.toolStatus === "failed"
-                      ? "Failed"
-                      : "Complete";
+                const statusLabel = eventMessage.error
+                  ? eventMessage.error
+                  : getToolStatusLabel(eventMessage.toolStatus);
 
                 const outputPayloadRaw = parseToolPayload(
                   eventMessage.toolOutput,
@@ -840,64 +967,107 @@ export default function ChatHistoryPanel({
                   ? buildSubagentEntries(outputPayload)
                   : [];
                 const title = eventMessage.toolName ?? outputPayload?.toolName ?? "Subagent";
-                const hasDetails = entries.length > 0;
+                const compactCallEntries = entries
+                  .filter((entry) => entry.kind === "call")
+                  .map((entry) => {
+                    const detailSource = entry.compactDetail ?? entry.fullDetail;
+                    const merged = detailSource
+                      ? `${entry.label}: ${detailSource}`
+                      : entry.label;
+                    return truncateInline(merged);
+                  });
+                const hasDetails = developerMode
+                  ? entries.length > 0
+                  : compactCallEntries.length > 0;
+                const subagentOpen =
+                  subagentOpenById[item.id] ?? eventMessage.toolStatus === "running";
 
                 return (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("subagent")}</ChatEventAddon>
-                    <ChatEventBody>
-                      <Collapsible defaultOpen={false} className="min-w-0">
+                    <ChatEventBody
+                      className={cn(
+                        "rounded-md border px-3 py-2",
+                        getToolCardClassName(eventMessage.toolStatus),
+                      )}
+                    >
+                      <Collapsible
+                        open={subagentOpen}
+                        onOpenChange={(nextOpen) => {
+                          setSubagentOpenById((previous) => ({
+                            ...previous,
+                            [item.id]: nextOpen,
+                          }));
+                        }}
+                        className="min-w-0"
+                      >
                         <div className="flex min-w-0 items-center justify-between gap-2">
                           <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
                             {title}
                           </ChatEventTitle>
-                          {hasDetails && (
-                            <CollapsibleTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
-                              >
-                                <ChevronDown className="h-4 w-4" />
-                              </Button>
-                            </CollapsibleTrigger>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {renderCompleteIcon(eventMessage.toolStatus)}
+                            {hasDetails && (
+                              <CollapsibleTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                                >
+                                  <ChevronDown className="h-4 w-4" />
+                                </Button>
+                              </CollapsibleTrigger>
+                            )}
+                          </div>
                         </div>
-                        <ChatEventDescription>
-                          {eventMessage.error
-                            ? eventMessage.error
-                            : statusLabel}
-                        </ChatEventDescription>
+                        <ChatEventDescription>{statusLabel}</ChatEventDescription>
                         {hasDetails && (
                           <CollapsibleContent className="mt-2">
                             <ChatEventContent className="space-y-2">
-                              <div className="space-y-1 text-[11px] text-muted-foreground">
-                                {entries.map((entry, index) => (
-                                  <div
-                                    key={`${item.id}-subagent-${index}`}
-                                    className={cn(
-                                      "flex min-w-0 items-start gap-2 rounded-md border border-border/60 bg-card/40 px-2 py-1",
-                                      entry.tone === "warn" &&
-                                        "border-amber-400/40 bg-amber-500/10 text-amber-700",
-                                    )}
-                                  >
-                                    <span className="shrink-0 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/60">
-                                      {entry.kind === "call" ? "Call" : "Result"}
-                                    </span>
-                                    <div className="min-w-0 flex-1">
-                                      <div className="truncate text-xs font-medium text-foreground/80">
-                                        {entry.label}
-                                      </div>
-                                      {entry.detail && (
-                                        <div className="break-words [overflow-wrap:anywhere] text-[11px] text-muted-foreground">
-                                          {entry.detail}
+                              {developerMode ? (
+                                <div className="space-y-1 text-[11px] text-muted-foreground">
+                                  {entries.map((entry, index) => {
+                                    const detail = entry.fullDetail ?? entry.compactDetail;
+                                    return (
+                                      <div
+                                        key={`${item.id}-subagent-${index}`}
+                                        className={cn(
+                                          "flex min-w-0 items-start gap-2 rounded-md border border-border/60 bg-card/40 px-2 py-1",
+                                          entry.tone === "warn" &&
+                                            "border-amber-400/40 bg-amber-500/10 text-amber-700",
+                                        )}
+                                      >
+                                        <span className="shrink-0 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/60">
+                                          {entry.kind === "call" ? "Call" : "Result"}
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                          <div className="truncate text-xs font-medium text-foreground/80">
+                                            {entry.label}
+                                          </div>
+                                          {detail && (
+                                            <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
+                                              {detail}
+                                            </pre>
+                                          )}
                                         </div>
-                                      )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="space-y-1 text-[11px] text-muted-foreground">
+                                  {compactCallEntries.map((line, index) => (
+                                    <div
+                                      key={`${item.id}-subagent-call-${index}`}
+                                      className="truncate rounded-md border border-border/60 bg-card/40 px-2 py-1"
+                                      title={line}
+                                    >
+                                      {line}
                                     </div>
-                                  </div>
-                                ))}
-                              </div>
+                                  ))}
+                                </div>
+                              )}
                             </ChatEventContent>
                           </CollapsibleContent>
                         )}
@@ -908,12 +1078,9 @@ export default function ChatHistoryPanel({
               }
               if (item.kind === "deepsearch") {
                 const { message: eventMessage } = item;
-                const statusLabel =
-                  eventMessage.toolStatus === "running"
-                    ? "Running"
-                    : eventMessage.toolStatus === "failed"
-                      ? "Failed"
-                      : "Complete";
+                const statusLabel = eventMessage.error
+                  ? eventMessage.error
+                  : getToolStatusLabel(eventMessage.toolStatus);
 
                 const outputPayloadRaw = parseToolPayload(
                   eventMessage.toolOutput,
@@ -936,117 +1103,178 @@ export default function ChatHistoryPanel({
                   typeof outputPayload?.error === "string"
                     ? outputPayload.error
                     : undefined;
+                const callDetail = stringifyToolDetail(eventMessage.toolInput);
+                const resultDetail = stringifyToolDetail(eventMessage.toolOutput);
                 const title =
                   eventMessage.toolName ??
                   outputPayload?.toolName ??
                   "DeepSearch";
                 const hasDetails =
-                  !!query || sources.length > 0 || !!conclusion;
+                  !!query ||
+                  sources.length > 0 ||
+                  !!conclusion ||
+                  Boolean(callDetail) ||
+                  Boolean(resultDetail);
+                const compactParts: string[] = [];
+                if (query) {
+                  compactParts.push(`query: ${query}`);
+                }
+                if (sources.length > 0) {
+                  compactParts.push(`sources: ${sources.length}`);
+                }
+                const compactSummary = truncateInline(compactParts.join(" | "));
 
                 return (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("deepsearch")}</ChatEventAddon>
-                    <ChatEventBody>
-                      <Collapsible defaultOpen={false} className="min-w-0">
-                        <div className="flex min-w-0 items-center justify-between gap-2">
-                          <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                            {title}
-                          </ChatEventTitle>
+                    <ChatEventBody
+                      className={cn(
+                        "rounded-md border px-3 py-2",
+                        getToolCardClassName(eventMessage.toolStatus),
+                      )}
+                    >
+                      {developerMode ? (
+                        <Collapsible defaultOpen={eventMessage.toolStatus === "running"} className="min-w-0">
+                          <div className="flex min-w-0 items-center justify-between gap-2">
+                            <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                              {title}
+                            </ChatEventTitle>
+                            <div className="flex items-center gap-1">
+                              {renderCompleteIcon(eventMessage.toolStatus)}
+                              {hasDetails && (
+                                <CollapsibleTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                                  >
+                                    <ChevronDown className="h-4 w-4" />
+                                  </Button>
+                                </CollapsibleTrigger>
+                              )}
+                            </div>
+                          </div>
+                          <ChatEventDescription>
+                            {error ? error : statusLabel}
+                          </ChatEventDescription>
                           {hasDetails && (
-                            <CollapsibleTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
-                              >
-                                <ChevronDown className="h-4 w-4" />
-                              </Button>
-                            </CollapsibleTrigger>
-                          )}
-                        </div>
-                        <ChatEventDescription>
-                          {error ? error : statusLabel}
-                        </ChatEventDescription>
-                        {hasDetails && (
-                          <CollapsibleContent className="mt-2 min-w-0">
-                            <ChatEventContent className="min-w-0 space-y-2">
-                              <div className="space-y-1 break-words text-[11px] text-muted-foreground">
-                                {query && <div className="break-words">{`Query: ${query}`}</div>}
-                                {sources.length > 0 && (
-                                  <div>{`Sources: ${sources.length}`}</div>
+                            <CollapsibleContent className="mt-2 min-w-0">
+                              <ChatEventContent className="min-w-0 space-y-2">
+                                <div className="space-y-1 break-words text-[11px] text-muted-foreground">
+                                  {query && <div className="break-words">{`Query: ${query}`}</div>}
+                                  {sources.length > 0 && (
+                                    <div>{`Sources: ${sources.length}`}</div>
+                                  )}
+                                </div>
+                                {callDetail && (
+                                  <div className="rounded-md border border-border/60 bg-card/40 p-2">
+                                    <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                                      Call
+                                    </div>
+                                    <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/90">
+                                      {callDetail}
+                                    </pre>
+                                  </div>
                                 )}
-                              </div>
-                              {conclusion && (
-                                <div className="break-words rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-                                  {conclusion}
-                                </div>
-                              )}
-                              {sources.length > 0 && (
-                                <div className="min-w-0 space-y-2">
-                                  {sources.map((source, index) => {
-                                    const url =
-                                      typeof source.url === "string"
-                                        ? source.url
-                                        : "";
-                                    const title =
-                                      typeof source.title === "string" &&
-                                      source.title.trim()
-                                        ? source.title
-                                        : url || `Source ${index + 1}`;
-                                    const snippet =
-                                      typeof source.snippet === "string"
-                                        ? source.snippet
-                                        : "";
-                                    const excerptLines = Array.isArray(source.excerpts)
-                                      ? source.excerpts
-                                          .filter(
-                                            (excerpt): excerpt is string =>
-                                              typeof excerpt === "string" &&
-                                              excerpt.trim().length > 0,
-                                          )
-                                          .map((excerpt) =>
-                                            stripLineNumberPrefix(excerpt),
-                                          )
-                                      : [];
-                                    const hoverText = excerptLines.join("\n\n").trim();
-                                    return (
-                                      <button
-                                        key={`${item.id}-source-${index}`}
-                                        type="button"
-                                        className="min-w-0 max-w-full w-full overflow-hidden rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
-                                        title={hoverText || undefined}
-                                        onClick={() => {
-                                          if (url && onReferenceClick) {
-                                            onReferenceClick(url, title);
-                                          }
-                                        }}
-                                      >
-                                        <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-                                          Source
-                                        </div>
-                                        <div className="break-words text-sm font-semibold text-foreground">
-                                          {title}
-                                        </div>
-                                        {url && (
-                                          <div className="mt-1 max-w-full truncate text-[11px] text-muted-foreground">
-                                            {url}
+                                {resultDetail && (
+                                  <div className="rounded-md border border-border/60 bg-card/40 p-2">
+                                    <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                                      Result
+                                    </div>
+                                    <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words text-[11px] text-foreground/90">
+                                      {resultDetail}
+                                    </pre>
+                                  </div>
+                                )}
+                                {conclusion && (
+                                  <div className="break-words rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+                                    {conclusion}
+                                  </div>
+                                )}
+                                {sources.length > 0 && (
+                                  <div className="min-w-0 space-y-2">
+                                    {sources.map((source, index) => {
+                                      const url =
+                                        typeof source.url === "string"
+                                          ? source.url
+                                          : "";
+                                      const sourceTitle =
+                                        typeof source.title === "string" &&
+                                        source.title.trim()
+                                          ? source.title
+                                          : url || `Source ${index + 1}`;
+                                      const snippet =
+                                        typeof source.snippet === "string"
+                                          ? source.snippet
+                                          : "";
+                                      const excerptLines = Array.isArray(source.excerpts)
+                                        ? source.excerpts
+                                            .filter(
+                                              (excerpt): excerpt is string =>
+                                                typeof excerpt === "string" &&
+                                                excerpt.trim().length > 0,
+                                            )
+                                            .map((excerpt) =>
+                                              stripLineNumberPrefix(excerpt),
+                                            )
+                                        : [];
+                                      const hoverText = excerptLines.join("\n\n").trim();
+                                      return (
+                                        <button
+                                          key={`${item.id}-source-${index}`}
+                                          type="button"
+                                          className="min-w-0 max-w-full w-full overflow-hidden rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
+                                          title={hoverText || undefined}
+                                          onClick={() => {
+                                            if (url && onReferenceClick) {
+                                              onReferenceClick(url, sourceTitle);
+                                            }
+                                          }}
+                                        >
+                                          <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                                            Source
                                           </div>
-                                        )}
-                                        {snippet && (
-                                          <div className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">
-                                            {snippet}
+                                          <div className="break-words text-sm font-semibold text-foreground">
+                                            {sourceTitle}
                                           </div>
-                                        )}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </ChatEventContent>
-                          </CollapsibleContent>
-                        )}
-                      </Collapsible>
+                                          {url && (
+                                            <div className="mt-1 max-w-full truncate text-[11px] text-muted-foreground">
+                                              {url}
+                                            </div>
+                                          )}
+                                          {snippet && (
+                                            <div className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">
+                                              {snippet}
+                                            </div>
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </ChatEventContent>
+                            </CollapsibleContent>
+                          )}
+                        </Collapsible>
+                      ) : (
+                        <>
+                          <div className="flex min-w-0 items-center justify-between gap-2">
+                            <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                              {title}
+                            </ChatEventTitle>
+                            {renderCompleteIcon(eventMessage.toolStatus)}
+                          </div>
+                          <ChatEventDescription>
+                            {error ? error : statusLabel}
+                          </ChatEventDescription>
+                          {compactSummary && (
+                            <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                              {compactSummary}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </ChatEventBody>
                   </ChatEvent>
                 );
@@ -1066,9 +1294,6 @@ export default function ChatHistoryPanel({
                 !isUser && isFailed && !displayContent?.trim()
                   ? message.error ?? "Request failed"
                   : displayContent;
-              const isGraphRunning =
-                message.role === "assistant" &&
-                runningGraphByResponseId.has(message.id);
               const content = (
                 <div
                   className={cn(
@@ -1079,7 +1304,6 @@ export default function ChatHistoryPanel({
                     isFailed &&
                       "border border-destructive/40 bg-destructive/10 text-destructive",
                     isHighlighted && "ring-2 ring-amber-400/60",
-                    isGraphRunning && "message-marquee",
                   )}
                 >
                   {isUser ? (
