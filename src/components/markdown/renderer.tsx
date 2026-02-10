@@ -183,10 +183,11 @@ export const MarkdownRenderer = memo(
       };
     }, [referenceTooltip, stopTooltipScrollAnimation]);
 
-    const resolveTooltipPosition = useCallback((target: HTMLElement) => {
-      const rect = target.getBoundingClientRect();
-      let left = rect.left;
-      let top = rect.bottom + TOOLTIP_GAP;
+    const resolveTooltipPosition = useCallback((clientX: number, clientY: number) => {
+      let left = clientX - TOOLTIP_WIDTH - TOOLTIP_GAP;
+      if (left < TOOLTIP_MARGIN) {
+        left = clientX + TOOLTIP_GAP;
+      }
       const maxLeft = window.innerWidth - TOOLTIP_WIDTH - TOOLTIP_MARGIN;
       if (left > maxLeft) {
         left = maxLeft;
@@ -194,9 +195,10 @@ export const MarkdownRenderer = memo(
       if (left < TOOLTIP_MARGIN) {
         left = TOOLTIP_MARGIN;
       }
+      let top = clientY - TOOLTIP_HEIGHT / 2;
       const maxTop = window.innerHeight - TOOLTIP_HEIGHT - TOOLTIP_MARGIN;
       if (top > maxTop) {
-        top = rect.top - TOOLTIP_HEIGHT - TOOLTIP_GAP;
+        top = maxTop;
       }
       if (top < TOOLTIP_MARGIN) {
         top = TOOLTIP_MARGIN;
@@ -221,12 +223,12 @@ export const MarkdownRenderer = memo(
     }, [clearTooltipHideTimer, stopTooltipScrollAnimation]);
 
     const showReferenceTooltip = useCallback(
-      async (uri: string, target: HTMLElement) => {
+      async (uri: string, clientX: number, clientY: number) => {
         if (!resolveReferencePreview) {
           return;
         }
         clearTooltipHideTimer();
-        const { left, top } = resolveTooltipPosition(target);
+        const { left, top } = resolveTooltipPosition(clientX, clientY);
         const cached = referencePreviewCacheRef.current.get(uri);
         if (cached !== undefined) {
           if (!cached) {
@@ -464,7 +466,11 @@ export const MarkdownRenderer = memo(
                   }
                   hoveredReferenceUriRef.current = normalizedHref;
                   clearTooltipHideTimer();
-                  void showReferenceTooltip(normalizedHref, event.currentTarget);
+                  void showReferenceTooltip(
+                    normalizedHref,
+                    event.clientX,
+                    event.clientY,
+                  );
                 }}
                 onMouseLeave={() => {
                   if (isDeertubeReference) {
