@@ -36,6 +36,33 @@ const hasNodeRefFlag = (value: unknown): boolean => {
   );
 };
 
+const excludeLineBreaksFromRanges = (
+  text: string,
+  ranges: { start: number; end: number }[],
+): { start: number; end: number }[] => {
+  const segments: { start: number; end: number }[] = [];
+  ranges.forEach((range) => {
+    let segmentStart = -1;
+    for (let index = range.start; index < range.end; index += 1) {
+      const char = text[index];
+      if (char === "\n" || char === "\r") {
+        if (segmentStart >= 0) {
+          segments.push({ start: segmentStart, end: index });
+          segmentStart = -1;
+        }
+        continue;
+      }
+      if (segmentStart < 0) {
+        segmentStart = index;
+      }
+    }
+    if (segmentStart >= 0) {
+      segments.push({ start: segmentStart, end: range.end });
+    }
+  });
+  return segments.filter((segment) => segment.end > segment.start);
+};
+
 export function rehypeHighlightExcerpt(excerpt: string) {
   const needle = excerpt.trim();
   if (!needle) {
@@ -62,7 +89,12 @@ export function rehypeHighlightExcerpt(excerpt: string) {
 
     for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex -= 1) {
       const entry = entries[entryIndex];
-      const overlaps = mergeRanges(localOverlapsForEntry(entry, ranges));
+      const overlaps = mergeRanges(
+        excludeLineBreaksFromRanges(
+          entry.node.value ?? "",
+          localOverlapsForEntry(entry, ranges),
+        ),
+      );
       if (overlaps.length === 0) {
         continue;
       }
