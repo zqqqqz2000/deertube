@@ -132,9 +132,25 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
         return match ? line.replace(lineNumberPrefix, "") : line;
       })
       .join("\n");
+  const stripMarkdownSyntax = (value: string): string => {
+    let text = value;
+    text = text.replace(/```[\s\S]*?```/g, " ");
+    text = text.replace(/`([^`]+)`/g, "$1");
+    text = text.replace(/!\[([^\]]*)\]\((?:[^)\\]|\\.)*\)/g, "$1");
+    text = text.replace(/\[([^\]]+)\]\((?:[^)\\]|\\.)*\)/g, "$1");
+    text = text.replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1");
+    text = text.replace(/\bhttps?:\/\/[^\s)]+/gi, " ");
+    text = text.replace(/(\*\*|__)(.*?)\1/g, "$2");
+    text = text.replace(/(\*|_)(.*?)\1/g, "$2");
+    text = text.replace(/~~(.*?)~~/g, "$1");
+    text = text.replace(/^>\s?/gm, "");
+    text = text.replace(/^(\s*([-*+]|\d+[.)]))\s+/gm, "");
+    return text;
+  };
   const sanitizeExcerptForMatch = (value: string): string => {
     const withoutLineNumbers = stripLineNumberPrefix(value);
-    const withoutTags = withoutLineNumbers.replace(/<[^>]+>/g, " ");
+    const withoutMarkdown = stripMarkdownSyntax(withoutLineNumbers);
+    const withoutTags = withoutMarkdown.replace(/<[^>]+>/g, " ");
     const cleanedLines = withoutTags
       .split(/\r?\n/)
       .map((line) => line.replace(/^#{1,6}\s+/, "").trim())
