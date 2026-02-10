@@ -88,12 +88,192 @@ const sanitizeReferenceHighlight = (
 function runReferenceHighlightScript(payload: { refId: number; text: string }) {
   const inlineMarkerAttribute = "data-deertube-inline-highlight";
   const styleId = "deertube-ref-highlight-style";
+  const lineNumberPrefix = /^\s*\d+\s+\|\s?/;
+  const markdownHorizontalRule = /^\s*(?:-{3,}|_{3,}|\*{3,})\s*$/;
+  const markdownSymbolSet = new Set([
+    "\\",
+    "`",
+    "*",
+    "_",
+    "~",
+    "[",
+    "]",
+    "(",
+    ")",
+    "{",
+    "}",
+    "<",
+    ">",
+    "#",
+    "+",
+    "=",
+    "|",
+    "!",
+    "-",
+  ]);
+  const punctuationMap: Record<string, string> = {
+    "’": "'",
+    "‘": "'",
+    "ʼ": "'",
+    "＇": "'",
+    "“": "\"",
+    "”": "\"",
+    "„": "\"",
+    "–": "-",
+    "—": "-",
+    "‑": "-",
+    "−": "-",
+  };
+  const stripLineNumberPrefix = (value: string): string =>
+    value
+      .split(/\r?\n/)
+      .map((line) => {
+        const match = line.match(lineNumberPrefix);
+        return match ? line.replace(lineNumberPrefix, "") : line;
+      })
+      .join("\n");
+  const sanitizeExcerptForMatch = (value: string): string => {
+    const withoutLineNumbers = stripLineNumberPrefix(value);
+    const withoutTags = withoutLineNumbers.replace(/<[^>]+>/g, " ");
+    const cleanedLines = withoutTags
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#{1,6}\s+/, "").trim())
+      .filter((line) => line.length > 0 && !markdownHorizontalRule.test(line));
+    return cleanedLines.join("\n").trim();
+  };
   const normalize = (value: string): string =>
     value.toLowerCase().replace(/\s+/g, " ").trim();
+  const collapseWhitespace = (value: string): string =>
+    value.replace(/\s+/g, " ").trim();
   const escapeRegex = (value: string): string =>
     value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const normalizeCharacter = (value: string): string =>
+    punctuationMap[value] ?? value;
+  const normalizeComparableChar = (value: string): string => {
+    const normalized = normalizeCharacter(value).normalize("NFKC").toLowerCase();
+    if (markdownSymbolSet.has(normalized)) {
+      return "";
+    }
+    if (/\p{L}|\p{N}/u.test(normalized)) {
+      return normalized;
+    }
+    if (/\s/.test(normalized)) {
+      return " ";
+    }
+    return " ";
+  };
+  const normalizeWithMap = (input: string, compact: boolean): { normalized: string; map: number[] } => {
+    const map: number[] = [];
+    let normalized = "";
+    let sawContent = false;
+    let inSpace = false;
+    for (let index = 0; index < input.length; index += 1) {
+      const char = normalizeComparableChar(input[index]);
+      if (!char) {
+        continue;
+      }
+      if (/\s/.test(char)) {
+        if (compact) {
+          continue;
+        }
+        if (!sawContent || inSpace) {
+          continue;
+        }
+        normalized += " ";
+        map.push(index);
+        inSpace = true;
+        continue;
+      }
+      sawContent = true;
+      inSpace = false;
+      normalized += char;
+      map.push(index);
+    }
+    if (!compact && normalized.endsWith(" ")) {
+      normalized = normalized.slice(0, -1);
+      map.pop();
+    }
+    return { normalized, map };
+  };
+  const normalizeNeedle = (input: string, compact: boolean): string =>
+    compact
+      ? sanitizeExcerptForMatch(input)
+        .replace(/\s+/g, "")
+        .split("")
+        .map((char) => normalizeComparableChar(char))
+        .filter((char) => char.length > 0 && !/\s/.test(char))
+        .join("")
+      : collapseWhitespace(
+        sanitizeExcerptForMatch(input)
+          .split("")
+          .map((char) => normalizeComparableChar(char))
+          .filter((char) => char.length > 0)
+          .join(""),
+      );
+  const findMappedRange = (
+    text: string,
+    candidate: string,
+    compact: boolean,
+  ): { start: number; end: number } | null => {
+    const { normalized, map } = normalizeWithMap(text, compact);
+    const target = normalizeNeedle(candidate, compact);
+    const minLength = compact ? 6 : 4;
+    if (!target || target.length < minLength) {
+      return null;
+    }
+    const matchIndex = normalized.indexOf(target);
+    if (matchIndex < 0) {
+      return null;
+    }
+    const endIndex = matchIndex + target.length - 1;
+    if (matchIndex >= map.length || endIndex >= map.length) {
+      return null;
+    }
+    return {
+      start: map[matchIndex],
+      end: map[endIndex] + 1,
+    };
+  };
+  const findRangeForCandidate = (
+    text: string,
+    candidate: string,
+  ): { start: number; end: number; phrase: string } | null => {
+    const phrase = candidate.trim();
+    if (phrase.length < 4) {
+      return null;
+    }
+    const exactRegex = new RegExp(
+      escapeRegex(phrase).replace(/\s+/g, "\\s+"),
+      "i",
+    );
+    const exactMatch = exactRegex.exec(text);
+    if (exactMatch && typeof exactMatch.index === "number") {
+      return {
+        start: exactMatch.index,
+        end: exactMatch.index + exactMatch[0].length,
+        phrase,
+      };
+    }
+    const normalized = findMappedRange(text, phrase, false);
+    if (normalized) {
+      return {
+        start: normalized.start,
+        end: normalized.end,
+        phrase,
+      };
+    }
+    const compact = findMappedRange(text, phrase, true);
+    if (compact) {
+      return {
+        start: compact.start,
+        end: compact.end,
+        phrase,
+      };
+    }
+    return null;
+  };
   const tokenized = (value: string): string[] => {
-    const normalized = normalize(value);
+    const normalized = normalize(sanitizeExcerptForMatch(value));
     const latinTokens = normalized
       .split(" ")
       .map((token) => token.trim())
@@ -102,15 +282,16 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
     return Array.from(new Set([...latinTokens, ...cjkTokens])).slice(0, 36);
   };
   const extractPhrases = (excerpt: string): string[] => {
-    const lines = excerpt
+    const normalizedExcerpt = sanitizeExcerptForMatch(excerpt);
+    const lines = normalizedExcerpt
       .split(/\r?\n+/)
       .map((line) => line.trim())
       .filter((line) => line.length >= 8);
-    const sentenceParts = excerpt
+    const sentenceParts = normalizedExcerpt
       .split(/[。！？!?;；]+/)
       .map((part) => part.trim())
       .filter((part) => part.length >= 10);
-    const merged = [excerpt.trim(), ...lines, ...sentenceParts]
+    const merged = [normalizedExcerpt.trim(), ...lines, ...sentenceParts]
       .map((item) => item.replace(/\s+/g, " ").trim())
       .filter((item) => item.length >= 8);
     const unique = Array.from(new Set(merged));
@@ -176,21 +357,12 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
   };
   const findRangeInText = (
     text: string,
-    candidates: string[],
+  candidates: string[],
   ): { start: number; end: number; phrase: string } | null => {
     for (const candidate of candidates) {
-      const phrase = candidate.trim();
-      if (phrase.length < 4) {
-        continue;
-      }
-      const regex = new RegExp(escapeRegex(phrase).replace(/\s+/g, "\\s+"), "i");
-      const match = regex.exec(text);
-      if (match && typeof match.index === "number") {
-        return {
-          start: match.index,
-          end: match.index + match[0].length,
-          phrase,
-        };
+      const match = findRangeForCandidate(text, candidate);
+      if (match) {
+        return match;
       }
     }
     return null;
@@ -248,7 +420,8 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
   };
 
   const excerpt = typeof payload.text === "string" ? payload.text : "";
-  const targetText = normalize(excerpt);
+  const sanitizedExcerpt = sanitizeExcerptForMatch(excerpt);
+  const targetText = normalize(sanitizedExcerpt || excerpt);
   if (!targetText || !document.body) {
     return { ok: false, reason: "empty-target" };
   }
@@ -256,7 +429,7 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
   ensureStyle();
   clearExistingHighlights();
 
-  const tokens = tokenized(excerpt);
+  const tokens = tokenized(sanitizedExcerpt || excerpt);
   const primarySelector = "p,li,blockquote,pre,code,h1,h2,h3,h4,h5,h6,td,th";
   const fallbackSelector = "article,section,main,div";
 
@@ -334,7 +507,7 @@ function runReferenceHighlightScript(payload: { refId: number; text: string }) {
     return { ok: false, reason: "empty-element-text" };
   }
 
-  const phraseCandidates = extractPhrases(excerpt);
+  const phraseCandidates = extractPhrases(sanitizedExcerpt || excerpt);
   const tokenCandidates = tokens.sort((a, b) => b.length - a.length);
   const range =
     findRangeInText(combinedText, phraseCandidates) ??
