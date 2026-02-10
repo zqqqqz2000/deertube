@@ -6,18 +6,47 @@ import {
   type LanguageModel,
 } from "ai";
 import { z } from "zod";
-import type { LineRange } from "../../../../shared/deepresearch";
+import type { LineSelection } from "../../../../shared/deepresearch";
 import {
   EXTRACT_SUBAGENT_SYSTEM,
   ExtractSubagentFinalSchema,
 } from "../schemas";
 import {
-  buildLineNumberedContentsFromRanges,
+  buildSelectionsFromBounds,
   clampText,
   formatLineNumbered,
   summarizeContentsPreview,
-  summarizeRanges,
+  summarizeSelections,
 } from "../helpers";
+
+const EXTRACT_VIEWPOINT_MIN = 50;
+const EXTRACT_VIEWPOINT_MAX = 100;
+const EXTRACT_VIEWPOINT_FILLER =
+  "This source needs additional validation before it can support a reliable claim for the query.";
+const EXTRACT_VIEWPOINT_FALLBACK =
+  "Extraction halted early; this source cannot yet provide a reliable, query-grounded viewpoint.";
+
+const normalizeExtractViewpoint = (value: string): string => {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (
+    compact.length >= EXTRACT_VIEWPOINT_MIN &&
+    compact.length <= EXTRACT_VIEWPOINT_MAX
+  ) {
+    return compact;
+  }
+  if (compact.length > EXTRACT_VIEWPOINT_MAX) {
+    return compact.slice(0, EXTRACT_VIEWPOINT_MAX).trimEnd();
+  }
+  const expanded =
+    compact.length > 0
+      ? `${compact} ${EXTRACT_VIEWPOINT_FILLER}`
+      : EXTRACT_VIEWPOINT_FALLBACK;
+  const normalizedExpanded = expanded.replace(/\s+/g, " ").trim();
+  if (normalizedExpanded.length <= EXTRACT_VIEWPOINT_MAX) {
+    return normalizedExpanded;
+  }
+  return normalizedExpanded.slice(0, EXTRACT_VIEWPOINT_MAX).trimEnd();
+};
 
 export async function runExtractSubagent({
   query,
@@ -30,10 +59,10 @@ export async function runExtractSubagent({
   model: LanguageModel;
   abortSignal?: AbortSignal;
 }): Promise<{
-  ranges: LineRange[];
+  viewpoint: string;
+  selections: LineSelection[];
   broken: boolean;
   inrelavate: boolean;
-  contents: string[];
   error?: string;
   rawModelOutput: string;
 }> {
@@ -54,10 +83,10 @@ export async function runExtractSubagent({
       lineCount,
     });
     return {
-      ranges: [],
+      viewpoint: normalizeExtractViewpoint(EXTRACT_VIEWPOINT_FALLBACK),
+      selections: [],
       broken: true,
       inrelavate: false,
-      contents: [],
       rawModelOutput: "Empty markdown input.",
     };
   }
@@ -198,7 +227,7 @@ export async function runExtractSubagent({
   });
 
   const readLinesTool = tool({
-    description: "Read content by a specified inclusive line range.",
+    description: "Read content by a specified inclusive line span.",
     inputSchema: z
       .object({
         start: z
@@ -262,35 +291,37 @@ export async function runExtractSubagent({
     description:
       "Write the final extract result payload. Call this once after exploration is complete.",
     inputSchema: ExtractSubagentFinalSchema.describe(
-      "Final extract result payload with flags, line ranges, and optional error.",
+      "Final extract result payload with flags, selections, and optional error.",
     ),
     outputSchema: z
       .object({
         recorded: z.literal(true),
         callCount: z.number().int().positive(),
-        rangeCount: z.number().int().nonnegative(),
+        selectionCount: z.number().int().nonnegative(),
       })
       .describe("Acknowledgement for stored extract result payload."),
-    execute: ({ broken, inrelavate, ranges, error }) => {
+    execute: ({ viewpoint, broken, inrelavate, selections, error }) => {
       writeExtractResultCallCount += 1;
       collectedExtractResult = {
+        viewpoint,
         broken,
         inrelavate,
-        ranges,
+        selections,
         error,
       };
       console.log("[subagent.extract.agent.writeExtractResult]", {
         callCount: writeExtractResultCallCount,
+        viewpoint: clampText(normalizeExtractViewpoint(viewpoint), 120),
         broken,
         inrelavate,
-        rangeCount: ranges.length,
-        rangeSummary: summarizeRanges(ranges),
+        selectionCount: selections.length,
+        selectionSummary: summarizeSelections(selections),
         error: typeof error === "string" ? clampText(error, 220) : undefined,
       });
       return {
         recorded: true,
         callCount: writeExtractResultCallCount,
-        rangeCount: ranges.length,
+        selectionCount: selections.length,
       };
     },
   });
@@ -302,7 +333,9 @@ export async function runExtractSubagent({
     "- Use grep/readLines as needed to locate evidence.",
     "- For grep, prefer returning around 5-10 matches per call unless you need broader coverage.",
     "- Efficiency: if multiple checks are independent, prefer issuing multiple tool calls in the same round.",
-    "- When done, call `writeExtractResult` exactly once with { broken, inrelavate, ranges, error? }.",
+    "- You must provide one viewpoint between 50 and 100 characters.",
+    "- No matter what, you must call `writeExtractResult`, even when selections is empty.",
+    "- When done, call `writeExtractResult` exactly once with { viewpoint, broken, inrelavate, selections, error? }.",
     "- Do not return final JSON in plain text.",
     "",
     "Line-numbered markdown:",
@@ -315,7 +348,7 @@ export async function runExtractSubagent({
     tooLarge,
     previewLines: previewLines.length,
   });
-  const result = await generateText({
+  let result = await generateText({
     model,
     system: EXTRACT_SUBAGENT_SYSTEM,
     prompt: extractSubagentPrompt,
@@ -331,6 +364,48 @@ export async function runExtractSubagent({
     ],
     abortSignal,
   });
+  if (!collectedExtractResult) {
+    const retryPrompt = [
+      extractSubagentPrompt,
+      "",
+      "Continuation requirement (mandatory):",
+      "- You did not call `writeExtractResult` in the previous attempt.",
+      "- Call `writeExtractResult` now, even if selections is empty.",
+      "- Keep viewpoint length between 50 and 100 characters.",
+      "- Do not output plain-text JSON.",
+      "",
+      "Previous assistant output (context):",
+      result.text.length > 0 ? clampText(result.text, 3200) : "(empty)",
+    ].join("\n");
+    console.warn("[subagent.extract.agent.retry.writeExtractResult]", {
+      query: clampText(query, 160),
+      firstAttemptRawLength: result.text.length,
+      steps: result.steps.length,
+    });
+    const retryResult = await generateText({
+      model,
+      system: EXTRACT_SUBAGENT_SYSTEM,
+      prompt: retryPrompt,
+      tools: {
+        grep: grepTool,
+        readLines: readLinesTool,
+        writeExtractResult: writeExtractResultTool,
+      },
+      toolChoice: "auto",
+      stopWhen: [
+        hasToolCall("writeExtractResult"),
+        stepCountIs(EXTRACT_SUBAGENT_MAX_STEPS),
+      ],
+      abortSignal,
+    });
+    result = {
+      ...retryResult,
+      text:
+        result.text.length > 0
+          ? `${result.text}\n\n${retryResult.text}`
+          : retryResult.text,
+    };
+  }
   console.log("[subagent.extract.agent.raw]", {
     query: clampText(query, 160),
     rawLength: result.text.length,
@@ -346,46 +421,53 @@ export async function runExtractSubagent({
   const parsed =
     collectedExtractResult ??
     ({
+      viewpoint: EXTRACT_VIEWPOINT_FALLBACK,
       broken: true,
       inrelavate: false,
-      ranges: [],
+      selections: [],
       error: "extract subagent did not call writeExtractResult before finishing.",
     } satisfies z.infer<typeof ExtractSubagentFinalSchema>);
+  const viewpoint = normalizeExtractViewpoint(parsed.viewpoint);
   const broken = parsed.broken;
   const inrelavate = parsed.inrelavate;
-  const parsedRanges = parsed.ranges
-    .map((range) => {
-      const start = Math.max(1, Math.min(lineCount, Math.floor(range.start)));
-      const end = Math.max(1, Math.min(lineCount, Math.floor(range.end)));
+  const parsedSelectionBounds = parsed.selections
+    .map((selection) => {
+      const start = Math.max(1, Math.min(lineCount, Math.floor(selection.start)));
+      const end = Math.max(1, Math.min(lineCount, Math.floor(selection.end)));
       if (end < start) {
         return null;
       }
       return { start, end };
     })
-    .filter((range): range is LineRange => range !== null);
+    .filter(
+      (selection): selection is Pick<LineSelection, "start" | "end"> =>
+        selection !== null,
+    );
   const errorMessage =
     typeof parsed.error === "string" && parsed.error.trim().length > 0
       ? parsed.error.trim()
       : undefined;
-  const ranges = inrelavate ? [] : parsedRanges;
-  const numberedContents = buildLineNumberedContentsFromRanges(lines, ranges);
+  const selectionBounds = inrelavate ? [] : parsedSelectionBounds;
+  const selections = buildSelectionsFromBounds(lines, selectionBounds);
   console.log("[subagent.extract.agent.parsed]", {
     query: clampText(query, 160),
+    viewpoint: clampText(viewpoint, 120),
     broken,
     inrelavate,
     error: errorMessage ? clampText(errorMessage, 240) : undefined,
-    ranges: ranges.length,
-    rangeSummary: summarizeRanges(ranges),
-    contents: numberedContents.length,
-    contentsPreview: summarizeContentsPreview(numberedContents),
+    selections: selections.length,
+    selectionSummary: summarizeSelections(selections),
+    selectionsPreview: summarizeContentsPreview(
+      selections.map((selection) => selection.text),
+    ),
     rawModelOutputPreview: clampText(result.text, 220),
   });
   return {
-    ranges,
+    viewpoint,
+    selections,
     broken,
     inrelavate,
     error: errorMessage,
-    contents: numberedContents,
     rawModelOutput: result.text,
   };
 }

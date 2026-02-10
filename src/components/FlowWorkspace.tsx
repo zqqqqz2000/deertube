@@ -138,6 +138,16 @@ const isHttpUrl = (value: string) => {
   }
 };
 
+const stripLineNumberPrefix = (value: string): string =>
+  value
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\d+\s+\|\s?(.*)$/);
+      return match ? match[1] : line;
+    })
+    .join("\n")
+    .trim();
+
 const normalizeBrowserLabel = (label?: string) => {
   const trimmed = label?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
@@ -1093,7 +1103,7 @@ function FlowWorkspaceInner({
       return {
         title: reference.title,
         url: reference.url,
-        text: reference.text,
+        text: stripLineNumberPrefix(reference.text),
         startLine: reference.startLine,
         endLine: reference.endLine,
       };

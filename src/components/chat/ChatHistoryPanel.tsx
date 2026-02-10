@@ -99,6 +99,16 @@ const parseToolPayload = (value: unknown): unknown => {
   return value ?? null;
 };
 
+const stripLineNumberPrefix = (value: string): string =>
+  value
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\d+\s+\|\s?(.*)$/);
+      return match ? match[1] : line;
+    })
+    .join("\n")
+    .trim();
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   isJsonObject(value);
 
@@ -161,12 +171,12 @@ const summarizeToolOutput = (
     return { detail: `results: ${output.results.length}` };
   }
   if (toolName === "extract") {
-    const excerpts = Array.isArray(output.excerpts) ? output.excerpts.length : undefined;
-    const ranges = Array.isArray(output.ranges) ? output.ranges.length : undefined;
+    const selections = Array.isArray(output.selections)
+      ? output.selections.length
+      : undefined;
     const broken = output.broken === true;
     const detailParts: string[] = [];
-    if (typeof excerpts === "number") detailParts.push(`excerpts: ${excerpts}`);
-    if (typeof ranges === "number") detailParts.push(`ranges: ${ranges}`);
+    if (typeof selections === "number") detailParts.push(`selections: ${selections}`);
     if (broken) detailParts.push("broken");
     return {
       detail: detailParts.length > 0 ? detailParts.join(", ") : undefined,
@@ -988,11 +998,24 @@ export default function ChatHistoryPanel({
                                       typeof source.snippet === "string"
                                         ? source.snippet
                                         : "";
+                                    const excerptLines = Array.isArray(source.excerpts)
+                                      ? source.excerpts
+                                          .filter(
+                                            (excerpt): excerpt is string =>
+                                              typeof excerpt === "string" &&
+                                              excerpt.trim().length > 0,
+                                          )
+                                          .map((excerpt) =>
+                                            stripLineNumberPrefix(excerpt),
+                                          )
+                                      : [];
+                                    const hoverText = excerptLines.join("\n\n").trim();
                                     return (
                                       <button
                                         key={`${item.id}-source-${index}`}
                                         type="button"
                                         className="min-w-0 max-w-full w-full overflow-hidden rounded-md border border-border/70 bg-card/60 px-3 py-2 text-left text-xs transition hover:border-border hover:bg-card/80"
+                                        title={hoverText || undefined}
                                         onClick={() => {
                                           if (url && onReferenceClick) {
                                             onReferenceClick(url, title);

@@ -32,7 +32,7 @@ export function createTools(
   return {
     deepSearch: tool({
       description:
-        "Run deep research via network search and a subagent, returning structured references and source links. For citations, use references[].uri as inline markdown links like [1](deertube://...).",
+        "Run deep research via network search and a subagent, returning structured references for citation. For citations, use references[].uri as inline markdown links like [1](deertube://...).",
       inputSchema: z.object({
         query: z
           .string()
@@ -48,49 +48,6 @@ export function createTools(
           .string()
           .optional()
           .describe("Optional alias of conclusion for compatibility."),
-        sources: z.array(
-          z.object({
-            url: z.string().describe("Source page URL."),
-            title: z
-              .string()
-              .optional()
-              .describe("Source title, if available."),
-            snippet: z
-              .string()
-              .optional()
-              .describe("Short source summary or preview text."),
-            excerpts: z
-              .array(
-                z
-                  .string()
-                  .describe("Evidence excerpt used for synthesis/citation."),
-              )
-              .optional()
-              .describe("Selected evidence excerpts from the source page."),
-            referenceIds: z
-              .array(
-                z
-                  .number()
-                  .int()
-                  .positive()
-                  .describe("Reference ID pointing into references list."),
-              )
-              .optional()
-              .describe("Reference IDs tied to this source."),
-            viewpoint: z
-              .string()
-              .optional()
-              .describe("Claim/viewpoint this source supports."),
-            content: z
-              .string()
-              .optional()
-              .describe("Short evidence summary aligned with the viewpoint."),
-            error: z
-              .string()
-              .optional()
-              .describe("Extraction error for this source when retrieval failed."),
-          }).describe("Aggregated source entry used by deep search output."),
-        ).describe("Only source pages that are actually used by returned references."),
         references: z.array(
           z.object({
             refId: z
@@ -107,6 +64,9 @@ export function createTools(
               .string()
               .optional()
               .describe("Page title for display."),
+            viewpoint: z
+              .string()
+              .describe("Viewpoint this reference supports."),
             startLine: z
               .number()
               .int()
@@ -149,7 +109,6 @@ export function createTools(
         return {
           conclusion: result.conclusion,
           answer: result.conclusion,
-          sources: result.sources,
           references: result.references,
           searchId: result.searchId,
           projectId: result.projectId,

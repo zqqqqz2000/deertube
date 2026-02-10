@@ -40,7 +40,6 @@ export interface DeepSearchSourcePayload {
   excerpts?: string[]
   referenceIds?: number[]
   viewpoint?: string
-  content?: string
   error?: string
 }
 
@@ -50,6 +49,7 @@ export interface DeepSearchReferencePayload {
   pageId: string
   url: string
   title?: string
+  viewpoint: string
   startLine: number
   endLine: number
   text: string

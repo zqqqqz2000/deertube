@@ -1,7 +1,6 @@
 import type { LanguageModel, UIMessage, UITools } from "ai";
 import type {
   DeepResearchPersistenceAdapter,
-  LineRange,
   LineSelection,
 } from "../../../shared/deepresearch";
 
@@ -23,7 +22,6 @@ export interface DeepSearchSource {
   excerpts?: string[];
   referenceIds?: number[];
   viewpoint?: string;
-  content?: string;
   error?: string;
 }
 
@@ -33,6 +31,7 @@ export interface DeepSearchReference {
   pageId: string;
   url: string;
   title?: string;
+  viewpoint: string;
   startLine: number;
   endLine: number;
   text: string;
@@ -83,21 +82,17 @@ export interface ToolConfig {
 export interface SearchResult {
   url: string;
   title?: string;
-  viewpoint?: string;
+  viewpoint: string;
   content?: string;
   pageId?: string;
   lineCount?: number;
-  ranges: LineRange[];
   selections: LineSelection[];
-  contents: string[];
   broken?: boolean;
   inrelavate?: boolean;
   error?: string;
 }
 
 export interface ExtractedEvidence {
-  ranges: LineRange[];
   selections: LineSelection[];
-  contents: Set<string>;
-  contentsByRange: Map<string, string>;
+  contentsBySelection: Map<string, string>;
 }

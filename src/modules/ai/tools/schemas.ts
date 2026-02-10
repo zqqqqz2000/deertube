@@ -55,7 +55,7 @@ export const TavilyResponseSchema = z
   })
   .describe("Tavily search response payload.");
 
-export const LineRangeSchema = z
+export const LineSelectionBoundsSchema = z
   .object({
     start: z
       .number()
@@ -68,17 +68,24 @@ export const LineRangeSchema = z
       .positive()
       .describe("Inclusive 1-based end line number."),
   })
-  .describe("Inclusive line range over line-numbered markdown.");
+  .describe("Inclusive line span over line-numbered markdown.");
 
-export const LineSelectionSchema = LineRangeSchema.extend({
+export const LineSelectionSchema = LineSelectionBoundsSchema.extend({
   text: z
     .string()
     .min(1)
-    .describe("Raw markdown text cut from the corresponding line range."),
-}).describe("Extracted segment that includes line range and raw text.");
+    .describe(
+      "Line-numbered markdown text cut from the corresponding selection span.",
+    ),
+}).describe("Extracted segment that includes line metadata and text.");
 
 export const ExtractSubagentFinalSchema = z
   .object({
+    viewpoint: z
+      .string()
+      .min(50)
+      .max(100)
+      .describe("Single concise viewpoint (50-100 characters)."),
     broken: z
       .boolean()
       .default(false)
@@ -89,10 +96,10 @@ export const ExtractSubagentFinalSchema = z
       .boolean()
       .default(false)
       .describe("Whether the page is unrelated to the query."),
-    ranges: z
-      .array(LineRangeSchema)
+    selections: z
+      .array(LineSelectionBoundsSchema)
       .default([])
-      .describe("Relevant inclusive line ranges."),
+      .describe("Relevant inclusive line spans."),
     error: z
       .string()
       .optional()
@@ -108,20 +115,20 @@ export const SearchSubagentFinalItemSchema = z
       .describe("Source URL when available. Can be omitted for global errors."),
     viewpoint: z
       .string()
-      .default("")
+      .min(1)
       .describe(
-        "Specific claim/viewpoint this evidence supports in the final answer.",
+        "Specific claim/viewpoint this evidence supports in the final answer (required).",
       ),
     content: z
       .string()
       .default("")
       .describe(
-        "Short evidence summary/quote aligned with the selected ranges.",
+        "Short evidence summary/quote aligned with selected spans.",
       ),
-    ranges: z
-      .array(LineRangeSchema)
+    selections: z
+      .array(LineSelectionSchema)
       .default([])
-      .describe("Relevant inclusive line ranges for this URL."),
+      .describe("Relevant line selections for this URL."),
     broken: z
       .boolean()
       .optional()
@@ -165,6 +172,7 @@ export const SEARCH_SUBAGENT_SYSTEM = [
   "- Do not let off-topic result trends redirect your judgment. If results drift from the intended topic, reformulate and continue searching.",
   "- If one search is insufficient, iterate with alternative keywords, synonyms, and related concepts.",
   "- If no reasonable results are found, proactively try multiple new keyword combinations before concluding failure.",
+  "- You may launch additional focused search/extract rounds based on collected evidence to fill gaps or verify conflicts, within budget.",
   "- Efficiency rule: when independent actions are available, prefer calling multiple tools in the same round to maximize parallelism.",
   "Workflow:",
   "1) Call search to gather candidates (<=6 per query, multiple query rounds allowed).",
@@ -172,42 +180,48 @@ export const SEARCH_SUBAGENT_SYSTEM = [
   "3) Extraction is mandatory. Do not stop after search-only results.",
   "4) First decide your answer claims; then choose only the smallest sufficient evidence for each claim.",
   "5) Finalization is mandatory: call writeResults exactly once with { results, errors }.",
-  "6) In writeResults input, each result item should include: url, viewpoint, content, ranges.",
-  "7) `extract` returns line-numbered contents. All chosen ranges must map to those numbered lines.",
-  "8) Prefer small precise spans (typically 2-12 lines). Avoid broad/full-page ranges unless strictly necessary.",
-  "9) The same source can support multiple claims: keep multiple ranges for one URL when needed.",
-  "10) Every returned range must come from the corresponding extract result for the same URL.",
-  "11) If a URL is unrelated, mark `inrelavate=true` and return `ranges=[]` for that URL.",
-  "12) If all attempted search calls fail, or all attempted extract calls fail, put those reasons in `errors`.",
-  "13) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
-  "14) Strict final-step rule: your very last action must be exactly one writeResults call.",
-  "15) If writeResults is omitted at the end, the run is treated as failed.",
+  "6) In writeResults input, each result item should include: url, viewpoint, content, selections.",
+  "7) `extract` returns line-numbered selections. All chosen selections must map to those numbered lines.",
+  "8) Prefer small precise spans (typically 2-12 lines). Avoid broad/full-page spans unless strictly necessary.",
+  "9) The same source can support multiple claims: keep multiple selections for one URL when needed.",
+  "10) Every returned selection must come from the corresponding extract result for the same URL.",
+  "11) If a URL is unrelated, mark `inrelavate=true` and return `selections=[]` for that URL.",
+  "12) Merge duplicate/equivalent viewpoints into a single consolidated result item.",
+  "13) If all attempted search calls fail, or all attempted extract calls fail, put those reasons in `errors`.",
+  "14) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
+  "15) Strict final-step rule: your very last action must be exactly one writeResults call.",
+  "16) If writeResults is omitted at the end, the run is treated as failed.",
   "Output rule: finalize via writeResults only. Do not output final JSON in plain text.",
 ].join("\n");
 
 export const EXTRACT_SUBAGENT_SYSTEM = [
   "You are the Extract subagent.",
   "Input: query + line-numbered markdown.",
-  "Goal: select the most relevant line ranges for the query.",
+  "Goal: select the most relevant line spans for the query.",
   "Available tools: grep, readLines, writeExtractResult.",
-  "Output must be submitted via writeExtractResult({ broken, inrelavate, ranges, error? }).",
+  "Output must be submitted via writeExtractResult({ viewpoint, broken, inrelavate, selections, error? }).",
+  "You must provide one `viewpoint` with 50-100 characters.",
   "Rules:",
   "- Line numbers start from 1. start/end are inclusive.",
-  "- Keep ranges coherent and avoid oversized spans.",
-  "- If content is unavailable or clearly corrupted, return broken=true and ranges=[].",
-  "- If the page is unrelated to query, return inrelavate=true and ranges=[].",
+  "- No matter what, call writeExtractResult; use selections=[] when needed.",
+  "- Keep selected spans coherent and avoid oversized spans.",
+  "- If content is unavailable or clearly corrupted, return broken=true and selections=[].",
+  "- If the page is unrelated to query, return inrelavate=true and selections=[].",
   "- When using grep, prefer 5-10 matches per call unless a wider sweep is necessary.",
-  "- Efficiency rule: when inspecting independent hypotheses/ranges, prefer issuing multiple tool calls in the same round when possible.",
-  "- For large markdown, prioritize the grep/readLines tools to explore before deciding ranges.",
+  "- Efficiency rule: when inspecting independent hypotheses/spans, prefer issuing multiple tool calls in the same round when possible.",
+  "- For large markdown, prioritize the grep/readLines tools to explore before deciding selections.",
+  "- Keep `viewpoint` specific and evidence-grounded, with length between 50 and 100 characters.",
   "Finalize by calling writeExtractResult exactly once.",
 ].join("\n");
 
 export const DEEPSEARCH_SYSTEM = [
   "You are a deep-research assistant.",
-  "You are given numbered references.",
+  "You are given numbered references built from source excerpts.",
+  "Use those numbered references as the evidence context for your answer.",
   "Answer in the same language as the user's question.",
-  "Write a concise answer and cite evidence inline using bracket indices like [1] and [2].",
+  "Write a concise answer and cite evidence inline using markdown links like [1](deertube://...).",
   "If there are zero references, do not output citation markers like [1] or [2], and do not output a `References` section.",
   "Only cite provided indices, do not invent new indices, and do not output footnotes.",
-  "Do not group citations as [1,2] or [1-2]. Write separate markers like [1], [2].",
+  "Do not group citations as [1,2] or [1-2]. Always write separate citations.",
+  "Every citation must use the deertube URI for that reference ID; do not use external URLs in citation links.",
 ].join("\n");

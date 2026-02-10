@@ -3,7 +3,6 @@ import type { JsonObject, JsonValue } from "../../../types/json";
 import { isJsonObject } from "../../../types/json";
 import {
   buildDeepResearchRefUri,
-  type LineRange,
   type LineSelection,
 } from "../../../shared/deepresearch";
 import { TavilyResponseSchema, type TavilySearchResult } from "./schemas";
@@ -14,6 +13,8 @@ import type {
   SearchResult,
   SubagentUIMessage,
 } from "./types";
+
+type LineSelectionBounds = Pick<LineSelection, "start" | "end">;
 
 export const parseJson = (raw: string): JsonValue =>
   JSON.parse(raw) as JsonValue;
@@ -115,25 +116,6 @@ export const collectToolOutputs = (
   });
 };
 
-export const normalizeRanges = (
-  ranges: JsonValue | null,
-  maxLine: number,
-): { start: number; end: number }[] => {
-  if (!Array.isArray(ranges)) return [];
-  return ranges
-    .map((item) => {
-      if (!isRecord(item)) return null;
-      const start = Number(item.start);
-      const end = Number(item.end);
-      if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-      const clampedStart = Math.max(1, Math.min(maxLine, Math.floor(start)));
-      const clampedEnd = Math.max(1, Math.min(maxLine, Math.floor(end)));
-      if (clampedEnd < clampedStart) return null;
-      return { start: clampedStart, end: clampedEnd };
-    })
-    .filter((item): item is { start: number; end: number } => item !== null);
-};
-
 export const splitLines = (markdown: string): string[] =>
   markdown.split(/\r?\n/);
 
@@ -151,45 +133,26 @@ export const formatLineNumbered = (
     .join("\n");
 };
 
-export const buildSelectionsFromRanges = (
+export const buildSelectionsFromBounds = (
   lines: string[],
-  ranges: LineRange[],
+  bounds: LineSelectionBounds[],
 ): LineSelection[] => {
   const unique = new Map<string, LineSelection>();
-  ranges.forEach((range) => {
-    const text = lines
-      .slice(range.start - 1, range.end)
-      .join("\n")
-      .trim();
-    if (!text) {
-      return;
-    }
-    const key = `${range.start}:${range.end}:${text}`;
-    unique.set(key, {
-      start: range.start,
-      end: range.end,
-      text,
-    });
-  });
-  return Array.from(unique.values());
-};
-
-export const buildLineNumberedContentsFromRanges = (
-  lines: string[],
-  ranges: LineRange[],
-): string[] => {
-  const unique = new Map<string, string>();
-  ranges.forEach((range) => {
-    const slice = lines.slice(range.start - 1, range.end);
+  bounds.forEach((selection) => {
     const text = formatLineNumbered(
-      slice,
-      range.start - 1,
+      lines.slice(selection.start - 1, selection.end),
+      selection.start - 1,
       lines.length,
     ).trim();
     if (!text) {
       return;
     }
-    unique.set(`${range.start}:${range.end}`, text);
+    const key = `${selection.start}:${selection.end}:${text}`;
+    unique.set(key, {
+      start: selection.start,
+      end: selection.end,
+      text,
+    });
   });
   return Array.from(unique.values());
 };
@@ -198,38 +161,15 @@ export const parseLineSelections = (value: unknown): LineSelection[] => {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .map((entry) => {
-      if (!isRecord(entry)) {
-        return null;
-      }
-      const start = Number(entry.start);
-      const end = Number(entry.end);
-      const text = typeof entry.text === "string" ? entry.text.trim() : "";
-      if (!Number.isFinite(start) || !Number.isFinite(end) || !text) {
-        return null;
-      }
-      return {
-        start: Math.max(1, Math.floor(start)),
-        end: Math.max(1, Math.floor(end)),
-        text,
-      } satisfies LineSelection;
-    })
-    .filter((entry): entry is LineSelection => entry !== null);
-};
-
-export const parseLineRanges = (value: unknown): LineRange[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const dedupe = new Map<string, LineRange>();
+  const dedupe = new Map<string, LineSelection>();
   value.forEach((entry) => {
     if (!isRecord(entry)) {
       return;
     }
     const start = Number(entry.start);
     const end = Number(entry.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    const text = typeof entry.text === "string" ? entry.text.trim() : "";
+    if (!Number.isFinite(start) || !Number.isFinite(end) || !text) {
       return;
     }
     const normalizedStart = Math.max(1, Math.floor(start));
@@ -237,25 +177,29 @@ export const parseLineRanges = (value: unknown): LineRange[] => {
     if (normalizedEnd < normalizedStart) {
       return;
     }
-    const range: LineRange = {
+    const selection: LineSelection = {
       start: normalizedStart,
       end: normalizedEnd,
+      text,
     };
-    dedupe.set(`${range.start}:${range.end}`, range);
+    dedupe.set(
+      `${selection.start}:${selection.end}:${selection.text}`,
+      selection,
+    );
   });
   return Array.from(dedupe.values());
 };
 
-const isRangeContainedBy = (
-  candidate: LineRange,
-  container: LineRange,
+const isSelectionContainedBy = (
+  candidate: LineSelectionBounds,
+  container: LineSelectionBounds,
 ): boolean =>
   candidate.start >= container.start && candidate.end <= container.end;
 
-export const intersectRanges = (
-  left: LineRange,
-  right: LineRange,
-): LineRange | null => {
+export const intersectSelectionBounds = (
+  left: LineSelectionBounds,
+  right: LineSelectionBounds,
+): LineSelectionBounds | null => {
   const start = Math.max(left.start, right.start);
   const end = Math.min(left.end, right.end);
   if (end < start) {
@@ -264,22 +208,22 @@ export const intersectRanges = (
   return { start, end };
 };
 
-export const deriveNumberedContentForRange = (
-  target: LineRange,
-  contentsByRange: Map<string, string>,
+export const deriveNumberedContentForSelection = (
+  target: LineSelectionBounds,
+  contentsBySelection: Map<string, string>,
 ): string | undefined => {
-  const exact = contentsByRange.get(`${target.start}:${target.end}`);
+  const exact = contentsBySelection.get(`${target.start}:${target.end}`);
   if (exact && exact.trim().length > 0) {
     return exact.trim();
   }
-  for (const [key, content] of contentsByRange.entries()) {
+  for (const [key, content] of contentsBySelection.entries()) {
     const [startRaw, endRaw] = key.split(":");
     const start = Number(startRaw);
     const end = Number(endRaw);
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
       continue;
     }
-    if (!isRangeContainedBy(target, { start, end })) {
+    if (!isSelectionContainedBy(target, { start, end })) {
       continue;
     }
     const selectedLines = content
@@ -305,18 +249,13 @@ export const deriveNumberedContentForRange = (
   return undefined;
 };
 
-export const stripLineNumbers = (numbered: string): string =>
-  numbered
-    .split(/\r?\n/)
-    .map((line) => {
-      const match = line.match(/^\d+\s+\|\s?(.*)$/);
-      return match ? match[1] : line;
-    })
-    .join("\n")
-    .trim();
-
-export const summarizeRanges = (ranges: LineRange[], limit = 6): string[] =>
-  ranges.slice(0, limit).map((range) => `${range.start}-${range.end}`);
+export const summarizeSelections = (
+  selections: LineSelectionBounds[],
+  limit = 6,
+): string[] =>
+  selections
+    .slice(0, limit)
+    .map((selection) => `${selection.start}-${selection.end}`);
 
 export const clampText = (value: string, maxLength: number): string =>
   value.length > maxLength ? `${value.slice(0, maxLength).trimEnd()}…` : value;
@@ -459,18 +398,27 @@ export const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
     }
     const url = typeof item.url === "string" ? item.url : "";
     const title = typeof item.title === "string" ? item.title : undefined;
-    const viewpoint =
-      typeof item.viewpoint === "string" ? item.viewpoint.trim() : undefined;
+    const rawViewpoint =
+      typeof item.viewpoint === "string" ? item.viewpoint.trim() : "";
     const content =
       typeof item.content === "string" ? item.content.trim() : undefined;
-    const ranges = parseLineRanges(item.ranges);
+    const selections = parseLineSelections(item.selections);
     const broken = typeof item.broken === "boolean" ? item.broken : undefined;
     const inrelavate =
       typeof item.inrelavate === "boolean" ? item.inrelavate : undefined;
     const error = typeof item.error === "string" ? item.error : undefined;
+    const viewpoint =
+      rawViewpoint.length > 0
+        ? rawViewpoint
+        : error && error.trim().length > 0
+          ? `Source processing error: ${clampText(error.trim(), 120)}`
+          : "No explicit viewpoint was returned for this source; evidence remains provisional.";
     if (
       !url ||
-      (ranges.length === 0 && broken !== true && inrelavate !== true && !error)
+      (selections.length === 0 &&
+        broken !== true &&
+        inrelavate !== true &&
+        !error)
     ) {
       return;
     }
@@ -479,9 +427,7 @@ export const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
       title,
       viewpoint,
       content,
-      ranges,
-      selections: [],
-      contents: [],
+      selections,
       broken,
       inrelavate,
       error,
@@ -493,60 +439,71 @@ export const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
 export const dedupeSearchResults = (
   results: SearchResult[],
 ): SearchResult[] => {
+  const normalizeViewpointKey = (viewpoint: string): string =>
+    viewpoint.replace(/\s+/g, " ").trim().toLowerCase();
+  const score = (item: SearchResult): number => {
+    const hasUsableEvidence =
+      !(item.broken ?? false) &&
+      !(item.inrelavate ?? false) &&
+      !item.error &&
+      item.selections.length > 0;
+    let value = hasUsableEvidence ? 10 : 0;
+    value += Math.min(item.selections.length, 5);
+    if (item.content && item.content.trim().length > 0) value += 1;
+    return value;
+  };
+  const mergeSelectionSets = (
+    left: LineSelection[],
+    right: LineSelection[],
+  ): LineSelection[] => {
+    const selectionMap = new Map<string, LineSelection>();
+    [...left, ...right].forEach((selection) => {
+      selectionMap.set(
+        `${selection.start}:${selection.end}:${selection.text}`,
+        selection,
+      );
+    });
+    return Array.from(selectionMap.values()).sort((a, b) =>
+      a.start === b.start ? a.end - b.end : a.start - b.start,
+    );
+  };
+
   const map = new Map<string, SearchResult>();
-  const rangeKey = (range: LineRange): string => `${range.start}:${range.end}`;
-  const selectionKey = (selection: LineSelection): string =>
-    `${selection.start}:${selection.end}:${selection.text}`;
   for (const item of results) {
-    const existing = map.get(item.url);
+    const key = normalizeViewpointKey(item.viewpoint);
+    const existing = map.get(key);
     if (!existing) {
-      map.set(item.url, {
+      map.set(key, {
         ...item,
-        ranges: [...item.ranges],
         selections: [...item.selections],
-        contents: [...item.contents],
       });
     } else {
-      const mergedContents = Array.from(
-        new Set([...existing.contents, ...item.contents]),
-      );
-      const rangeMap = new Map<string, LineRange>();
-      [...existing.ranges, ...item.ranges].forEach((range) => {
-        rangeMap.set(rangeKey(range), range);
-      });
-      const mergedRanges = Array.from(rangeMap.values());
-      const selectionMap = new Map<string, LineSelection>();
-      [...existing.selections, ...item.selections].forEach((selection) => {
-        selectionMap.set(selectionKey(selection), selection);
-      });
-      const mergedSelections = Array.from(selectionMap.values());
-      const hasResolvedContent =
-        mergedContents.length > 0 ||
-        mergedSelections.length > 0 ||
-        mergedRanges.length > 0;
-      map.set(item.url, {
-        url: item.url,
-        title: existing.title ?? item.title,
-        viewpoint:
-          existing.viewpoint && existing.viewpoint.length > 0
-            ? existing.viewpoint
-            : item.viewpoint,
+      const sameUrl = existing.url === item.url;
+      const preferred = score(item) > score(existing) ? item : existing;
+      const secondary = preferred === item ? existing : item;
+      const mergedSelections = sameUrl
+        ? mergeSelectionSets(existing.selections, item.selections)
+        : [...preferred.selections];
+      const hasResolvedContent = mergedSelections.length > 0;
+      map.set(key, {
+        ...preferred,
+        title: preferred.title ?? secondary.title,
         content:
-          existing.content && existing.content.length > 0
-            ? existing.content
-            : item.content,
-        pageId: existing.pageId ?? item.pageId,
-        lineCount: existing.lineCount ?? item.lineCount,
-        ranges: mergedRanges,
+          preferred.content && preferred.content.length > 0
+            ? preferred.content
+            : secondary.content,
+        pageId: preferred.pageId ?? secondary.pageId,
+        lineCount: preferred.lineCount ?? secondary.lineCount,
         selections: mergedSelections,
-        contents: mergedContents,
         broken: hasResolvedContent
           ? undefined
-          : (existing.broken ?? item.broken),
+          : (preferred.broken ?? secondary.broken),
         inrelavate: hasResolvedContent
           ? undefined
-          : (existing.inrelavate ?? item.inrelavate),
-        error: hasResolvedContent ? undefined : (existing.error ?? item.error),
+          : (preferred.inrelavate ?? secondary.inrelavate),
+        error: hasResolvedContent
+          ? undefined
+          : (preferred.error ?? secondary.error),
       });
     }
   }
@@ -563,9 +520,7 @@ export const validateNormalizedSearchResultsAgainstExtractedContents = (
       return [
         {
           ...item,
-          ranges: [],
           selections: [],
-          contents: [],
         },
       ];
     }
@@ -573,89 +528,87 @@ export const validateNormalizedSearchResultsAgainstExtractedContents = (
       return [
         {
           ...item,
-          ranges: [],
           selections: [],
-          contents: [],
         },
       ];
     }
     const evidence = extractedEvidenceByUrl.get(item.url);
-    if (!evidence || evidence.ranges.length === 0) {
-      if (item.ranges.length === 0) {
+    if (!evidence || evidence.selections.length === 0) {
+      if (item.selections.length === 0) {
         return [
           {
             ...item,
             selections: [],
-            contents: [],
           },
         ];
       }
       console.warn("[subagent.search.validate.drop.noEvidence]", {
         query,
         url: item.url,
-        ranges: item.ranges.length,
+        selections: item.selections.length,
       });
       return [];
     }
-    if (item.ranges.length === 0) {
+    if (item.selections.length === 0) {
       return [
         {
           ...item,
           selections: [],
-          contents: [],
         },
       ];
     }
-    const rangeKey = (range: LineRange): string =>
-      `${range.start}:${range.end}`;
-    const convergedRangeMap = new Map<string, LineRange>();
-    item.ranges.forEach((range) => {
-      evidence.ranges.forEach((evidenceRange) => {
-        const overlap = intersectRanges(range, evidenceRange);
+    const selectionKey = (selection: LineSelectionBounds): string =>
+      `${selection.start}:${selection.end}`;
+    const convergedSelectionMap = new Map<string, LineSelectionBounds>();
+    item.selections.forEach((selection) => {
+      evidence.selections.forEach((evidenceSelection) => {
+        const overlap = intersectSelectionBounds(selection, evidenceSelection);
         if (!overlap) {
           return;
         }
-        convergedRangeMap.set(rangeKey(overlap), overlap);
+        convergedSelectionMap.set(selectionKey(overlap), overlap);
       });
     });
-    const convergedRanges = Array.from(convergedRangeMap.values()).sort(
+    const convergedSelections = Array.from(convergedSelectionMap.values()).sort(
       (a, b) => (a.start === b.start ? a.end - b.end : a.start - b.start),
     );
-    if (convergedRanges.length === 0) {
+    if (convergedSelections.length === 0) {
       console.warn("[subagent.search.validate.drop.noOverlap]", {
         query,
         url: item.url,
-        requestedRanges: item.ranges,
-        evidenceRanges: evidence.ranges,
+        requestedSelections: item.selections.map((selection) => ({
+          start: selection.start,
+          end: selection.end,
+        })),
+        evidenceSelections: evidence.selections.map((selection) => ({
+          start: selection.start,
+          end: selection.end,
+        })),
       });
       return [];
     }
-    const selectionByRange = new Map<string, LineSelection>();
+    const selectionByBounds = new Map<string, LineSelection>();
     evidence.selections.forEach((selection) => {
-      selectionByRange.set(rangeKey(selection), selection);
+      selectionByBounds.set(selectionKey(selection), selection);
     });
     const resolvedSelectionsMap = new Map<string, LineSelection>();
-    const resolvedContents: string[] = [];
-    const resolvedRangesMap = new Map<string, LineRange>();
-    convergedRanges.forEach((range) => {
-      const key = rangeKey(range);
-      const selection = selectionByRange.get(key);
-      const numberedContent = deriveNumberedContentForRange(
-        range,
-        evidence.contentsByRange,
+    convergedSelections.forEach((selectionBounds) => {
+      const key = selectionKey(selectionBounds);
+      const selection = selectionByBounds.get(key);
+      const numberedContent = deriveNumberedContentForSelection(
+        selectionBounds,
+        evidence.contentsBySelection,
       );
       if (!selection) {
         if (numberedContent) {
-          resolvedRangesMap.set(key, range);
-          resolvedContents.push(numberedContent);
-          const text = stripLineNumbers(numberedContent);
-          if (text.length > 0) {
-            resolvedSelectionsMap.set(`${range.start}:${range.end}:${text}`, {
-              start: range.start,
-              end: range.end,
-              text,
-            });
-          }
+          resolvedSelectionsMap.set(
+            `${selectionBounds.start}:${selectionBounds.end}:${numberedContent}`,
+            {
+              start: selectionBounds.start,
+              end: selectionBounds.end,
+              text: numberedContent,
+            },
+          );
         }
         return;
       }
@@ -663,36 +616,38 @@ export const validateNormalizedSearchResultsAgainstExtractedContents = (
         `${selection.start}:${selection.end}:${selection.text}`,
         selection,
       );
-      const preferredContent = numberedContent ?? selection.text;
-      resolvedRangesMap.set(key, range);
-      resolvedContents.push(preferredContent);
     });
-    const resolvedRanges = Array.from(resolvedRangesMap.values()).sort(
-      (a, b) => (a.start === b.start ? a.end - b.end : a.start - b.start),
-    );
     const resolvedSelections = Array.from(resolvedSelectionsMap.values());
-    const contents = resolvedContents.filter((content) => content.length > 0);
-    if (resolvedRanges.length === 0 || contents.length === 0) {
+    if (resolvedSelections.length === 0) {
       console.warn("[subagent.search.validate.drop.noResolvedContent]", {
         query,
         url: item.url,
-        convergedRanges,
+        convergedSelections,
       });
       return [];
     }
     return [
       {
         ...item,
-        ranges: resolvedRanges,
         selections: resolvedSelections,
-        contents,
       },
     ];
   });
 
-export const normalizeContents = (contents: string[]): string[] => {
-  const cleaned = contents
-    .map((entry) => entry.trim())
+const stripLineNumberPrefix = (value: string): string =>
+  value
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\d+\s+\|\s?(.*)$/);
+      return match ? match[1] : line;
+    })
+    .join("\n")
+    .trim();
+
+const normalizeExcerpts = (entries: string[]): string[] => {
+  const cleaned = entries
+    .map((entry) => stripLineNumberPrefix(entry))
+    .map((entry) => entry.trimEnd())
     .filter((entry) => entry.length > 0);
   const limited: string[] = [];
   let total = 0;
@@ -740,10 +695,6 @@ export const buildDeepSearchSources = (
         typeof item.viewpoint === "string" && item.viewpoint.trim().length > 0
           ? clampText(item.viewpoint.trim(), 240)
           : undefined;
-      const content =
-        typeof item.content === "string" && item.content.trim().length > 0
-          ? clampText(item.content.trim(), 320)
-          : undefined;
       if (item.error) {
         const title = item.title ?? deriveSourceTitle(item.url, item.url);
         return {
@@ -754,21 +705,21 @@ export const buildDeepSearchSources = (
           excerpts: [],
           referenceIds,
           viewpoint,
-          content,
         };
       }
-      const contents = normalizeContents(item.contents);
-      const snippet = buildSnippet(contents);
+      const excerpts = normalizeExcerpts(
+        item.selections.map((selection) => selection.text),
+      );
+      const snippet = buildSnippet(excerpts);
       const title =
         item.title ?? deriveSourceTitle(item.url, snippet.split("\n")[0]);
       return {
         url: item.url,
         title,
         snippet,
-        excerpts: contents,
+        excerpts,
         referenceIds,
         viewpoint,
-        content,
         error: item.error,
       };
     });
@@ -789,14 +740,7 @@ export const buildDeepSearchReferences = (
     if ((result.broken ?? false) || (result.inrelavate ?? false)) {
       continue;
     }
-    const fallbackSelections = result.contents.map((content) => ({
-      start: 1,
-      end: 1,
-      text: content,
-    }));
-    const candidates = (
-      result.selections.length > 0 ? result.selections : fallbackSelections
-    )
+    const candidates = result.selections
       .map((selection) => ({
         start: Math.max(1, selection.start),
         end: Math.max(1, selection.end),
@@ -806,7 +750,7 @@ export const buildDeepSearchReferences = (
       .slice(0, 3);
 
     for (const candidate of candidates) {
-      const dedupeKey = `${result.url}::${normalizeKeyText(candidate.text)}`;
+      const dedupeKey = `${result.url}::${normalizeKeyText(result.viewpoint)}::${normalizeKeyText(candidate.text)}`;
       if (dedupe.has(dedupeKey)) {
         continue;
       }
@@ -822,6 +766,7 @@ export const buildDeepSearchReferences = (
         pageId: result.pageId ?? "",
         url: result.url,
         title: result.title,
+        viewpoint: result.viewpoint,
         startLine: candidate.start,
         endLine: candidate.end,
         text: candidate.text,
@@ -842,6 +787,7 @@ export const buildDeepSearchContext = (
       return [
         `[${reference.refId}] ${title}`,
         `URL: ${reference.url}`,
+        `Viewpoint: ${reference.viewpoint}`,
         `Lines: ${reference.startLine}-${reference.endLine}`,
         "Excerpt:",
         reference.text,
@@ -850,8 +796,8 @@ export const buildDeepSearchContext = (
     .join("\n\n");
   return [
     `Question: ${query}`,
-    "Use only the numbered references below.",
-    "Every supported claim must include one or more citations like [1].",
+    "Answer using the numbered references below, each derived from source excerpts.",
+    "Every supported claim must include one or more citations like [1](deertube://...).",
     "",
     context,
   ].join("\n");
@@ -902,22 +848,38 @@ export const linkifyCitationMarkers = (
     });
     return ids;
   };
-  const linkifiedGroups = value.replace(
+  const toDeertubeLinks = (ids: number[]): string[] =>
+    ids
+      .map((refId) => {
+        const uri = uriById.get(refId);
+        if (!uri) {
+          return null;
+        }
+        return `[${refId}](${uri})`;
+      })
+      .filter((entry): entry is string => entry !== null);
+  const canonicalizedLinkedGroups = value.replace(
+    /\[([\d\s,，、;；-]+)\]\(([^)]+)\)/g,
+    (full, rawGroup: string) => {
+      const ids = expandCitationGroup(rawGroup);
+      if (ids.length === 0) {
+        return full;
+      }
+      const linked = toDeertubeLinks(ids);
+      if (linked.length === 0) {
+        return full;
+      }
+      return linked.join(", ");
+    },
+  );
+  const linkifiedGroups = canonicalizedLinkedGroups.replace(
     /\[([\d\s,，、;；-]+)\](?!\()/g,
     (full, rawGroup: string) => {
       const ids = expandCitationGroup(rawGroup);
       if (ids.length === 0) {
         return full;
       }
-      const linked = ids
-        .map((refId) => {
-          const uri = uriById.get(refId);
-          if (!uri) {
-            return null;
-          }
-          return `[${refId}](${uri})`;
-        })
-        .filter((entry): entry is string => entry !== null);
+      const linked = toDeertubeLinks(ids);
       if (linked.length === 0) {
         return full;
       }

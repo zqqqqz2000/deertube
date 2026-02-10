@@ -37,9 +37,9 @@ interface StoredExtraction {
   pageId: string;
   query: string;
   url: string;
+  viewpoint: string;
   broken: boolean;
   lineCount: number;
-  ranges: { start: number; end: number }[];
   selections: { start: number; end: number; text: string }[];
   rawModelOutput: string;
   extractedAt: string;
@@ -147,9 +147,9 @@ export function createDeepResearchPersistenceAdapter(projectPath: string): DeepR
         pageId: input.pageId,
         query: input.query,
         url: input.url,
+        viewpoint: input.viewpoint,
         broken: input.broken,
         lineCount: input.lineCount,
-        ranges: input.ranges,
         selections: input.selections,
         rawModelOutput: input.rawModelOutput,
         extractedAt: input.extractedAt,
@@ -217,6 +217,10 @@ export async function resolveDeepResearchReference(
     pageId: reference.pageId,
     url: reference.url,
     title: reference.title,
+    viewpoint:
+      typeof reference.viewpoint === "string"
+        ? reference.viewpoint
+        : "Viewpoint unavailable for this reference.",
     startLine: reference.startLine,
     endLine: reference.endLine,
     text: reference.text,

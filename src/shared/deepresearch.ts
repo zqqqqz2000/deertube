@@ -1,12 +1,9 @@
 const DEERTUBE_PROTOCOL = "deertube:";
 const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-export interface LineRange {
+export interface LineSelection {
   start: number;
   end: number;
-}
-
-export interface LineSelection extends LineRange {
   text: string;
 }
 
@@ -15,6 +12,7 @@ export interface DeepResearchReferenceRecord {
   pageId: string;
   url: string;
   title?: string;
+  viewpoint: string;
   startLine: number;
   endLine: number;
   text: string;
@@ -43,6 +41,7 @@ export interface DeepResearchResolvedReference {
   pageId: string;
   url: string;
   title?: string;
+  viewpoint: string;
   startLine: number;
   endLine: number;
   text: string;
@@ -72,9 +71,9 @@ export interface DeepResearchExtractionInput {
   pageId: string;
   query: string;
   url: string;
+  viewpoint: string;
   broken: boolean;
   lineCount: number;
-  ranges: LineRange[];
   selections: LineSelection[];
   rawModelOutput: string;
   extractedAt: string;

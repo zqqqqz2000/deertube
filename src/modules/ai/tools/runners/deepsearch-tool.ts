@@ -121,6 +121,7 @@ export async function runDeepSearchTool({
           pageId: reference.pageId,
           url: reference.url,
           title: reference.title,
+          viewpoint: reference.viewpoint,
           startLine: reference.startLine,
           endLine: reference.endLine,
           text: reference.text,

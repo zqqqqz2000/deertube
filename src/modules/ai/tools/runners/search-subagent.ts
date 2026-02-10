@@ -11,31 +11,28 @@ import { z } from "zod";
 import type { JsonValue } from "../../../../types/json";
 import type {
   DeepResearchPersistenceAdapter,
-  LineRange,
   LineSelection,
 } from "../../../../shared/deepresearch";
 import {
-  LineRangeSchema,
   LineSelectionSchema,
   SEARCH_SUBAGENT_SYSTEM,
   SearchSubagentFinalSchema,
   TavilySearchResultSchema,
 } from "../schemas";
 import {
-  buildSelectionsFromRanges,
   clampText,
   collectToolOutputs,
+  deriveNumberedContentForSelection,
   dedupeSearchResults,
   fetchJinaReaderMarkdown,
   fetchTavilySearch,
-  intersectRanges,
+  intersectSelectionBounds,
   isRecord,
   normalizeSearchResults,
-  parseLineRanges,
   parseLineSelections,
   splitLines,
   summarizeContentsPreview,
-  summarizeRanges,
+  summarizeSelections,
   validateNormalizedSearchResultsAgainstExtractedContents,
   writeSubagentStream,
 } from "../helpers";
@@ -54,11 +51,26 @@ const MAX_REPEAT_EXTRACT_URL = 2;
 
 const normalizeToolKey = (value: string): string =>
   value.replace(/\s+/g, " ").trim().toLowerCase();
+
+const SEARCH_VIEWPOINT_FALLBACK =
+  "Insufficient validated evidence from this source to form a reliable query-grounded viewpoint.";
+const EXTRACT_FAILURE_VIEWPOINT =
+  "Extraction halted early; this source cannot yet provide a reliable, query-grounded viewpoint.";
+
+const normalizeSearchViewpoint = (
+  value: string | undefined,
+  fallback = SEARCH_VIEWPOINT_FALLBACK,
+): string => {
+  const compact = (value ?? "").replace(/\s+/g, " ").trim();
+  return compact.length > 0 ? compact : fallback;
+};
+
 type SearchSubagentFinalPayload = z.infer<typeof SearchSubagentFinalSchema>;
 interface ExtractedUrlMeta {
   title?: string;
   pageId?: string;
   lineCount?: number;
+  viewpoint?: string;
   broken?: boolean;
   inrelavate?: boolean;
   error?: string;
@@ -217,24 +229,17 @@ export async function runSearchSubagent({
       inrelavate: z
         .boolean()
         .describe("Whether the page is judged unrelated to query."),
-      ranges: z
-        .array(LineRangeSchema)
+      viewpoint: z
+        .string()
+        .min(50)
+        .max(100)
         .describe(
-          "Relevant inclusive line ranges selected by extract subagent.",
+          "Extracted source-level viewpoint for this URL (50-100 characters).",
         ),
       selections: z
         .array(LineSelectionSchema)
-        .describe("Range selections with line metadata and raw text."),
-      contents: z
-        .array(
-          z
-            .string()
-            .describe(
-              "Line-numbered markdown segment for the selected range; each entry aligns with ranges[index].",
-            ),
-        )
         .describe(
-          "Line-numbered extracted content chunks used by search subagent.",
+          "Selections with start/end line metadata and line-numbered markdown text.",
         ),
       error: z
         .string()
@@ -284,9 +289,8 @@ export async function runSearchSubagent({
           lineCount: 0,
           broken: true,
           inrelavate: false,
-          ranges: [],
+          viewpoint: EXTRACT_FAILURE_VIEWPOINT,
           selections: [],
-          contents: [],
           error: errorMessage,
           rawModelOutput: "",
         };
@@ -302,9 +306,8 @@ export async function runSearchSubagent({
           lineCount: 0,
           broken: true,
           inrelavate: false,
-          ranges: [],
+          viewpoint: EXTRACT_FAILURE_VIEWPOINT,
           selections: [],
-          contents: [],
           error: errorMessage,
           rawModelOutput: "",
         };
@@ -369,11 +372,11 @@ export async function runSearchSubagent({
 
         stage = "extract-agent";
         const {
-          ranges,
+          viewpoint,
           broken: extractedBroken,
           inrelavate,
           error: extractedError,
-          contents,
+          selections,
           rawModelOutput: extractRawModelOutput,
         } = await runExtractSubagent({
           query: extractQuery,
@@ -382,7 +385,6 @@ export async function runSearchSubagent({
           abortSignal: options.abortSignal,
         });
         rawModelOutput = extractRawModelOutput;
-        const selections = buildSelectionsFromRanges(lines, ranges);
         if (deepResearchStore && pageId) {
           stage = "save-extraction";
           await deepResearchStore.saveExtraction({
@@ -390,9 +392,9 @@ export async function runSearchSubagent({
             pageId,
             query: extractQuery,
             url,
+            viewpoint,
             broken: extractedBroken,
             lineCount,
-            ranges,
             selections,
             rawModelOutput,
             extractedAt: new Date().toISOString(),
@@ -400,20 +402,20 @@ export async function runSearchSubagent({
           console.log("[subagent.extract.extractionSaved]", {
             url: clampText(url, 220),
             pageId,
-            ranges: ranges.length,
             selections: selections.length,
           });
         }
         console.log("[subagent.extract.done]", {
           url: clampText(url, 220),
+          viewpoint: clampText(viewpoint, 120),
           broken: extractedBroken,
           inrelavate,
           error: extractedError ? clampText(extractedError, 220) : undefined,
-          ranges: ranges.length,
-          rangeSummary: summarizeRanges(ranges),
           selections: selections.length,
-          contents: contents.length,
-          contentsPreview: summarizeContentsPreview(contents),
+          selectionSummary: summarizeSelections(selections),
+          selectionsPreview: summarizeContentsPreview(
+            selections.map((selection) => selection.text),
+          ),
           elapsedMs: Date.now() - extractStartedAt,
         });
         const result = {
@@ -423,9 +425,8 @@ export async function runSearchSubagent({
           lineCount,
           broken: extractedBroken,
           inrelavate,
-          ranges,
+          viewpoint,
           selections,
-          contents,
           error: extractedError,
           rawModelOutput,
         };
@@ -434,11 +435,10 @@ export async function runSearchSubagent({
           title: lookup?.title ? clampText(lookup.title, 140) : undefined,
           pageId,
           lineCount,
+          viewpoint: clampText(viewpoint, 120),
           broken: extractedBroken,
           inrelavate,
-          ranges: ranges.length,
           selections: selections.length,
-          contents: contents.length,
           error: extractedError ? clampText(extractedError, 220) : undefined,
         });
         return result;
@@ -461,9 +461,8 @@ export async function runSearchSubagent({
           lineCount,
           broken: true,
           inrelavate: false,
-          ranges: [],
+          viewpoint: EXTRACT_FAILURE_VIEWPOINT,
           selections: [],
-          contents: [],
           error: errorMessage,
           rawModelOutput,
         };
@@ -493,11 +492,14 @@ export async function runSearchSubagent({
       const mergedErrors = collectedFinalPayload
         ? uniqueTrimmedStrings([...collectedFinalPayload.errors, ...errors])
         : uniqueTrimmedStrings(errors);
-      const dedupeByKey = new Map<string, SearchSubagentFinalPayload["results"][number]>();
+      const dedupeByKey = new Map<
+        string,
+        SearchSubagentFinalPayload["results"][number]
+      >();
       mergedResults.forEach((item) => {
         const url = typeof item.url === "string" ? item.url : "";
-        const key = `${url}|${item.viewpoint}|${item.content}|${item.ranges
-          .map((range) => `${range.start}:${range.end}`)
+        const key = `${url}|${item.viewpoint}|${item.content}|${item.selections
+          .map((selection) => `${selection.start}:${selection.end}:${selection.text}`)
           .join(",")}|${String(item.broken)}|${String(item.inrelavate)}|${
           item.error ?? ""
         }`;
@@ -529,10 +531,12 @@ export async function runSearchSubagent({
   const searchSubagentPrompt = [
     `User question: ${query}`,
     "Plan the final answer first, then output only the evidence references needed to support it.",
-    "Each result item must include: url, viewpoint, content, ranges.",
-    "Ranges must be precise and minimal. Avoid broad/full-page ranges unless strictly necessary.",
-    "When one source supports multiple points, keep multiple small ranges under the same URL.",
-    "The extract tool returns line-numbered contents. Your ranges must be anchored to those line numbers.",
+    "Each result item must include: url, viewpoint, content, selections.",
+    "Selections must be precise and minimal. Avoid broad/full-page spans unless strictly necessary.",
+    "When one source supports multiple points, keep multiple small selections under the same URL.",
+    "Merge duplicate viewpoints into one consolidated result item; do not repeat equivalent viewpoints.",
+    "You may run additional focused search/extract rounds based on collected evidence to fill gaps or resolve conflicts.",
+    "The extract tool returns line-numbered selections. Your returned selections must be anchored to those line numbers.",
     "Efficiency: when tasks are independent, prefer issuing multiple tool calls in the same round.",
     `Budget: at most ${SEARCH_TOOL_MAX_CALLS} search calls and ${EXTRACT_TOOL_MAX_CALLS} extract calls.`,
     `Do not repeat the same search query more than ${MAX_REPEAT_SEARCH_QUERY} times.`,
@@ -591,13 +595,11 @@ export async function runSearchSubagent({
         if (!isRecord(output.output)) return;
         const url =
           typeof output.output.url === "string" ? output.output.url : "";
-        const ranges = parseLineRanges(output.output.ranges);
-        const contents = Array.isArray(output.output.contents)
-          ? output.output.contents.filter(
-              (item: unknown): item is string => typeof item === "string",
-            )
-          : [];
         const selections = parseLineSelections(output.output.selections);
+        const viewpoint =
+          typeof output.output.viewpoint === "string"
+            ? normalizeSearchViewpoint(output.output.viewpoint)
+            : undefined;
         const errorMessage =
           typeof output.output.error === "string"
             ? output.output.error.trim()
@@ -632,6 +634,7 @@ export async function runSearchSubagent({
             title: existingMeta.title ?? title ?? searchLookup.get(url)?.title,
             pageId: existingMeta.pageId ?? pageId,
             lineCount: existingMeta.lineCount ?? lineCount,
+            viewpoint: existingMeta.viewpoint ?? viewpoint,
             broken: (existingMeta.broken ?? false) || (broken ?? false),
             inrelavate:
               (existingMeta.inrelavate ?? false) || (inrelavate ?? false),
@@ -641,26 +644,13 @@ export async function runSearchSubagent({
         if (errorMessage && errorMessage.trim().length > 0) {
           extractToolErrors.push(errorMessage.trim());
         }
-        const normalizedContents = contents;
-        if (
-          !url ||
-          (ranges.length === 0 &&
-            normalizedContents.length === 0 &&
-            selections.length === 0 &&
-            !errorMessage)
-        ) {
+        if (!url || (selections.length === 0 && !errorMessage)) {
           return;
         }
         const existingEvidence = extractedEvidenceByUrl.get(url) ?? {
-          ranges: [],
           selections: [],
-          contents: new Set<string>(),
-          contentsByRange: new Map<string, string>(),
+          contentsBySelection: new Map<string, string>(),
         };
-        const mergedRangeMap = new Map<string, LineRange>();
-        [...existingEvidence.ranges, ...ranges].forEach((range) => {
-          mergedRangeMap.set(`${range.start}:${range.end}`, range);
-        });
         const mergedSelectionMap = new Map<string, LineSelection>();
         [...existingEvidence.selections, ...selections].forEach((selection) => {
           mergedSelectionMap.set(
@@ -668,33 +658,13 @@ export async function runSearchSubagent({
             selection,
           );
         });
-        normalizedContents.forEach((content) =>
-          existingEvidence.contents.add(content),
-        );
-        selections.forEach((selection) =>
-          existingEvidence.contents.add(selection.text),
-        );
-        ranges.forEach((range, index) => {
-          const content = normalizedContents[index];
-          if (typeof content !== "string" || content.length === 0) {
-            return;
-          }
-          existingEvidence.contentsByRange.set(
-            `${range.start}:${range.end}`,
-            content,
-          );
-        });
         selections.forEach((selection) => {
           const key = `${selection.start}:${selection.end}`;
-          if (!existingEvidence.contentsByRange.has(key)) {
-            existingEvidence.contentsByRange.set(key, selection.text);
-          }
+          existingEvidence.contentsBySelection.set(key, selection.text);
         });
         extractedEvidenceByUrl.set(url, {
-          ranges: Array.from(mergedRangeMap.values()),
           selections: Array.from(mergedSelectionMap.values()),
-          contents: existingEvidence.contents,
-          contentsByRange: existingEvidence.contentsByRange,
+          contentsBySelection: existingEvidence.contentsBySelection,
         });
       });
     }
@@ -708,16 +678,6 @@ export async function runSearchSubagent({
     });
   }
 
-  const toSortedUniqueRanges = (ranges: LineRange[]): LineRange[] => {
-    const dedupe = new Map<string, LineRange>();
-    ranges.forEach((range) => {
-      dedupe.set(`${range.start}:${range.end}`, range);
-    });
-    return Array.from(dedupe.values()).sort((a, b) =>
-      a.start === b.start ? a.end - b.end : a.start - b.start,
-    );
-  };
-
   const buildFallbackPayloadFromExtractHistory =
     (): SearchSubagentFinalPayload => {
       const results: SearchSubagentFinalPayload["results"] = [];
@@ -728,11 +688,8 @@ export async function runSearchSubagent({
       urls.forEach((url) => {
         const evidence = extractedEvidenceByUrl.get(url);
         const meta = extractedMetaByUrl.get(url);
-        const ranges = toSortedUniqueRanges(evidence?.ranges ?? []);
-        const hasEvidence =
-          ranges.length > 0 ||
-          (evidence?.selections.length ?? 0) > 0 ||
-          (evidence?.contents.size ?? 0) > 0;
+        const selections = evidence?.selections ?? [];
+        const hasEvidence = selections.length > 0;
         const error = meta?.error?.trim();
         const broken = meta?.broken;
         const inrelavate = meta?.inrelavate;
@@ -741,9 +698,9 @@ export async function runSearchSubagent({
         }
         results.push({
           url,
-          viewpoint: "",
+          viewpoint: normalizeSearchViewpoint(meta?.viewpoint),
           content: "",
-          ranges,
+          selections,
           broken,
           inrelavate,
           error,
@@ -780,56 +737,63 @@ export async function runSearchSubagent({
         );
         return [];
       }
-      if (
-        (item.broken ?? false) ||
-        (item.inrelavate ?? false) ||
-        item.ranges.length === 0
-      ) {
+      if ((item.broken ?? false) || (item.inrelavate ?? false)) {
         return [item];
       }
       const evidence = extractedEvidenceByUrl.get(item.url);
-      if (!evidence || evidence.ranges.length === 0) {
+      if (!evidence || evidence.selections.length === 0) {
         errors.push(
-          `writeResults returned ranges but no extracted ranges exist for URL: ${item.url}`,
+          `writeResults returned selections but no extracted selections exist for URL: ${item.url}`,
         );
         return [];
       }
-      const intersectionMap = new Map<string, LineRange>();
-      item.ranges.forEach((candidateRange) => {
-        evidence.ranges.forEach((extractedRange) => {
-          const overlap = intersectRanges(candidateRange, extractedRange);
+      if (item.selections.length === 0) {
+        return [item];
+      }
+      const selectionMap = new Map<string, LineSelection>();
+      item.selections.forEach((candidateSelection) => {
+        evidence.selections.forEach((extractedSelection) => {
+          const overlap = intersectSelectionBounds(
+            candidateSelection,
+            extractedSelection,
+          );
           if (!overlap) {
             return;
           }
-          intersectionMap.set(`${overlap.start}:${overlap.end}`, overlap);
+          const exact = evidence.contentsBySelection.get(
+            `${overlap.start}:${overlap.end}`,
+          );
+          const text =
+            exact ??
+            deriveNumberedContentForSelection(
+              overlap,
+              evidence.contentsBySelection,
+            );
+          if (!text || text.trim().length === 0) {
+            return;
+          }
+          selectionMap.set(`${overlap.start}:${overlap.end}:${text}`, {
+            start: overlap.start,
+            end: overlap.end,
+            text,
+          });
         });
       });
-      if (intersectionMap.size === 0) {
+      if (selectionMap.size === 0) {
         errors.push(
-          `writeResults returned non-overlapping ranges for URL: ${item.url}; dropped this result item.`,
+          `writeResults returned non-overlapping selections for URL: ${item.url}; dropped this result item.`,
         );
         return [];
       }
-      const intersectedRanges = toSortedUniqueRanges(
-        Array.from(intersectionMap.values()),
+      const intersectedSelections = Array.from(selectionMap.values()).sort(
+        (a, b) => (a.start === b.start ? a.end - b.end : a.start - b.start),
       );
-      const originalRanges = toSortedUniqueRanges(item.ranges);
-      const changedByIntersection =
-        intersectedRanges.length !== originalRanges.length ||
-        intersectedRanges.some((range, index) => {
-          const original = originalRanges[index];
-          return (
-            !original ||
-            range.start !== original.start ||
-            range.end !== original.end
-          );
-        });
-      if (changedByIntersection) {
+      if (intersectedSelections.length !== item.selections.length) {
         errors.push(
-          `writeResults ranges clipped to extracted subset for URL: ${item.url}`,
+          `writeResults selections clipped to extracted subset for URL: ${item.url}`,
         );
       }
-      return [{ ...item, ranges: intersectedRanges }];
+      return [{ ...item, selections: intersectedSelections }];
     });
     return { normalized, errors };
   };
@@ -858,9 +822,10 @@ export async function runSearchSubagent({
   const globalErrorResults = normalizedGlobalErrors.map((error, index) => ({
     url: `search://subagent-error/${index + 1}`,
     title: "Search subagent",
-    ranges: [],
+    viewpoint: normalizeSearchViewpoint(
+      `Subagent tool failure #${index + 1} during evidence collection.`,
+    ),
     selections: [],
-    contents: [],
     broken: true,
     inrelavate: false,
     error,
@@ -874,6 +839,10 @@ export async function runSearchSubagent({
     const extractedMeta = extractedMetaByUrl.get(item.url);
     return {
       ...item,
+      viewpoint: normalizeSearchViewpoint(
+        item.viewpoint,
+        extractedMeta?.viewpoint ?? SEARCH_VIEWPOINT_FALLBACK,
+      ),
       title: item.title ?? extractedMeta?.title ?? lookup?.title,
       pageId: item.pageId ?? extractedMeta?.pageId,
       lineCount: item.lineCount ?? extractedMeta?.lineCount,
@@ -891,8 +860,7 @@ export async function runSearchSubagent({
       !item.error &&
       !(item.broken ?? false) &&
       !(item.inrelavate ?? false) &&
-      item.ranges.length > 0 &&
-      item.contents.length > 0,
+      item.selections.length > 0,
   );
   const allSearchCallsFailed =
     searchToolCallCount > 0 && searchToolErrorCount === searchToolCallCount;
