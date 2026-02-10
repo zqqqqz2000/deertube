@@ -736,6 +736,14 @@ export const buildDeepSearchSources = (
     })
     .map((item) => {
       const referenceIds = referenceIdsByUrl.get(item.url) ?? [];
+      const viewpoint =
+        typeof item.viewpoint === "string" && item.viewpoint.trim().length > 0
+          ? clampText(item.viewpoint.trim(), 240)
+          : undefined;
+      const content =
+        typeof item.content === "string" && item.content.trim().length > 0
+          ? clampText(item.content.trim(), 320)
+          : undefined;
       if (item.error) {
         const title = item.title ?? deriveSourceTitle(item.url, item.url);
         return {
@@ -745,6 +753,8 @@ export const buildDeepSearchSources = (
           error: item.error,
           excerpts: [],
           referenceIds,
+          viewpoint,
+          content,
         };
       }
       const contents = normalizeContents(item.contents);
@@ -757,6 +767,8 @@ export const buildDeepSearchSources = (
         snippet,
         excerpts: contents,
         referenceIds,
+        viewpoint,
+        content,
         error: item.error,
       };
     });

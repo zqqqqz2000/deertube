@@ -5,7 +5,9 @@ const TavilyOptionalStringSchema = z.preprocess(
   z
     .string()
     .optional()
-    .describe("Optional text field from Tavily; non-string values are ignored."),
+    .describe(
+      "Optional text field from Tavily; non-string values are ignored.",
+    ),
 );
 
 const TavilyOptionalNullableStringSchema = z.preprocess(
@@ -139,7 +141,11 @@ export const SearchSubagentFinalSchema = z
       .default([])
       .describe("Per-URL structured search-subagent results."),
     errors: z
-      .array(z.string().describe("Global error message for failed search/extract attempts."))
+      .array(
+        z
+          .string()
+          .describe("Global error message for failed search/extract attempts."),
+      )
       .default([])
       .describe("Global subagent errors not tied to a specific URL."),
   })
@@ -150,6 +156,7 @@ export const SEARCH_SUBAGENT_SYSTEM = [
   "Available tools:",
   "- search: Use Tavily to find candidate pages.",
   "- extract: Extract query-relevant passages from a specific URL.",
+  "- writeResults: Submit the final payload { results, errors }.",
   "Source quality policy:",
   "- Prefer high-credibility sources: established media with strong editorial standards and low misinformation history, official institutions, peer-reviewed journals, top conferences, and expert domain publications.",
   "- Avoid low-credibility or rumor-heavy sources unless they are necessary for contrast and clearly labeled.",
@@ -158,35 +165,41 @@ export const SEARCH_SUBAGENT_SYSTEM = [
   "- Do not let off-topic result trends redirect your judgment. If results drift from the intended topic, reformulate and continue searching.",
   "- If one search is insufficient, iterate with alternative keywords, synonyms, and related concepts.",
   "- If no reasonable results are found, proactively try multiple new keyword combinations before concluding failure.",
+  "- Efficiency rule: when independent actions are available, prefer calling multiple tools in the same round to maximize parallelism.",
   "Workflow:",
   "1) Call search to gather candidates (<=6 per query, multiple query rounds allowed).",
   "2) Select relevant high-quality URLs and call extract(url, query) for each.",
   "3) Extraction is mandatory. Do not stop after search-only results.",
   "4) First decide your answer claims; then choose only the smallest sufficient evidence for each claim.",
-  "5) In final JSON, each result item should include: url, viewpoint, content, ranges.",
-  "6) `extract` returns line-numbered contents. All chosen ranges must map to those numbered lines.",
-  "7) Prefer small precise spans (typically 2-12 lines). Avoid broad/full-page ranges unless strictly necessary.",
-  "8) The same source can support multiple claims: keep multiple ranges for one URL when needed.",
-  "9) Every returned range must come from the corresponding extract result for the same URL.",
-  "10) If a URL is unrelated, mark `inrelavate=true` and return `ranges=[]` for that URL.",
-  "11) If all attempted search calls fail, or all attempted extract calls fail, return those failure reasons in final JSON.",
-  "12) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
-  "13) Return a JSON object only: { results: [{ url?: string, viewpoint: string, content: string, ranges: [{ start, end }], broken?: boolean, inrelavate?: boolean, error?: string }], errors?: string[] }.",
-  "Output rule: return JSON only, with no extra prose.",
+  "5) Finalization is mandatory: call writeResults exactly once with { results, errors }.",
+  "6) In writeResults input, each result item should include: url, viewpoint, content, ranges.",
+  "7) `extract` returns line-numbered contents. All chosen ranges must map to those numbered lines.",
+  "8) Prefer small precise spans (typically 2-12 lines). Avoid broad/full-page ranges unless strictly necessary.",
+  "9) The same source can support multiple claims: keep multiple ranges for one URL when needed.",
+  "10) Every returned range must come from the corresponding extract result for the same URL.",
+  "11) If a URL is unrelated, mark `inrelavate=true` and return `ranges=[]` for that URL.",
+  "12) If all attempted search calls fail, or all attempted extract calls fail, put those reasons in `errors`.",
+  "13) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
+  "14) Strict final-step rule: your very last action must be exactly one writeResults call.",
+  "15) If writeResults is omitted at the end, the run is treated as failed.",
+  "Output rule: finalize via writeResults only. Do not output final JSON in plain text.",
 ].join("\n");
 
 export const EXTRACT_SUBAGENT_SYSTEM = [
   "You are the Extract subagent.",
   "Input: query + line-numbered markdown.",
   "Goal: select the most relevant line ranges for the query.",
-  "Output JSON: { broken: boolean, inrelavate: boolean, ranges: [{ start, end }] }.",
+  "Available tools: grep, readLines, writeExtractResult.",
+  "Output must be submitted via writeExtractResult({ broken, inrelavate, ranges, error? }).",
   "Rules:",
   "- Line numbers start from 1. start/end are inclusive.",
   "- Keep ranges coherent and avoid oversized spans.",
   "- If content is unavailable or clearly corrupted, return broken=true and ranges=[].",
   "- If the page is unrelated to query, return inrelavate=true and ranges=[].",
+  "- When using grep, prefer 5-10 matches per call unless a wider sweep is necessary.",
+  "- Efficiency rule: when inspecting independent hypotheses/ranges, prefer issuing multiple tool calls in the same round when possible.",
   "- For large markdown, prioritize the grep/readLines tools to explore before deciding ranges.",
-  "Return JSON only.",
+  "Finalize by calling writeExtractResult exactly once.",
 ].join("\n");
 
 export const DEEPSEARCH_SYSTEM = [

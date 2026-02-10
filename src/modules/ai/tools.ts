@@ -32,7 +32,7 @@ export function createTools(
   return {
     deepSearch: tool({
       description:
-        "Run deep research via network search and a subagent, returning a concise conclusion with sources.",
+        "Run deep research via network search and a subagent, returning structured references and source links. For citations, use references[].uri as inline markdown links like [1](deertube://...).",
       inputSchema: z.object({
         query: z
           .string()
@@ -42,10 +42,12 @@ export function createTools(
       outputSchema: z.object({
         conclusion: z
           .string()
-          .describe("Final concise answer with inline bracket citations."),
+          .optional()
+          .describe("Optional synthesized answer text (disabled by default)."),
         answer: z
           .string()
-          .describe("Alias of conclusion for compatibility with existing callers."),
+          .optional()
+          .describe("Optional alias of conclusion for compatibility."),
         sources: z.array(
           z.object({
             url: z.string().describe("Source page URL."),
@@ -75,6 +77,14 @@ export function createTools(
               )
               .optional()
               .describe("Reference IDs tied to this source."),
+            viewpoint: z
+              .string()
+              .optional()
+              .describe("Claim/viewpoint this source supports."),
+            content: z
+              .string()
+              .optional()
+              .describe("Short evidence summary aligned with the viewpoint."),
             error: z
               .string()
               .optional()
@@ -117,7 +127,8 @@ export function createTools(
           .describe("Optional project identifier when search is project-scoped."),
         prompt: z
           .string()
-          .describe("Prompt sent to synthesis model for this deep-search run."),
+          .optional()
+          .describe("Optional synthesis prompt (empty when synthesis is disabled)."),
       }).describe("Structured deep-search result returned to the caller."),
       execute: async ({ query }, options) => {
         if (!config.model) {

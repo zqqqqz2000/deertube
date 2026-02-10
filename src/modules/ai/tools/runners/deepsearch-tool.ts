@@ -1,18 +1,11 @@
-import {
-  streamText,
-  type LanguageModel,
-  type UIMessageStreamWriter,
-} from "ai";
+import { type LanguageModel, type UIMessageStreamWriter } from "ai";
 import type {
   DeepResearchPersistenceAdapter,
   DeepResearchReferenceRecord,
 } from "../../../../shared/deepresearch";
-import { DEEPSEARCH_SYSTEM } from "../schemas";
 import {
-  buildDeepSearchContext,
   buildDeepSearchReferences,
   buildDeepSearchSources,
-  linkifyCitationMarkers,
   writeDeepSearchStream,
 } from "../helpers";
 import type { DeepSearchReference, DeepSearchSource } from "../types";
@@ -41,12 +34,12 @@ export async function runDeepSearchTool({
   jinaReaderApiKey?: string;
   deepResearchStore?: DeepResearchPersistenceAdapter;
 }): Promise<{
-  conclusion: string;
+  conclusion?: string;
   sources: DeepSearchSource[];
   references: DeepSearchReference[];
   searchId: string;
   projectId?: string;
-  prompt: string;
+  prompt?: string;
 }> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) {
@@ -104,8 +97,6 @@ export async function runDeepSearchTool({
       status: "running",
     });
 
-    let prompt = "";
-    let conclusionRaw = "";
     const sourceErrors = Array.from(
       new Set(
         results
@@ -115,52 +106,13 @@ export async function runDeepSearchTool({
           .filter((error) => error.length > 0),
       ),
     );
-    if (sources.length === 0 || references.length === 0) {
-      const errorDetails =
-        sourceErrors.length > 0
-          ? [
-              "",
-              "Observed tool errors:",
-              ...sourceErrors.map((error, index) => `${index + 1}. ${error}`),
-              "Explain these failures in user language and suggest practical next steps.",
-            ].join("\n")
-          : "";
-      prompt = [
-        `Question: ${normalizedQuery}`,
-        "",
-        "No validated references are currently available.",
-        "Explain the current evidence status and what additional search directions would help.",
-        errorDetails,
-      ].join("\n");
-    } else {
-      prompt = buildDeepSearchContext(normalizedQuery, references);
-    }
-    const result = streamText({
-      model,
-      system: DEEPSEARCH_SYSTEM,
-      prompt,
-      abortSignal,
-    });
-    for await (const delta of result.textStream) {
-      conclusionRaw += delta;
-      writeDeepSearchStream(writer, toolCallId, toolName, {
-        query: normalizedQuery,
-        projectId,
-        searchId,
-        sources,
-        references,
-        prompt,
-        conclusion: linkifyCitationMarkers(conclusionRaw, references),
-        status: "running",
-      });
-    }
-
-    const finalConclusionRaw =
-      conclusionRaw.trim() || "No conclusion generated.";
-    const finalConclusionLinked = linkifyCitationMarkers(
-      finalConclusionRaw,
-      references,
-    );
+    const noReferenceError =
+      references.length === 0 && sourceErrors.length > 0
+        ? sourceErrors.join("\n")
+        : undefined;
+    const prompt = "";
+    const finalConclusionRaw = "";
+    const finalConclusionLinked = "";
     if (deepResearchStore) {
       const persistedReferences: DeepResearchReferenceRecord[] = references.map(
         (reference) => ({
@@ -193,10 +145,9 @@ export async function runDeepSearchTool({
         query: normalizedQuery,
         projectId,
         searchId,
-        prompt,
         sources,
         references,
-        conclusion: finalConclusionLinked,
+        error: noReferenceError,
         status: "complete",
         complete: true,
       },
@@ -204,12 +155,10 @@ export async function runDeepSearchTool({
     );
 
     return {
-      conclusion: finalConclusionLinked,
       sources,
       references,
       searchId,
       projectId,
-      prompt,
     };
   } catch (error) {
     const message =

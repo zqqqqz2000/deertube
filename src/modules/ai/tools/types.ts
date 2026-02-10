@@ -22,6 +22,8 @@ export interface DeepSearchSource {
   snippet?: string;
   excerpts?: string[];
   referenceIds?: number[];
+  viewpoint?: string;
+  content?: string;
   error?: string;
 }
 
