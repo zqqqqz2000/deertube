@@ -73,6 +73,8 @@ export type SubagentUIMessage = UIMessage<
 
 export interface ToolConfig {
   model?: LanguageModel;
+  searchModel?: LanguageModel;
+  extractModel?: LanguageModel;
   tavilyApiKey?: string;
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;

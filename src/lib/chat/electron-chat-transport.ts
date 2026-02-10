@@ -1,21 +1,23 @@
 import type { ChatRequestOptions, ChatTransport, UIMessageChunk } from "ai";
 import { trpcClient } from "@/lib/trpc";
+import type { LlmRuntimeModelSettings, LlmPurpose } from "@/lib/settings";
 import type { DeertubeUIMessage } from "@/modules/ai/tools";
 
 export interface ChatContext {
   projectPath: string;
   selectedNodeSummary?: string;
   selectedPathSummary?: string;
-    settings?: {
-      llmProvider?: string;
-      llmModelId?: string;
-      llmApiKey?: string;
-      llmBaseUrl?: string;
-      tavilyApiKey?: string;
-      jinaReaderBaseUrl?: string;
-      jinaReaderApiKey?: string;
-    };
-  }
+  settings?: {
+    llmProvider?: string;
+    llmModelId?: string;
+    llmApiKey?: string;
+    llmBaseUrl?: string;
+    tavilyApiKey?: string;
+    jinaReaderBaseUrl?: string;
+    jinaReaderApiKey?: string;
+    models?: Partial<Record<LlmPurpose, LlmRuntimeModelSettings>>;
+  };
+}
 
 export class ElectronChatTransport implements ChatTransport<DeertubeUIMessage> {
   private context: ChatContext | null = null;

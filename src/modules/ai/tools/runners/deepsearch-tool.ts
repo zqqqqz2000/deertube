@@ -13,7 +13,8 @@ import { runSearchSubagent } from "./search-subagent";
 
 export async function runDeepSearchTool({
   query,
-  model,
+  searchModel,
+  extractModel,
   writer,
   toolCallId,
   toolName,
@@ -24,7 +25,8 @@ export async function runDeepSearchTool({
   deepResearchStore,
 }: {
   query: string;
-  model: LanguageModel;
+  searchModel: LanguageModel;
+  extractModel?: LanguageModel;
   writer?: UIMessageStreamWriter;
   toolCallId?: string;
   toolName?: string;
@@ -76,7 +78,8 @@ export async function runDeepSearchTool({
     const results = await runSearchSubagent({
       query: normalizedQuery,
       searchId,
-      model,
+      model: searchModel,
+      extractModel,
       writer,
       toolCallId,
       toolName: "search",

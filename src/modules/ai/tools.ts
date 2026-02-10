@@ -91,12 +91,15 @@ export function createTools(
           .describe("Optional synthesis prompt (empty when synthesis is disabled)."),
       }).describe("Structured deep-search result returned to the caller."),
       execute: async ({ query }, options) => {
-        if (!config.model) {
+        const searchModel = config.searchModel ?? config.model;
+        const extractModel = config.extractModel ?? config.searchModel ?? config.model;
+        if (!searchModel) {
           throw new Error("DeepSearch tool is not configured with a model.");
         }
         const result = await runDeepSearchTool({
           query,
-          model: config.model,
+          searchModel,
+          extractModel,
           writer,
           toolCallId: options.toolCallId,
           toolName: "deepSearch",

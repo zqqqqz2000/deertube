@@ -122,9 +122,7 @@ export const SearchSubagentFinalItemSchema = z
     content: z
       .string()
       .default("")
-      .describe(
-        "Short evidence summary/quote aligned with selected spans.",
-      ),
+      .describe("Short evidence summary/quote aligned with selected spans."),
     selections: z
       .array(LineSelectionSchema)
       .default([])
@@ -212,16 +210,4 @@ export const EXTRACT_SUBAGENT_SYSTEM = [
   "- For large markdown, prioritize the grep/readLines tools to explore before deciding selections.",
   "- Keep `viewpoint` specific and evidence-grounded, with length between 50 and 100 characters.",
   "Finalize by calling writeExtractResult exactly once.",
-].join("\n");
-
-export const DEEPSEARCH_SYSTEM = [
-  "You are a deep-research assistant.",
-  "You are given numbered references built from source excerpts.",
-  "Use those numbered references as the evidence context for your answer.",
-  "Answer in the same language as the user's question.",
-  "Write a concise answer and cite evidence inline using markdown links like [1](deertube://...).",
-  "If there are zero references, do not output citation markers like [1] or [2], and do not output a `References` section.",
-  "Only cite provided indices, do not invent new indices, and do not output footnotes.",
-  "Do not group citations as [1,2] or [1-2]. Always write separate citations.",
-  "Every citation must use the deertube URI for that reference ID; do not use external URLs in citation links.",
 ].join("\n");

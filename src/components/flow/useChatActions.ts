@@ -9,7 +9,7 @@ import type {
   QuestionNode as QuestionNodeType,
   SourceNode as SourceNodeType,
 } from "../../types/flow";
-import type { ProviderProfile } from "../../lib/settings";
+import { buildRuntimeSettings, type ProviderProfile } from "../../lib/settings";
 import type {
   ChatMessage,
   DeepSearchStreamPayload,
@@ -223,6 +223,10 @@ export function useChatActions({
     () => nodes.find((node) => node.id === selectedId) ?? null,
     [nodes, selectedId],
   );
+  const runtimeSettings = useMemo(
+    () => buildRuntimeSettings(activeProfile),
+    [activeProfile],
+  );
   const selectedNodeForContext = useMemo(
     () => (isStartNode(selectedNode) ? null : selectedNode),
     [selectedNode],
@@ -297,14 +301,7 @@ export function useChatActions({
             nodes: graphSnapshot.nodes,
             edges: graphSnapshot.edges,
           },
-          settings: activeProfile
-            ? {
-                llmProvider: activeProfile.llmProvider.trim() || undefined,
-                llmModelId: activeProfile.llmModelId.trim() || undefined,
-                llmApiKey: activeProfile.llmApiKey.trim() || undefined,
-                llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
-              }
-            : undefined,
+          settings: runtimeSettings,
         });
 
         const graphNodes = result.nodes as GraphRunNodePayload[];
@@ -461,11 +458,11 @@ export function useChatActions({
       }
     },
     [
-      activeProfile,
       edges,
       flowInstance,
       nodes,
       projectPath,
+      runtimeSettings,
       selectedId,
       selectedNodeSummary,
       setEdges,
@@ -480,19 +477,7 @@ export function useChatActions({
         projectPath,
         selectedNodeSummary,
         selectedPathSummary,
-        settings: activeProfile
-          ? {
-              llmProvider: activeProfile.llmProvider.trim() || undefined,
-              llmModelId: activeProfile.llmModelId.trim() || undefined,
-              llmApiKey: activeProfile.llmApiKey.trim() || undefined,
-              llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
-              tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
-              jinaReaderBaseUrl:
-                activeProfile.jinaReaderBaseUrl.trim() || undefined,
-              jinaReaderApiKey:
-                activeProfile.jinaReaderApiKey.trim() || undefined,
-            }
-          : undefined,
+        settings: runtimeSettings,
       },
       onFinish: ({ message }: { message?: DeertubeUIMessage }) => {
         if (!message || message.role !== "assistant") {

@@ -59,6 +59,85 @@ const buildRetryHint = (errorMessage: string) =>
     "Do not include extra text outside tool calls.",
   ].join("\n");
 
+const ModelSettingsSchema = z.object({
+  llmProvider: z.string().optional(),
+  llmModelId: z.string().optional(),
+  llmApiKey: z.string().optional(),
+  llmBaseUrl: z.string().optional(),
+});
+
+const RuntimeSettingsSchema = z.object({
+  llmProvider: z.string().optional(),
+  llmModelId: z.string().optional(),
+  llmApiKey: z.string().optional(),
+  llmBaseUrl: z.string().optional(),
+  models: z
+    .object({
+      chat: ModelSettingsSchema.optional(),
+      search: ModelSettingsSchema.optional(),
+      extract: ModelSettingsSchema.optional(),
+      graph: ModelSettingsSchema.optional(),
+    })
+    .optional(),
+});
+
+type ModelSettings = z.infer<typeof ModelSettingsSchema>;
+type RuntimeSettings = z.infer<typeof RuntimeSettingsSchema>;
+
+const trimOrUndefined = (value?: string): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+};
+
+const buildLegacyModelSettings = (
+  settings: RuntimeSettings | undefined,
+): ModelSettings | undefined => {
+  if (!settings) {
+    return undefined;
+  }
+  const llmProvider = trimOrUndefined(settings.llmProvider);
+  const llmModelId = trimOrUndefined(settings.llmModelId);
+  const llmApiKey = trimOrUndefined(settings.llmApiKey);
+  const llmBaseUrl = trimOrUndefined(settings.llmBaseUrl);
+  if (!llmProvider && !llmModelId && !llmApiKey && !llmBaseUrl) {
+    return undefined;
+  }
+  return {
+    llmProvider,
+    llmModelId,
+    llmApiKey,
+    llmBaseUrl,
+  };
+};
+
+const resolveModelSettings = (
+  preferred: ModelSettings | undefined,
+  fallback: ModelSettings | undefined,
+) => {
+  const llmProvider =
+    trimOrUndefined(preferred?.llmProvider) ??
+    trimOrUndefined(fallback?.llmProvider) ??
+    "openai";
+  const llmModelId =
+    trimOrUndefined(preferred?.llmModelId) ??
+    trimOrUndefined(fallback?.llmModelId) ??
+    "gpt-4o-mini";
+  const llmApiKey =
+    trimOrUndefined(preferred?.llmApiKey) ??
+    trimOrUndefined(fallback?.llmApiKey);
+  const llmBaseUrl =
+    trimOrUndefined(preferred?.llmBaseUrl) ??
+    trimOrUndefined(fallback?.llmBaseUrl) ??
+    process.env.OPENAI_BASE_URL ??
+    "https://api.openai.com/v1";
+  return {
+    llmProvider,
+    llmModelId,
+    llmApiKey,
+    llmBaseUrl,
+  };
+};
+
 const GraphNodeSchema = z.object({
   titleLong: z.string().min(1),
   titleShort: z.string().min(1),
@@ -139,41 +218,28 @@ export const graphRouter = createTRPCRouter({
             }),
           ),
         }),
-        settings: z
-          .object({
-            llmProvider: z.string().optional(),
-            llmModelId: z.string().optional(),
-            llmApiKey: z.string().optional(),
-            llmBaseUrl: z.string().optional(),
-          })
-          .optional(),
+        settings: RuntimeSettingsSchema.optional(),
       }),
     )
     .mutation(async ({ input }) => {
+      const legacyModelSettings = buildLegacyModelSettings(input.settings);
+      const resolvedModel = resolveModelSettings(
+        input.settings?.models?.graph,
+        input.settings?.models?.chat ?? legacyModelSettings,
+      );
       logGraphTool("start", {
         responseId: input.responseId,
         selectedNodeId: input.selectedNodeId ?? null,
         graphNodes: input.graph.nodes.length,
         graphEdges: input.graph.edges.length,
-        llmProvider: input.settings?.llmProvider ?? "openai",
-        llmModelId: input.settings?.llmModelId ?? "gpt-4o-mini",
+        llmProvider: resolvedModel.llmProvider,
+        llmModelId: resolvedModel.llmModelId,
       });
 
-      const rawProvider = input.settings?.llmProvider?.trim();
-      const llmProvider =
-        rawProvider && rawProvider.length > 0 ? rawProvider : "openai";
-      const llmModelId = input.settings?.llmModelId ?? "gpt-4o-mini";
-      const providerApiKey = input.settings?.llmApiKey;
-      const rawBaseUrl = input.settings?.llmBaseUrl?.trim();
-      const providerBaseUrl =
-        rawBaseUrl && rawBaseUrl.length > 0
-          ? rawBaseUrl
-          : (process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1");
-
       const provider = createOpenAICompatible({
-        name: llmProvider || "openai",
-        baseURL: providerBaseUrl,
-        apiKey: providerApiKey,
+        name: resolvedModel.llmProvider,
+        baseURL: resolvedModel.llmBaseUrl,
+        apiKey: resolvedModel.llmApiKey,
       });
 
       const existingIntIds = new Set<number>();
@@ -261,7 +327,7 @@ export const graphRouter = createTRPCRouter({
 
         const retryBlock = retryHint ? `\n\n${retryHint}\n\n` : "\n\n";
         const result = await generateText({
-          model: provider(llmModelId),
+          model: provider(resolvedModel.llmModelId),
           system:
             "You are a graph-builder for a product that builds a clear, easy-to-understand knowledge map during conversation. Only call addInsightNodeTool when the response introduces new, distillable information worth adding to the graph; otherwise, respond with a short explanation of why no node should be added. When there would be many new nodes, you may aggregate them into fewer, higher-level nodes. If the response contains multiple derivative points, you may create nodes at multiple levels of the graph and are not limited to the currently selected node. You MAY assign each new node an id (integer) to reference it as a parent in the same call. id must be unique among new nodes and must NOT overlap existing graph intIds listed above. Use parentIntId to reference either an existing graph node intId or an id of another new node (declared earlier in the same run) to build multi-level structures. Each node must quote an exact excerpt from the response text; the excerpt MUST be a verbatim span from the response text. The response text is raw markdown, so keep markdown syntax in the excerpt even if the snippet is not valid standalone markdown. If you add multiple nodes, avoid repeating or overlapping excerpts. Titles must be short, clear, and in three sizes: long (<=48 chars), short (<=28 chars), tiny (<=20 chars). Long/Short/Tiny should become progressively shorter and more abstract. The system language does not represent the user language; the user language is the language used in the response. Use the same language as the response for all titles. The language of all three titles must match the response. You MUST provide parentIntId for every node. You MUST NOT call the tool if any excerpt is not a verbatim substring of the response. If there is any id conflict or unknown parent, you MUST call the tool with a valid id or skip adding nodes.",
           prompt: `${contextBlock}${graphLines}\n\nResponse:\n${input.responseText}${retryBlock}Create nodes now.`,

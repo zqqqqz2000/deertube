@@ -1,4 +1,4 @@
-import { useCallback, useState, type MutableRefObject } from "react";
+import { useCallback, useMemo, useState, type MutableRefObject } from "react";
 import type { ReactFlowInstance } from "reactflow";
 import { placeQuestionNode, placeSourceNodes } from "../../lib/flowPlacement";
 import {
@@ -13,7 +13,10 @@ import type {
   QuestionNode as QuestionNodeType,
   SourceNode as SourceNodeType,
 } from "../../types/flow";
-import type { ProviderProfile } from "../../lib/settings";
+import {
+  buildRuntimeSettings,
+  type ProviderProfile,
+} from "../../lib/settings";
 
 interface UseQuestionActionsOptions {
   projectPath: string;
@@ -44,6 +47,10 @@ export function useQuestionActions({
 }: UseQuestionActionsOptions) {
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const runtimeSettings = useMemo(
+    () => buildRuntimeSettings(activeProfile),
+    [activeProfile],
+  );
 
   const updateQuestionNode = useCallback(
     (questionId: string, patch: Partial<QuestionNodeType["data"]>) => {
@@ -80,19 +87,7 @@ export function useQuestionActions({
           query: questionText,
           maxResults: 5,
           context,
-          settings: activeProfile
-            ? {
-                tavilyApiKey: activeProfile.tavilyApiKey.trim() || undefined,
-                jinaReaderBaseUrl:
-                  activeProfile.jinaReaderBaseUrl.trim() || undefined,
-                jinaReaderApiKey:
-                  activeProfile.jinaReaderApiKey.trim() || undefined,
-                llmProvider: activeProfile.llmProvider.trim() || undefined,
-                llmModelId: activeProfile.llmModelId.trim() || undefined,
-                llmApiKey: activeProfile.llmApiKey.trim() || undefined,
-                llmBaseUrl: activeProfile.llmBaseUrl.trim() || undefined,
-              }
-            : undefined,
+          settings: runtimeSettings,
         });
 
         const sourcePositions = await placeSourceNodes({
@@ -155,12 +150,12 @@ export function useQuestionActions({
       }
     },
     [
-      activeProfile,
       buildContextSummary,
       edges,
       flowInstance,
       nodes,
       projectPath,
+      runtimeSettings,
       setEdges,
       setNodes,
       updateQuestionNode,

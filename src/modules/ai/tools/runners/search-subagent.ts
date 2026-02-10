@@ -91,6 +91,7 @@ export async function runSearchSubagent({
   query,
   searchId,
   model,
+  extractModel,
   writer,
   toolCallId,
   toolName,
@@ -103,6 +104,7 @@ export async function runSearchSubagent({
   query: string;
   searchId: string;
   model: LanguageModel;
+  extractModel?: LanguageModel;
   writer?: UIMessageStreamWriter;
   toolCallId?: string;
   toolName?: string;
@@ -381,7 +383,7 @@ export async function runSearchSubagent({
         } = await runExtractSubagent({
           query: extractQuery,
           lines,
-          model,
+          model: extractModel ?? model,
           abortSignal: options.abortSignal,
         });
         rawModelOutput = extractRawModelOutput;

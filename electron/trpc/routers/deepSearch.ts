@@ -34,6 +34,84 @@ const TavilyResponseSchema = z.object({
   results: z.array(TavilySearchResultSchema).optional(),
 })
 
+const ModelSettingsSchema = z.object({
+  llmProvider: z.string().optional(),
+  llmModelId: z.string().optional(),
+  llmApiKey: z.string().optional(),
+  llmBaseUrl: z.string().optional(),
+})
+
+const RuntimeSettingsSchema = z.object({
+  tavilyApiKey: z.string().optional(),
+  jinaReaderBaseUrl: z.string().optional(),
+  jinaReaderApiKey: z.string().optional(),
+  llmProvider: z.string().optional(),
+  llmModelId: z.string().optional(),
+  llmApiKey: z.string().optional(),
+  llmBaseUrl: z.string().optional(),
+  models: z.object({
+    chat: ModelSettingsSchema.optional(),
+    search: ModelSettingsSchema.optional(),
+    extract: ModelSettingsSchema.optional(),
+    graph: ModelSettingsSchema.optional(),
+  }).optional(),
+})
+
+type ModelSettings = z.infer<typeof ModelSettingsSchema>
+type RuntimeSettings = z.infer<typeof RuntimeSettingsSchema>
+
+const trimOrUndefined = (value?: string): string | undefined => {
+  const trimmed = value?.trim()
+  return trimmed && trimmed.length > 0 ? trimmed : undefined
+}
+
+const buildLegacyModelSettings = (settings: RuntimeSettings | undefined): ModelSettings | undefined => {
+  if (!settings) {
+    return undefined
+  }
+  const llmProvider = trimOrUndefined(settings.llmProvider)
+  const llmModelId = trimOrUndefined(settings.llmModelId)
+  const llmApiKey = trimOrUndefined(settings.llmApiKey)
+  const llmBaseUrl = trimOrUndefined(settings.llmBaseUrl)
+  if (!llmProvider && !llmModelId && !llmApiKey && !llmBaseUrl) {
+    return undefined
+  }
+  return {
+    llmProvider,
+    llmModelId,
+    llmApiKey,
+    llmBaseUrl,
+  }
+}
+
+const resolveModelSettings = (
+  preferred: ModelSettings | undefined,
+  fallback: ModelSettings | undefined,
+) => {
+  const llmProvider
+    = trimOrUndefined(preferred?.llmProvider)
+      ?? trimOrUndefined(fallback?.llmProvider)
+      ?? 'openai'
+  const llmModelId
+    = trimOrUndefined(preferred?.llmModelId)
+      ?? trimOrUndefined(fallback?.llmModelId)
+      ?? 'gpt-4o-mini'
+  const llmApiKey
+    = trimOrUndefined(preferred?.llmApiKey)
+      ?? trimOrUndefined(fallback?.llmApiKey)
+  const llmBaseUrl
+    = trimOrUndefined(preferred?.llmBaseUrl)
+      ?? trimOrUndefined(fallback?.llmBaseUrl)
+      ?? process.env.OPENAI_BASE_URL
+      ?? 'https://api.openai.com/v1'
+  return {
+    llmProvider,
+    llmModelId,
+    llmApiKey,
+    llmBaseUrl,
+  }
+}
+
 const parseJson = (raw: string): JsonValue | null => {
   try {
     return JSON.parse(raw) as JsonValue
@@ -231,17 +309,7 @@ export const deepSearchRouter = createTRPCRouter({
         query: z.string().min(1),
         maxResults: z.number().min(1).max(8).optional(),
         context: z.string().optional(),
-        settings: z
-          .object({
-            tavilyApiKey: z.string().optional(),
-            jinaReaderBaseUrl: z.string().optional(),
-            jinaReaderApiKey: z.string().optional(),
-            llmProvider: z.string().optional(),
-            llmModelId: z.string().optional(),
-            llmApiKey: z.string().optional(),
-            llmBaseUrl: z.string().optional(),
-          })
-          .optional(),
+        settings: RuntimeSettingsSchema.optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -294,15 +362,11 @@ export const deepSearchRouter = createTRPCRouter({
       })
 
       let answer = 'Search completed.'
-      const rawProvider = input.settings?.llmProvider?.trim()
-      const llmProvider = rawProvider && rawProvider.length > 0 ? rawProvider : 'openai'
-      const llmModelId = input.settings?.llmModelId ?? 'gpt-4o-mini'
-      const providerApiKey = input.settings?.llmApiKey
-      const rawBaseUrl = input.settings?.llmBaseUrl?.trim()
-      const providerBaseUrl =
-        rawBaseUrl && rawBaseUrl.length > 0
-          ? rawBaseUrl
-          : (process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1')
+      const legacyModelSettings = buildLegacyModelSettings(input.settings)
+      const resolvedModel = resolveModelSettings(
+        input.settings?.models?.search,
+        input.settings?.models?.chat ?? legacyModelSettings,
+      )
       const contextBlock = input.context
         ? `Context from current graph path:\n${input.context}\n\n`
         : ''
@@ -313,12 +377,12 @@ export const deepSearchRouter = createTRPCRouter({
         .join('\n\n')
       try {
         const provider = createOpenAICompatible({
-          name: llmProvider || 'openai',
-          baseURL: providerBaseUrl,
-          apiKey: providerApiKey,
+          name: resolvedModel.llmProvider,
+          baseURL: resolvedModel.llmBaseUrl,
+          apiKey: resolvedModel.llmApiKey,
         })
         const result = await generateText({
-          model: provider(llmModelId),
+          model: provider(resolvedModel.llmModelId),
           system:
             'You are a deep-research assistant. Write a concise answer and cite sources by index like [1].',
           prompt: `${contextBlock}Question: ${input.query}\n\n${context}`,
