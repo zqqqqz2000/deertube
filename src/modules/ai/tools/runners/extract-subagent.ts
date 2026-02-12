@@ -55,6 +55,14 @@ const stripMarkdownCodeFence = (value: string): string => {
   return matched[1].trim();
 };
 
+const formatZodIssues = (error: z.ZodError): string =>
+  error.issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
+
 const parseExtractResultFromJsonText = (
   value: string,
 ):
@@ -65,6 +73,8 @@ const parseExtractResultFromJsonText = (
   | {
       parsed: null;
       error: string;
+      zodError?: string;
+      zodCandidate?: string;
     } => {
   const raw = value.trim();
   const stripped = stripMarkdownCodeFence(raw);
@@ -76,6 +86,8 @@ const parseExtractResultFromJsonText = (
   }
 
   let lastError = "empty JSON output";
+  let latestZodError: string | undefined;
+  let latestZodCandidate: string | undefined;
   for (const candidate of candidates) {
     if (candidate.text.length === 0) {
       lastError = `${candidate.source}: empty JSON output`;
@@ -94,9 +106,17 @@ const parseExtractResultFromJsonText = (
     if (validated.success) {
       return { parsed: validated.data, source: candidate.source };
     }
-    lastError = `${candidate.source}: ${validated.error.message}`;
+    const zodIssueText = formatZodIssues(validated.error);
+    latestZodError = `${candidate.source}: ${zodIssueText}`;
+    latestZodCandidate = candidate.text;
+    lastError = latestZodError;
   }
-  return { parsed: null, error: lastError };
+  return {
+    parsed: null,
+    error: lastError,
+    zodError: latestZodError,
+    zodCandidate: latestZodCandidate,
+  };
 };
 
 export async function runExtractSubagent({
@@ -416,7 +436,7 @@ export async function runExtractSubagent({
     abortSignal,
   });
   if (!collectedExtractResult) {
-    const retryPrompt = [
+    const retryJsonPromptPrefix = [
       extractSubagentPrompt,
       "",
       "Continuation requirement (mandatory):",
@@ -436,6 +456,9 @@ export async function runExtractSubagent({
       "",
       "Required JSON shape:",
       '{ "viewpoint": "50-100 chars", "broken": false, "inrelavate": false, "selections": [{ "start": 12, "end": 18 }], "error": "optional error message" }',
+    ].join("\n");
+    const retryPrompt = [
+      retryJsonPromptPrefix,
       "",
       "Previous assistant output (context):",
       result.text.length > 0 ? clampText(result.text, 3200) : "(empty)",
@@ -461,6 +484,8 @@ export async function runExtractSubagent({
       ],
       abortSignal,
     });
+    let continuationResult = retryResult;
+    let continuationText = retryResult.text;
     if (!collectedExtractResult) {
       const parsedRetryResult = parseExtractResultFromJsonText(retryResult.text);
       if (parsedRetryResult.parsed) {
@@ -481,14 +506,78 @@ export async function runExtractSubagent({
           query: clampText(query, 160),
           error: clampText(parsedRetryResult.error, 220),
         });
+        if (parsedRetryResult.zodError) {
+          const repairPrompt = [
+            retryJsonPromptPrefix,
+            "",
+            "Validation feedback from previous JSON (fix all issues):",
+            clampText(parsedRetryResult.zodError, 2400),
+            "",
+            "Previous JSON candidate:",
+            parsedRetryResult.zodCandidate
+              ? clampText(parsedRetryResult.zodCandidate, 3200)
+              : "(none)",
+            "",
+            "Return corrected JSON only.",
+          ].join("\n");
+          console.warn("[subagent.extract.agent.retry.json.repair]", {
+            query: clampText(query, 160),
+            zodError: clampText(parsedRetryResult.zodError, 220),
+          });
+          const repairResult = await generateText({
+            model,
+            system: EXTRACT_SUBAGENT_SYSTEM,
+            prompt: repairPrompt,
+            tools: {
+              grep: grepTool,
+              readLines: readLinesTool,
+              writeExtractResult: writeExtractResultTool,
+            },
+            toolChoice: "auto",
+            stopWhen: [
+              hasToolCall("writeExtractResult"),
+              stepCountIs(EXTRACT_SUBAGENT_MAX_STEPS),
+            ],
+            abortSignal,
+          });
+          if (!collectedExtractResult) {
+            const parsedRepairResult = parseExtractResultFromJsonText(
+              repairResult.text,
+            );
+            if (parsedRepairResult.parsed) {
+              collectedExtractResult = parsedRepairResult.parsed;
+              console.log("[subagent.extract.agent.retry.json.repair.parsed]", {
+                query: clampText(query, 160),
+                source: parsedRepairResult.source,
+                viewpoint: clampText(
+                  normalizeExtractViewpoint(parsedRepairResult.parsed.viewpoint),
+                  120,
+                ),
+                broken: parsedRepairResult.parsed.broken,
+                inrelavate: parsedRepairResult.parsed.inrelavate,
+                selectionCount: parsedRepairResult.parsed.selections.length,
+              });
+            } else {
+              console.warn("[subagent.extract.agent.retry.json.repair.invalid]", {
+                query: clampText(query, 160),
+                error: clampText(parsedRepairResult.error, 220),
+              });
+            }
+          }
+          continuationResult = repairResult;
+          continuationText =
+            retryResult.text.length > 0
+              ? `${retryResult.text}\n\n${repairResult.text}`
+              : repairResult.text;
+        }
       }
     }
     result = {
-      ...retryResult,
+      ...continuationResult,
       text:
         result.text.length > 0
-          ? `${result.text}\n\n${retryResult.text}`
-          : retryResult.text,
+          ? `${result.text}\n\n${continuationText}`
+          : continuationText,
     };
   }
   console.log("[subagent.extract.agent.raw]", {
