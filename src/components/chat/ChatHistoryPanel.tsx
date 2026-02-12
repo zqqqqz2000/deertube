@@ -1910,7 +1910,14 @@ export default function ChatHistoryPanel({
               );
               if (item.kind === "primary") {
                 return (
-                  <div key={item.id} data-message-id={message.id}>
+                  <div
+                    key={item.id}
+                    data-message-id={message.id}
+                    className={cn(
+                      isUser &&
+                        "sticky top-0 z-20 rounded-md bg-background/95 px-1 py-1 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80",
+                    )}
+                  >
                     <PrimaryMessage
                       senderName={isUser ? "You" : "Assistant"}
                       avatarFallback={
@@ -1927,7 +1934,14 @@ export default function ChatHistoryPanel({
                 );
               }
               return (
-                <div key={item.id} data-message-id={message.id}>
+                <div
+                  key={item.id}
+                  data-message-id={message.id}
+                  className={cn(
+                    isUser &&
+                      "sticky top-0 z-20 rounded-md bg-background/95 px-1 py-1 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80",
+                  )}
+                >
                   <AdditionalMessage content={content} timestamp={timestamp} />
                 </div>
               );
