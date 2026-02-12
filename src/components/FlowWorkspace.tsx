@@ -146,12 +146,86 @@ const findFirstTabsetId = (node: FlexLayoutNode | undefined): string | null => {
   return null;
 };
 
+const isGraphTabNode = (node: FlexLayoutNode | undefined): boolean => {
+  if (!node || node.type !== "tab") {
+    return false;
+  }
+  const id = node.id ?? "";
+  const component = node.component ?? "";
+  return (
+    id === "graph" ||
+    id === GRAPH_TAB_ID ||
+    component === "graph" ||
+    component === GRAPH_TAB_ID
+  );
+};
+
+const findTabsetIdContainingGraph = (
+  node: FlexLayoutNode | undefined,
+): string | null => {
+  if (!node) {
+    return null;
+  }
+  if (
+    node.type === "tabset" &&
+    node.id &&
+    Array.isArray(node.children) &&
+    node.children.some((child) => isGraphTabNode(child))
+  ) {
+    return node.id;
+  }
+  if (!node.children) {
+    return null;
+  }
+  for (const child of node.children) {
+    const found = findTabsetIdContainingGraph(child);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+};
+
 const parseBrowserTabId = (value: string) => {
   if (value.startsWith(BROWSER_TAB_PREFIX)) {
     return value.slice(BROWSER_TAB_PREFIX.length);
   }
   if (value.startsWith("browser-")) {
     return value;
+  }
+  return null;
+};
+
+const findTabsetIdContainingBrowserTab = (
+  node: FlexLayoutNode | undefined,
+  browserTabId: string,
+): string | null => {
+  if (!node) {
+    return null;
+  }
+  if (
+    node.type === "tabset" &&
+    node.id &&
+    Array.isArray(node.children) &&
+    node.children.some((child) => {
+      if (!child || child.type !== "tab") {
+        return false;
+      }
+      const component = child.component ?? child.id ?? "";
+      const parsedBrowserTabId = parseBrowserTabId(String(component));
+      return parsedBrowserTabId === browserTabId;
+    })
+  ) {
+    return node.id;
+  }
+  if (!node.children) {
+    return null;
+  }
+  for (const child of node.children) {
+    const found = findTabsetIdContainingBrowserTab(child, browserTabId);
+    if (found) {
+      return found;
+    }
   }
   return null;
 };
@@ -413,10 +487,17 @@ const createSingleBrowserLayoutModel = (
           type: "tabset",
           id: GRAPH_TABSET_ID,
           weight: TOTAL_LAYOUT_WEIGHT,
-          selected: 0,
+          selected: 1,
           enableClose: false,
           enableDeleteWhenEmpty: true,
           children: [
+            {
+              type: "tab",
+              id: GRAPH_TAB_ID,
+              name: "Graph",
+              component: "graph",
+              enableClose: true,
+            },
             {
               type: "tab",
               id: tabId,
@@ -1161,21 +1242,26 @@ function FlowWorkspaceInner({
         enableClose: true,
       };
 
-      if (hasTabset(layout, GRAPH_TABSET_ID)) {
+      const firstBrowserTabId = browserTabs[0]?.id ?? null;
+      const targetTabsetId = firstBrowserTabId
+        ? findTabsetIdContainingBrowserTab(layout, firstBrowserTabId) ??
+          findTabsetIdContainingGraph(layout)
+        : findTabsetIdContainingGraph(layout);
+      if (targetTabsetId && hasTabset(layout, targetTabsetId)) {
         model.doAction(
-          Actions.addNode(tab, GRAPH_TABSET_ID, DockLocation.CENTER, -1, true),
+          Actions.addNode(tab, targetTabsetId, DockLocation.CENTER, -1, true),
         );
         handleLayoutChange(model.toJson());
         return tabId;
       }
 
-      const fallbackTabset = findFirstTabsetId(layout);
-      if (!fallbackTabset) {
+      const fallbackTabsetId = findFirstTabsetId(layout);
+      if (!fallbackTabsetId) {
         handleLayoutChange(createSingleBrowserLayoutModel(tabId, resolvedLabel));
         return tabId;
       }
       model.doAction(
-        Actions.addNode(tab, fallbackTabset, DockLocation.RIGHT, -1, true),
+        Actions.addNode(tab, fallbackTabsetId, DockLocation.CENTER, -1, true),
       );
       handleLayoutChange(model.toJson());
       return tabId;
