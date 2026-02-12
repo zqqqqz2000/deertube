@@ -10,7 +10,10 @@ import ReactFlow, {
   useReactFlow,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import type { IJsonModel, IJsonTabNode } from "@massbug/flexlayout-react";
+import type {
+  IJsonModel,
+  IJsonTabNode,
+} from "@massbug/flexlayout-react";
 import { Actions, DockLocation, Model } from "@massbug/flexlayout-react";
 import { trpc } from "../lib/trpc";
 import type { IpcRendererEvent } from "electron";
@@ -24,7 +27,11 @@ import { createProfileDraft } from "../lib/settings";
 import { getNodeSize } from "../lib/elkLayout";
 import FlowHeader from "./flow/FlowHeader";
 import FlowPanelInput from "./flow/FlowPanelInput";
-import type { FlowWorkspaceProps, ProjectState } from "./flow/types";
+import type {
+  FlowWorkspaceProps,
+  ProjectChatSummary,
+  ProjectState,
+} from "./flow/types";
 import { useAutoLayout } from "./flow/useAutoLayout";
 import { useFlowState } from "./flow/useFlowState";
 import { useInitialFit } from "./flow/useInitialFit";
@@ -38,6 +45,7 @@ import type { InsightNodeData } from "../types/flow";
 import type { ChatMessage } from "../types/chat";
 import { FlowFlexLayout } from "./flow/FlowFlexLayout";
 import { BrowserTab } from "./browser/BrowserTab";
+import { ChatTabActions } from "./flow/ChatTabActions";
 import type {
   BrowserViewBounds,
   BrowserViewReferenceHighlight,
@@ -68,6 +76,25 @@ const coerceProjectState = (state: ProjectStateInput): ProjectState => ({
   autoLayoutLocked:
     typeof state.autoLayoutLocked === "boolean" ? state.autoLayoutLocked : true,
 });
+
+const createEmptyProjectState = (): ProjectState => ({
+  nodes: [],
+  edges: [],
+  chat: [],
+  autoLayoutLocked: true,
+});
+
+const toTimestamp = (value: string) => {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const sortChatSummariesDesc = (
+  chats: ProjectChatSummary[],
+): ProjectChatSummary[] =>
+  [...chats].sort(
+    (left, right) => toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt),
+  );
 
 interface FlexLayoutNode {
   id?: string;
@@ -404,8 +431,22 @@ const createSingleBrowserLayoutModel = (
   };
 };
 
+interface FlowWorkspaceInnerProps extends FlowWorkspaceProps {
+  activeChatId: string | null;
+  chatSummaries: ProjectChatSummary[];
+  onSwitchChat: (chatId: string) => Promise<void>;
+  onCreateDraftChat: () => void;
+  onPersistDraftChat: (payload: {
+    firstQuestion: string;
+    state: ProjectState;
+  }) => Promise<string | null>;
+  onSavedChatUpdate: (chat: ProjectChatSummary | null) => void;
+}
+
 function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
   const [loadedState, setLoadedState] = useState<ProjectState | null>(null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [chatSummaries, setChatSummaries] = useState<ProjectChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const lastPathRef = useRef<string | null>(null);
@@ -418,6 +459,8 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
     setLoading(true);
     if (!samePath) {
       setLoadedState(null);
+      setActiveChatId(null);
+      setChatSummaries([]);
     }
     trpc.project.open
       .mutate({ path: props.project.path })
@@ -426,6 +469,8 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
           return;
         }
         setLoadedState(coerceProjectState(result.state));
+        setActiveChatId(result.activeChatId ?? null);
+        setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
         setReloadKey((prev) => prev + 1);
       })
       .catch(() => {
@@ -433,6 +478,8 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
           return;
         }
         setLoadedState((prev) => prev ?? props.initialState);
+        setActiveChatId(null);
+        setChatSummaries([]);
       })
       .finally(() => {
         if (cancelled) {
@@ -444,6 +491,77 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
       cancelled = true;
     };
   }, [props.initialState, props.project.path]);
+
+  const handleSwitchChat = useCallback(
+    async (chatId: string) => {
+      if (!chatId || chatId === activeChatId) {
+        return;
+      }
+      setLoading(true);
+      try {
+        const result = await trpc.project.openChat.mutate({
+          path: props.project.path,
+          chatId,
+        });
+        setLoadedState(coerceProjectState(result.state));
+        setActiveChatId(result.chatId);
+        setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
+        setReloadKey((prev) => prev + 1);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [activeChatId, props.project.path],
+  );
+
+  const handleCreateDraftChat = useCallback(() => {
+    setActiveChatId(null);
+    setLoadedState(createEmptyProjectState());
+    setReloadKey((prev) => prev + 1);
+  }, []);
+
+  const handlePersistDraftChat = useCallback(
+    async ({
+      firstQuestion,
+      state,
+    }: {
+      firstQuestion: string;
+      state: ProjectState;
+    }) => {
+      if (activeChatId) {
+        return activeChatId;
+      }
+      const result = await trpc.project.createChat.mutate({
+        path: props.project.path,
+        firstQuestion,
+        state: {
+          version: 1,
+          nodes: state.nodes,
+          edges: state.edges,
+          chat: state.chat,
+          autoLayoutLocked: state.autoLayoutLocked,
+        },
+      });
+      const nextChatId = result.activeChatId ?? result.chat.id;
+      setActiveChatId(nextChatId);
+      setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
+      return nextChatId;
+    },
+    [activeChatId, props.project.path],
+  );
+
+  const handleSavedChatUpdate = useCallback((chat: ProjectChatSummary | null) => {
+    if (!chat) {
+      return;
+    }
+    setActiveChatId(chat.id);
+    setChatSummaries((prev) =>
+      sortChatSummariesDesc([
+        chat,
+        ...prev.filter((item) => item.id !== chat.id),
+      ]),
+    );
+  }, []);
 
   if (loading && !loadedState) {
     return (
@@ -465,6 +583,12 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
         key={reloadKey}
         {...props}
         initialState={loadedState}
+        activeChatId={activeChatId}
+        chatSummaries={chatSummaries}
+        onSwitchChat={handleSwitchChat}
+        onCreateDraftChat={handleCreateDraftChat}
+        onPersistDraftChat={handlePersistDraftChat}
+        onSavedChatUpdate={handleSavedChatUpdate}
         saveEnabled={saveEnabled && !loading}
       />
       {loading ? (
@@ -481,14 +605,21 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
 function FlowWorkspaceInner({
   project,
   initialState,
+  activeChatId,
+  chatSummaries,
+  onSwitchChat,
+  onCreateDraftChat,
+  onPersistDraftChat,
+  onSavedChatUpdate,
   theme,
   onToggleTheme,
   onExit,
   saveEnabled = true,
-}: FlowWorkspaceProps) {
+}: FlowWorkspaceInnerProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [developerMode, setDeveloperMode] = useState(false);
+  const [sessionChatId, setSessionChatId] = useState<string | null>(activeChatId);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance | null>(
     null,
   );
@@ -533,7 +664,6 @@ function FlowWorkspaceInner({
   const autoLayoutLastCountRef = useRef<number | null>(null);
   const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   const { getNode } = useReactFlow();
-  const flowStateOptions = useMemo(() => ({ autoSave: false }), []);
 
   const {
     nodes,
@@ -543,7 +673,10 @@ function FlowWorkspaceInner({
     setEdges,
     onEdgesChange,
     hydrated,
-  } = useFlowState(initialState, project.path, flowStateOptions);
+  } = useFlowState(initialState);
+  useEffect(() => {
+    setSessionChatId(activeChatId);
+  }, [activeChatId]);
   const {
     profiles,
     setProfiles,
@@ -553,6 +686,26 @@ function FlowWorkspaceInner({
   } = useProfileSettings(project.path);
   const { panelVisible, panelNodeId } = usePanelState(selectedId, isDragging);
   const displayEdges = useMemo(() => edges, [edges]);
+  const persistDraftChatBeforeSend = useCallback(
+    async (prompt: string) => {
+      if (sessionChatId) {
+        return;
+      }
+      const nextChatId = await onPersistDraftChat({
+        firstQuestion: prompt,
+        state: {
+          nodes,
+          edges,
+          chat: [],
+          autoLayoutLocked,
+        },
+      });
+      if (nextChatId) {
+        setSessionChatId(nextChatId);
+      }
+    },
+    [autoLayoutLocked, edges, nodes, onPersistDraftChat, sessionChatId],
+  );
   const {
     historyInput,
     setHistoryInput,
@@ -575,6 +728,7 @@ function FlowWorkspaceInner({
     flowInstance,
     activeProfile,
     initialMessages: initialState.chat ?? [],
+    onBeforeSendPrompt: persistDraftChatBeforeSend,
   });
   const lastFailedMessageId = useMemo(() => {
     for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
@@ -1251,6 +1405,9 @@ function FlowWorkspaceInner({
     if (!saveEnabled) {
       return;
     }
+    if (!sessionChatId) {
+      return;
+    }
     if (!hydrated.current) {
       return;
     }
@@ -1261,6 +1418,7 @@ function FlowWorkspaceInner({
       trpc.project.saveState
         .mutate({
           path: project.path,
+          chatId: sessionChatId,
           state: {
             nodes,
             edges,
@@ -1269,6 +1427,9 @@ function FlowWorkspaceInner({
             version: 1,
           },
         })
+        .then((result) => {
+          onSavedChatUpdate(result.chat);
+        })
         .catch(() => undefined);
     }, 500);
     return () => {
@@ -1276,7 +1437,17 @@ function FlowWorkspaceInner({
         window.clearTimeout(saveTimer.current);
       }
     };
-  }, [autoLayoutLocked, chatMessages, edges, nodes, project.path, hydrated, saveEnabled]);
+  }, [
+    autoLayoutLocked,
+    chatMessages,
+    edges,
+    hydrated,
+    nodes,
+    onSavedChatUpdate,
+    project.path,
+    saveEnabled,
+    sessionChatId,
+  ]);
 
   const handleExit = () => {
     trpc.preview.hide.mutate().catch(() => undefined);
@@ -1642,6 +1813,15 @@ function FlowWorkspaceInner({
             <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
               {chatMessages.length} MSG
             </span>
+            <ChatTabActions
+              chats={chatSummaries}
+              activeChatId={sessionChatId}
+              busy={busy}
+              onSwitchChat={(chatId) => {
+                void onSwitchChat(chatId);
+              }}
+              onCreateChat={onCreateDraftChat}
+            />
           </div>
         );
       }
@@ -1655,7 +1835,15 @@ function FlowWorkspaceInner({
       }
       return <span className="text-sm font-medium text-foreground">{tabId}</span>;
     },
-    [browserTabMap, chatMessages.length],
+    [
+      browserTabMap,
+      busy,
+      chatMessages.length,
+      chatSummaries,
+      onCreateDraftChat,
+      onSwitchChat,
+      sessionChatId,
+    ],
   );
 
   const handleProjectNameClick = useCallback(() => {

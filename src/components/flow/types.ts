@@ -9,6 +9,13 @@ export interface ProjectState {
   autoLayoutLocked?: boolean;
 }
 
+export interface ProjectChatSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ProjectInfo {
   path: string;
   name: string;

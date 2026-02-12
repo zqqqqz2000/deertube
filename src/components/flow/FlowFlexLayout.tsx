@@ -1,4 +1,11 @@
-import type { IJsonModel, ITabRenderValues, TabNode } from "@massbug/flexlayout-react";
+import type {
+  BorderNode,
+  IJsonModel,
+  ITabRenderValues,
+  ITabSetRenderValues,
+  TabNode,
+  TabSetNode,
+} from "@massbug/flexlayout-react";
 import { Layout, Model } from "@massbug/flexlayout-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
@@ -10,6 +17,7 @@ interface FlowFlexLayoutProps {
   onModelChange: (model: IJsonModel) => void;
   renderTab: (tabId: string) => ReactNode;
   renderTabLabel?: (tabId: string) => ReactNode;
+  renderTabSetActions?: (node: TabSetNode | BorderNode) => ReactNode | null;
   realtimeResize?: boolean;
 }
 
@@ -18,6 +26,7 @@ export function FlowFlexLayout({
   onModelChange,
   renderTab,
   renderTabLabel,
+  renderTabSetActions,
   realtimeResize = true,
 }: FlowFlexLayoutProps) {
   const layoutHostRef = useRef<HTMLDivElement | null>(null);
@@ -47,6 +56,19 @@ export function FlowFlexLayout({
       renderValues.content = renderTabLabel(component);
     },
     [renderTabLabel],
+  );
+
+  const onRenderTabSet = useCallback(
+    (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
+      if (!renderTabSetActions) {
+        return;
+      }
+      const actions = renderTabSetActions(node);
+      if (actions) {
+        renderValues.stickyButtons.push(actions);
+      }
+    },
+    [renderTabSetActions],
   );
 
   useEffect(() => {
@@ -114,6 +136,7 @@ export function FlowFlexLayout({
         factory={factory}
         onModelChange={handleModelChange}
         onRenderTab={onRenderTab}
+        onRenderTabSet={onRenderTabSet}
         realtimeResize={realtimeResize}
       />
     </div>

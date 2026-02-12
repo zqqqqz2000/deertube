@@ -38,6 +38,7 @@ interface UseChatActionsOptions {
   flowInstance: ReactFlowInstance | null;
   activeProfile: ProviderProfile | null;
   initialMessages: ChatMessage[];
+  onBeforeSendPrompt?: (prompt: string) => Promise<void> | void;
 }
 
 interface GraphSnapshot {
@@ -183,6 +184,7 @@ export function useChatActions({
   flowInstance,
   activeProfile,
   initialMessages,
+  onBeforeSendPrompt,
 }: UseChatActionsOptions) {
   const [historyInput, setHistoryInput] = useState("");
   const [panelInput, setPanelInput] = useState("");
@@ -580,11 +582,16 @@ export function useChatActions({
   ]);
 
   const sendPrompt = useCallback(
-    (rawPrompt: string, reset: () => void) => {
+    async (rawPrompt: string, reset: () => void) => {
       if (!rawPrompt.trim()) {
         return;
       }
       const prompt = rawPrompt.trim();
+      try {
+        await onBeforeSendPrompt?.(prompt);
+      } catch {
+        // Keep chat usable even when local persistence fails.
+      }
       const quotePrefix =
         selectedNodeForQuote && !hasNodeQuote(prompt)
           ? `${buildNodeQuote(selectedNodeForQuote)} `
@@ -596,7 +603,7 @@ export function useChatActions({
       }
       void sendMessage({ text: finalPrompt });
     },
-    [selectedNodeForQuote, sendMessage, status, stop],
+    [onBeforeSendPrompt, selectedNodeForQuote, sendMessage, status, stop],
   );
 
   const retryMessage = useCallback(

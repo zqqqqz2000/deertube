@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { useEdgesState, useNodesState } from "reactflow";
-import { trpc } from "../../lib/trpc";
 import { INSIGHT_NODE_WIDTH } from "../../lib/elkLayout";
 import type {
   FlowEdge,
@@ -11,13 +10,11 @@ import type { ProjectState } from "./types";
 
 interface FlowStateOptions {
   onInitialRootSelect?: (rootId: string) => void;
-  autoSave?: boolean;
 }
 
 export function useFlowState(
   initialState: ProjectState,
-  projectPath: string,
-  options: FlowStateOptions = {},
+  options?: FlowStateOptions,
 ) {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNodeData>(
     initialState.nodes,
@@ -27,7 +24,8 @@ export function useFlowState(
   );
   const lastQuestionId = useRef<string | null>(null);
   const hydrated = useRef(false);
-  const saveTimer = useRef<number | null>(null);
+
+  const onInitialRootSelect = options?.onInitialRootSelect;
 
   useEffect(() => {
     if (initialState.nodes.length === 0) {
@@ -48,17 +46,7 @@ export function useFlowState(
       setNodes([rootNode]);
       setEdges([]);
       lastQuestionId.current = rootId;
-      trpc.project.saveState
-        .mutate({
-          path: projectPath,
-          state: {
-            nodes: [rootNode],
-            edges: [],
-            version: 1,
-          },
-        })
-        .catch(() => undefined);
-      options.onInitialRootSelect?.(rootId);
+      onInitialRootSelect?.(rootId);
     } else {
       setNodes(initialState.nodes);
       setEdges(initialState.edges);
@@ -71,40 +59,10 @@ export function useFlowState(
   }, [
     initialState.edges,
     initialState.nodes,
-    projectPath,
     setEdges,
     setNodes,
-    options,
+    onInitialRootSelect,
   ]);
-
-  useEffect(() => {
-    if (!hydrated.current) {
-      return;
-    }
-    if (options.autoSave === false) {
-      return;
-    }
-    if (saveTimer.current) {
-      window.clearTimeout(saveTimer.current);
-    }
-    saveTimer.current = window.setTimeout(() => {
-      trpc.project.saveState
-        .mutate({
-          path: projectPath,
-          state: {
-            nodes,
-            edges,
-            version: 1,
-          },
-        })
-        .catch(() => undefined);
-    }, 500);
-    return () => {
-      if (saveTimer.current) {
-        window.clearTimeout(saveTimer.current);
-      }
-    };
-  }, [edges, nodes, projectPath, options.autoSave]);
 
   return {
     nodes,

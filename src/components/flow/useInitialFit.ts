@@ -13,7 +13,7 @@ export function useInitialFit(
     }
     initialFitDone.current = true;
     requestAnimationFrame(() => {
-      flowInstance.fitView({ padding: 0.2, duration: 400 });
+      flowInstance.fitView({ padding: 0.35, maxZoom: 0.82, duration: 400 });
     });
   }, [flowInstance, nodesLength]);
 }
