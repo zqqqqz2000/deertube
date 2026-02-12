@@ -21,7 +21,7 @@ export function PrimaryMessage({
 }: {
   avatarSrc?: string;
   avatarAlt?: string;
-  avatarFallback?: string;
+  avatarFallback?: ReactNode;
   senderName: string;
   content: ReactNode;
   timestamp: number;

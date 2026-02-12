@@ -317,59 +317,114 @@ export async function runSearchSubagent({
       const extractStartedAt = Date.now();
       let stage = "init";
       const lookup = searchLookup.get(url);
+      let pageTitle = lookup?.title;
       let pageId: string | undefined;
       let lineCount = 0;
       let rawModelOutput = "";
+      let lines: string[] = [];
       console.log("[subagent.extract]", {
         url: clampText(url, 220),
         query: clampText(extractQuery, 160),
       });
       try {
-        stage = "fetch-markdown";
-        const markdownFetchStartedAt = Date.now();
-        console.log("[subagent.extract.fetch.start]", {
-          url: clampText(url, 220),
-          query: clampText(extractQuery, 160),
-        });
-        const markdown = await fetchJinaReaderMarkdown(
-          url,
-          jinaReaderBaseUrl,
-          jinaReaderApiKey,
-        );
-        console.log("[subagent.extract.fetch.done]", {
-          url: clampText(url, 220),
-          elapsedMs: Date.now() - markdownFetchStartedAt,
-          markdownCharCount: markdown.length,
-        });
-        if (!markdown.trim()) {
-          throw new Error("Jina content unavailable.");
-        }
-        const fetchedAt = new Date().toISOString();
-        const lines = splitLines(markdown);
-        lineCount = lines.length;
-        console.log("[subagent.extract.markdown]", {
-          url: clampText(url, 220),
-          lineCount: lines.length,
-          markdownCharCount: markdown.length,
-          markdownPreview: clampText(markdown, 240),
-        });
         if (deepResearchStore) {
-          stage = "save-page";
-          const persistedPage = await deepResearchStore.savePage({
-            searchId,
-            query: extractQuery,
-            url,
-            title: lookup?.title,
-            markdown,
-            fetchedAt,
-          });
-          pageId = persistedPage.pageId;
-          lineCount = persistedPage.lineCount;
-          console.log("[subagent.extract.pageSaved]", {
+          stage = "load-page-cache";
+          const cachedPage = await deepResearchStore.findCachedPageByUrl(url);
+          if (cachedPage) {
+            lines = splitLines(cachedPage.markdown);
+            pageId = cachedPage.pageId;
+            lineCount = cachedPage.lineCount > 0 ? cachedPage.lineCount : lines.length;
+            pageTitle = pageTitle ?? cachedPage.title;
+            console.log("[subagent.extract.cache.pageHit]", {
+              url: clampText(url, 220),
+              pageId,
+              lineCount,
+              cachedFetchedAt: cachedPage.fetchedAt,
+            });
+          }
+        }
+
+        if (lines.length === 0) {
+          stage = "fetch-markdown";
+          const markdownFetchStartedAt = Date.now();
+          console.log("[subagent.extract.fetch.start]", {
             url: clampText(url, 220),
-            pageId,
-            lineCount,
+            query: clampText(extractQuery, 160),
           });
+          const markdown = await fetchJinaReaderMarkdown(
+            url,
+            jinaReaderBaseUrl,
+            jinaReaderApiKey,
+          );
+          console.log("[subagent.extract.fetch.done]", {
+            url: clampText(url, 220),
+            elapsedMs: Date.now() - markdownFetchStartedAt,
+            markdownCharCount: markdown.length,
+          });
+          if (!markdown.trim()) {
+            throw new Error("Jina content unavailable.");
+          }
+          const fetchedAt = new Date().toISOString();
+          lines = splitLines(markdown);
+          lineCount = lines.length;
+          console.log("[subagent.extract.markdown]", {
+            url: clampText(url, 220),
+            lineCount: lines.length,
+            markdownCharCount: markdown.length,
+            markdownPreview: clampText(markdown, 240),
+          });
+          if (deepResearchStore) {
+            stage = "save-page";
+            const persistedPage = await deepResearchStore.savePage({
+              searchId,
+              query: extractQuery,
+              url,
+              title: pageTitle,
+              markdown,
+              fetchedAt,
+            });
+            pageId = persistedPage.pageId;
+            lineCount = persistedPage.lineCount;
+            console.log("[subagent.extract.pageSaved]", {
+              url: clampText(url, 220),
+              pageId,
+              lineCount,
+            });
+          }
+        }
+
+        if (deepResearchStore && pageId) {
+          stage = "load-extraction-cache";
+          const cachedExtraction =
+            await deepResearchStore.findCachedExtractionByPageAndQuery(
+              pageId,
+              extractQuery,
+            );
+          if (cachedExtraction) {
+            rawModelOutput = cachedExtraction.rawModelOutput;
+            lineCount =
+              cachedExtraction.lineCount > 0
+                ? cachedExtraction.lineCount
+                : lineCount;
+            console.log("[subagent.extract.cache.extractionHit]", {
+              url: clampText(url, 220),
+              pageId,
+              selections: cachedExtraction.selections.length,
+              extractedAt: cachedExtraction.extractedAt,
+            });
+            return {
+              url,
+              title: pageTitle,
+              pageId,
+              lineCount,
+              broken: cachedExtraction.broken,
+              inrelavate: cachedExtraction.inrelavate,
+              viewpoint: cachedExtraction.viewpoint,
+              selections: cachedExtraction.selections,
+              error: cachedExtraction.error,
+              rawModelOutput,
+            };
+          }
         }
 
         stage = "extract-agent";
@@ -396,9 +451,11 @@ export async function runSearchSubagent({
             url,
             viewpoint,
             broken: extractedBroken,
+            inrelavate,
             lineCount,
             selections,
             rawModelOutput,
+            error: extractedError,
             extractedAt: new Date().toISOString(),
           });
           console.log("[subagent.extract.extractionSaved]", {
@@ -422,7 +479,7 @@ export async function runSearchSubagent({
         });
         const result = {
           url,
-          title: lookup?.title,
+          title: pageTitle,
           pageId,
           lineCount,
           broken: extractedBroken,
@@ -434,7 +491,7 @@ export async function runSearchSubagent({
         };
         console.log("[subagent.extract.result]", {
           url: clampText(url, 220),
-          title: lookup?.title ? clampText(lookup.title, 140) : undefined,
+          title: pageTitle ? clampText(pageTitle, 140) : undefined,
           pageId,
           lineCount,
           viewpoint: clampText(viewpoint, 120),
@@ -458,7 +515,7 @@ export async function runSearchSubagent({
         });
         return {
           url,
-          title: lookup?.title,
+          title: pageTitle,
           pageId,
           lineCount,
           broken: true,

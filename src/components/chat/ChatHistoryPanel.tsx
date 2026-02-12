@@ -40,15 +40,20 @@ import {
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
 import {
+  AlertCircle,
   ArrowDown,
+  Bot,
   Check,
+  CircleCheck,
   ChevronDown,
-  Globe,
   Loader2,
   MessageSquare,
   Network,
   RotateCw,
+  Search as SearchIcon,
   Send,
+  UserRound,
+  Wrench,
 } from "lucide-react";
 import { useStickToBottom } from "use-stick-to-bottom";
 import {
@@ -84,12 +89,48 @@ interface ChatHistoryPanelProps {
 }
 
 interface SubagentEntry {
-  kind: "call" | "result";
+  id: string;
   label: string;
+  status: ToolExecutionStatus;
   compactDetail?: string;
   fullDetail?: string;
   tone?: "warn";
 }
+
+type ToolExecutionStatus = "running" | "complete" | "failed";
+
+interface ToolProgress {
+  total: number;
+  done: number;
+  running: number;
+  failed: number;
+}
+
+interface GraphChatItem {
+  kind: "graph";
+  id: string;
+  message: ChatMessage;
+}
+
+interface SubagentChatItem {
+  kind: "subagent";
+  id: string;
+  message: ChatMessage;
+  deepSearchMessage?: ChatMessage;
+}
+
+interface DeepSearchChatItem {
+  kind: "deepsearch";
+  id: string;
+  message: ChatMessage;
+}
+
+type ToolChatItem = GraphChatItem | SubagentChatItem | DeepSearchChatItem;
+type ChatItem =
+  | { kind: "date"; id: string; timestamp: number }
+  | { kind: "primary"; id: string; message: ChatMessage }
+  | { kind: "additional"; id: string; message: ChatMessage }
+  | ToolChatItem;
 
 const TOOL_DETAIL_MAX_CHARS = 120;
 
@@ -159,6 +200,44 @@ const getToolName = (part: ToolMessagePart): string | undefined => {
   return undefined;
 };
 
+const resolvePartStatus = (part: ToolMessagePart): ToolExecutionStatus => {
+  const partState =
+    "state" in part && typeof part.state === "string" ? part.state : undefined;
+  if (partState?.includes("error")) {
+    return "failed";
+  }
+  if (partState?.includes("denied")) {
+    return "failed";
+  }
+  if ("output" in part && part.output !== undefined) {
+    return "complete";
+  }
+  if (partState === "output-available") {
+    return "complete";
+  }
+  return "running";
+};
+
+const toExecutionStatus = (
+  status: ChatMessage["toolStatus"],
+): ToolExecutionStatus => {
+  if (status === "failed") {
+    return "failed";
+  }
+  if (status === "complete") {
+    return "complete";
+  }
+  return "running";
+};
+
+const getProgressByStatuses = (statuses: ToolExecutionStatus[]): ToolProgress => {
+  const total = statuses.length;
+  const done = statuses.filter((status) => status !== "running").length;
+  const running = statuses.filter((status) => status === "running").length;
+  const failed = statuses.filter((status) => status === "failed").length;
+  return { total, done, running, failed };
+};
+
 const summarizeToolInput = (toolName: string | undefined, input: unknown) => {
   if (!isRecord(input)) {
     return undefined;
@@ -224,8 +303,8 @@ const stringifyToolDetail = (value: unknown): string | undefined => {
 };
 
 const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] => {
-  const entries: SubagentEntry[] = [];
-  payload.messages.forEach((message) => {
+  const byId = new Map<string, SubagentEntry>();
+  payload.messages.forEach((message, messageIndex) => {
     if (
       !message ||
       typeof message !== "object" ||
@@ -235,32 +314,46 @@ const buildSubagentEntries = (payload: SubagentStreamPayload): SubagentEntry[] =
       return;
     }
     const parts = (message as { parts: DeertubeMessagePart[] }).parts;
-    parts.forEach((part) => {
+    parts.forEach((part, partIndex) => {
       if (!isToolPart(part)) {
         return;
       }
       const toolName = getToolName(part);
-      if ("input" in part && part.input !== undefined) {
-        entries.push({
-          kind: "call",
-          label: toolName ?? "tool",
-          compactDetail: summarizeToolInput(toolName, part.input),
-          fullDetail: stringifyToolDetail(part.input),
-        });
-      }
+      const label = toolName ?? "tool";
+      const rawId =
+        "toolCallId" in part && typeof part.toolCallId === "string"
+          ? part.toolCallId
+          : `${label}-${messageIndex}-${partIndex}`;
+      const inputCompact =
+        "input" in part && part.input !== undefined
+          ? summarizeToolInput(toolName, part.input)
+          : undefined;
+      const inputDetail =
+        "input" in part && part.input !== undefined
+          ? stringifyToolDetail(part.input)
+          : undefined;
+      const prior = byId.get(rawId);
+      const nextStatus = resolvePartStatus(part);
+      let compactDetail = prior?.compactDetail ?? inputCompact;
+      let fullDetail = prior?.fullDetail ?? inputDetail;
+      let tone = prior?.tone;
       if ("output" in part && part.output !== undefined) {
         const summary = summarizeToolOutput(toolName, part.output);
-        entries.push({
-          kind: "result",
-          label: toolName ?? "tool",
-          compactDetail: summary.detail,
-          fullDetail: stringifyToolDetail(part.output),
-          tone: summary.tone,
-        });
+        compactDetail = summary.detail ?? compactDetail;
+        fullDetail = stringifyToolDetail(part.output) ?? fullDetail;
+        tone = summary.tone ?? tone;
       }
+      byId.set(rawId, {
+        id: rawId,
+        label,
+        status: nextStatus,
+        compactDetail,
+        fullDetail,
+        tone,
+      });
     });
   });
-  return entries;
+  return Array.from(byId.values());
 };
 
 const parseGraphToolInput = (value: ChatMessage["toolInput"]): GraphToolInput | null => {
@@ -297,6 +390,9 @@ const readToolCallId = (value: ChatMessage["toolInput"]): string | null => {
   return typeof value.toolCallId === "string" ? value.toolCallId : null;
 };
 
+const isToolChatItem = (item: ChatItem): item is ToolChatItem =>
+  item.kind === "graph" || item.kind === "subagent" || item.kind === "deepsearch";
+
 export default function ChatHistoryPanel({
   developerMode = false,
   messages,
@@ -322,7 +418,10 @@ export default function ChatHistoryPanel({
   const { scrollRef, contentRef } = useStickToBottom();
   const highlightedId = selectedResponseId;
   const ignoreHighlightRef = useRef(false);
-  const [subagentOpenById, setSubagentOpenById] = useState<Record<string, boolean>>({});
+  const [toolOpenById, setToolOpenById] = useState<Record<string, boolean>>({});
+  const [toolGroupOpenById, setToolGroupOpenById] = useState<
+    Record<string, boolean>
+  >({});
   const nodeLookup = useMemo(() => {
     const map = new Map<string, FlowNode>();
     nodes.forEach((node) => map.set(node.id, node));
@@ -398,23 +497,21 @@ export default function ChatHistoryPanel({
     [nodes],
   );
   useEffect(() => {
-    setSubagentOpenById((previous) => {
+    setToolOpenById((previous) => {
       const next = { ...previous };
       const activeIds = new Set<string>();
       let changed = false;
       messages.forEach((message) => {
-        if (message.kind !== "subagent-event") {
+        if (
+          message.kind !== "graph-event" &&
+          message.kind !== "subagent-event" &&
+          message.kind !== "deepsearch-event"
+        ) {
           return;
         }
         activeIds.add(message.id);
-        const prior = next[message.id];
-        if (prior === undefined) {
-          next[message.id] = message.toolStatus === "running";
-          changed = true;
-          return;
-        }
-        if (message.toolStatus === "running" && prior !== true) {
-          next[message.id] = true;
+        if (next[message.id] === undefined) {
+          next[message.id] = false;
           changed = true;
         }
       });
@@ -431,6 +528,7 @@ export default function ChatHistoryPanel({
       return next;
     });
   }, [messages]);
+
   const handleNodeLinkClick = useCallback(
     (nodeId: string) => {
       if (!onFocusNode) {
@@ -571,19 +669,7 @@ export default function ChatHistoryPanel({
   }, [handleScroll, sortedMessages.length, busy, graphBusy]);
 
   const chatItems = useMemo(() => {
-    const items: (
-      | { kind: "date"; id: string; timestamp: number }
-      | { kind: "primary"; id: string; message: ChatMessage }
-      | { kind: "additional"; id: string; message: ChatMessage }
-      | { kind: "graph"; id: string; message: ChatMessage }
-      | {
-          kind: "subagent";
-          id: string;
-          message: ChatMessage;
-          deepSearchMessage?: ChatMessage;
-        }
-      | { kind: "deepsearch"; id: string; message: ChatMessage }
-    )[] = [];
+    const items: ChatItem[] = [];
     const deepSearchByToolCall = new Map<string, ChatMessage>();
     const subagentToolCallIds = new Set<string>();
     let lastDateKey = "";
@@ -665,6 +751,51 @@ export default function ChatHistoryPanel({
 
     return items;
   }, [sortedMessages]);
+
+  const toolGroupIds = useMemo(() => {
+    const ids: string[] = [];
+    chatItems.forEach((item, index) => {
+      if (!isToolChatItem(item)) {
+        return;
+      }
+      const previous = index > 0 ? chatItems[index - 1] : undefined;
+      if (previous && isToolChatItem(previous)) {
+        return;
+      }
+      ids.push(`tool-group-${item.id}`);
+    });
+    return ids;
+  }, [chatItems]);
+
+  useEffect(() => {
+    setToolGroupOpenById((previous) => {
+      const next = { ...previous };
+      const activeIds = new Set(toolGroupIds);
+      let changed = false;
+
+      toolGroupIds.forEach((id) => {
+        if (next[id] !== undefined) {
+          return;
+        }
+        next[id] = false;
+        changed = true;
+      });
+
+      Object.keys(next).forEach((id) => {
+        if (activeIds.has(id)) {
+          return;
+        }
+        delete next[id];
+        changed = true;
+      });
+
+      if (!changed) {
+        return previous;
+      }
+      return next;
+    });
+  }, [toolGroupIds]);
+
   const hasPendingAssistant = useMemo(
     () =>
       messages.some(
@@ -722,6 +853,75 @@ export default function ChatHistoryPanel({
     return "Complete";
   }, []);
 
+  const getExecutionStatusLabel = useCallback((status: ToolExecutionStatus) => {
+    if (status === "running") {
+      return "running";
+    }
+    if (status === "failed") {
+      return "failed";
+    }
+    return "done";
+  }, []);
+
+  const getToolItemStatuses = useCallback(
+    (item: ToolChatItem): ToolExecutionStatus[] => {
+      if (item.kind !== "subagent") {
+        return [toExecutionStatus(item.message.toolStatus)];
+      }
+
+      const outputPayloadRaw = parseToolPayload(item.message.toolOutput);
+      const outputPayload = isSubagentPayload(outputPayloadRaw)
+        ? outputPayloadRaw
+        : null;
+      const entries = outputPayload ? buildSubagentEntries(outputPayload) : [];
+      const statuses = entries.map((entry) => entry.status);
+      const deepSearchStatus = item.deepSearchMessage?.toolStatus;
+      if (deepSearchStatus) {
+        statuses.push(toExecutionStatus(deepSearchStatus));
+      }
+      if (statuses.length === 0) {
+        statuses.push(toExecutionStatus(item.message.toolStatus));
+      }
+      return statuses;
+    },
+    [],
+  );
+
+  const getGroupToolStatus = useCallback(
+    (progress: ToolProgress): ChatMessage["toolStatus"] => {
+      if (progress.running > 0) {
+        return "running";
+      }
+      if (progress.failed > 0) {
+        return "failed";
+      }
+      return "complete";
+    },
+    [],
+  );
+
+  const getToolGroupStatusLabel = useCallback(
+    (itemCount: number, progress: ToolProgress): string => {
+      const base = `${itemCount} tool${itemCount === 1 ? "" : "s"}`;
+      if (progress.running > 0) {
+        return `${base} · ${progress.running} running`;
+      }
+      if (progress.failed > 0) {
+        return `${base} · ${progress.failed} failed`;
+      }
+      return `${base} · all done`;
+    },
+    [],
+  );
+
+  const getProgressPercent = useCallback((progress: ToolProgress): number => {
+    if (progress.total <= 0) {
+      return 0;
+    }
+    const ratio = progress.done / progress.total;
+    return Math.max(0, Math.min(100, Math.round(ratio * 100)));
+  }, []);
+
   const getToolCardClassName = useCallback((status: ChatMessage["toolStatus"]) => {
     if (status === "running") {
       return "message-marquee border-sky-400/50 bg-sky-500/5";
@@ -738,6 +938,49 @@ export default function ChatHistoryPanel({
         <Check className="h-4 w-4 shrink-0 text-emerald-500" aria-label="Complete" />
       ) : null,
     [],
+  );
+
+  const renderExecutionStatusIcon = useCallback((status: ToolExecutionStatus) => {
+    if (status === "complete") {
+      return <CircleCheck className="h-3.5 w-3.5 text-emerald-500" />;
+    }
+    if (status === "failed") {
+      return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
+    }
+    return <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />;
+  }, []);
+
+  const renderToolProgress = useCallback(
+    (progress: ToolProgress, status: ChatMessage["toolStatus"]) => {
+      const progressPercent = getProgressPercent(progress);
+      const barClassName =
+        status === "failed"
+          ? "bg-destructive/70"
+          : progress.running > 0
+            ? "bg-sky-400/80"
+            : "bg-emerald-500/70";
+      return (
+        <div className="mt-2 space-y-1.5">
+          <div className="h-1.5 overflow-hidden rounded-full bg-border/60">
+            <div
+              className={cn("h-full transition-[width] duration-300", barClassName)}
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>{`${progress.done}/${progress.total} done`}</span>
+            {progress.running > 0 ? (
+              <span>{`${progress.running} running`}</span>
+            ) : progress.failed > 0 ? (
+              <span>{`${progress.failed} failed`}</span>
+            ) : (
+              <span>all done</span>
+            )}
+          </div>
+        </div>
+      );
+    },
+    [getProgressPercent],
   );
 
   const renderEventLogo = useCallback(
@@ -758,7 +1001,7 @@ export default function ChatHistoryPanel({
       }
       return (
         <div className="mx-auto flex size-8 items-center justify-center rounded-full border border-border/70 bg-muted/50 text-foreground/70 @md/chat:size-10">
-          <Globe className="size-4 @md/chat:size-5" />
+          <SearchIcon className="size-4 @md/chat:size-5" />
         </div>
       );
     },
@@ -778,12 +1021,136 @@ export default function ChatHistoryPanel({
               Ask a question to build the conversation.
             </div>
           ) : (
-            chatItems.map((item) => {
+            chatItems.map((item, index) => {
               if (item.kind === "date") {
                 return <DateItem key={item.id} timestamp={item.timestamp} />;
               }
+
+              let isToolGroupStart = false;
+              let toolGroupId: string | null = null;
+              let toolGroupOpen = true;
+              let toolGroupStatus: ChatMessage["toolStatus"] = "complete";
+              let toolGroupProgress: ToolProgress | null = null;
+              let toolGroupStatusLabel = "";
+              let toolGroupCount = 0;
+
+              if (isToolChatItem(item)) {
+                let startIndex = index;
+                while (
+                  startIndex > 0 &&
+                  isToolChatItem(chatItems[startIndex - 1])
+                ) {
+                  startIndex -= 1;
+                }
+                const startItem = chatItems[startIndex];
+                if (startItem && isToolChatItem(startItem)) {
+                  isToolGroupStart = startIndex === index;
+                  toolGroupId = `tool-group-${startItem.id}`;
+                  toolGroupOpen = toolGroupOpenById[toolGroupId] ?? false;
+
+                  if (!isToolGroupStart && !toolGroupOpen) {
+                    return null;
+                  }
+
+                  if (isToolGroupStart) {
+                    const groupItems: ToolChatItem[] = [];
+                    for (let cursor = startIndex; cursor < chatItems.length; cursor += 1) {
+                      const candidate = chatItems[cursor];
+                      if (!isToolChatItem(candidate)) {
+                        break;
+                      }
+                      groupItems.push(candidate);
+                    }
+
+                    const statuses = groupItems.flatMap((toolItem) =>
+                      getToolItemStatuses(toolItem),
+                    );
+                    const fallbackStatus =
+                      groupItems.length > 0
+                        ? toExecutionStatus(groupItems[0].message.toolStatus)
+                        : toExecutionStatus(item.message.toolStatus);
+                    const resolvedStatuses =
+                      statuses.length > 0 ? statuses : [fallbackStatus];
+                    toolGroupProgress = getProgressByStatuses(resolvedStatuses);
+                    toolGroupStatus = getGroupToolStatus(toolGroupProgress);
+                    toolGroupCount = groupItems.length;
+                    toolGroupStatusLabel = getToolGroupStatusLabel(
+                      toolGroupCount,
+                      toolGroupProgress,
+                    );
+                  }
+                }
+              }
+
+              const wrapToolCard = (card: React.ReactNode): React.ReactNode => {
+                if (!isToolChatItem(item)) {
+                  return card;
+                }
+                if (!isToolGroupStart || !toolGroupId || !toolGroupProgress) {
+                  return toolGroupOpen ? card : null;
+                }
+                return (
+                  <div key={toolGroupId} className="space-y-2">
+                    <ChatEvent className="items-start gap-2 px-2">
+                      <ChatEventAddon>
+                        <div className="mx-auto flex size-8 items-center justify-center rounded-full border border-border/70 bg-muted/50 text-foreground/70 @md/chat:size-10">
+                          <Wrench className="size-4 @md/chat:size-5" />
+                        </div>
+                      </ChatEventAddon>
+                      <ChatEventBody
+                        className={cn(
+                          "rounded-md border px-3 py-2",
+                          getToolCardClassName(toolGroupStatus),
+                        )}
+                      >
+                        <div className="flex min-w-0 items-center justify-between gap-2">
+                          <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Tools
+                          </ChatEventTitle>
+                          <div className="flex items-center gap-1">
+                            {renderCompleteIcon(toolGroupStatus)}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className={cn(
+                                "h-6 w-6 text-muted-foreground transition-transform",
+                                toolGroupOpen && "rotate-180",
+                              )}
+                              onClick={() => {
+                                setToolGroupOpenById((previous) => ({
+                                  ...previous,
+                                  [toolGroupId]: !toolGroupOpen,
+                                }));
+                              }}
+                              aria-label={toolGroupOpen ? "Collapse tools" : "Expand tools"}
+                            >
+                              <ChevronDown className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        <ChatEventDescription>{toolGroupStatusLabel}</ChatEventDescription>
+                        {!toolGroupOpen &&
+                          renderToolProgress(toolGroupProgress, toolGroupStatus)}
+                        {toolGroupOpen ? (
+                          <div className="mt-2">
+                            {toolGroupCount > 0 ? (
+                              <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
+                                {`${toolGroupCount} events`}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </ChatEventBody>
+                    </ChatEvent>
+                    {toolGroupOpen ? card : null}
+                  </div>
+                );
+              };
+
               if (item.kind === "graph") {
                 const { message: eventMessage } = item;
+                const toolOpen = toolOpenById[item.id] ?? false;
                 const statusLabel = eventMessage.error
                   ? eventMessage.error
                   : getToolStatusLabel(eventMessage.toolStatus);
@@ -860,8 +1227,11 @@ export default function ChatHistoryPanel({
                   !!explanation ||
                   Boolean(callDetail) ||
                   Boolean(resultDetail);
+                const graphProgress = getProgressByStatuses([
+                  toExecutionStatus(eventMessage.toolStatus),
+                ]);
 
-                return (
+                const card = (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("graph")}</ChatEventAddon>
                     <ChatEventBody
@@ -870,31 +1240,40 @@ export default function ChatHistoryPanel({
                         getToolCardClassName(eventMessage.toolStatus),
                       )}
                     >
-                      {developerMode ? (
-                        <Collapsible defaultOpen={eventMessage.toolStatus === "running"}>
-                          <div className="flex items-center justify-between gap-2">
-                            <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                              Graph Update
-                            </ChatEventTitle>
-                            <div className="flex items-center gap-1">
-                              {renderCompleteIcon(eventMessage.toolStatus)}
-                              {hasDetails && (
-                                <CollapsibleTrigger asChild>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
-                                  >
-                                    <ChevronDown className="h-4 w-4" />
-                                  </Button>
-                                </CollapsibleTrigger>
-                              )}
-                            </div>
+                      <Collapsible
+                        open={toolOpen}
+                        onOpenChange={(nextOpen) => {
+                          setToolOpenById((previous) => ({
+                            ...previous,
+                            [item.id]: nextOpen,
+                          }));
+                        }}
+                        className="min-w-0"
+                      >
+                        <div className="flex min-w-0 items-center justify-between gap-2">
+                          <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Graph Update
+                          </ChatEventTitle>
+                          <div className="flex items-center gap-1">
+                            {renderCompleteIcon(eventMessage.toolStatus)}
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
                           </div>
-                          <ChatEventDescription>{statusLabel}</ChatEventDescription>
-                          {hasDetails && (
-                            <CollapsibleContent className="mt-2">
+                        </div>
+                        <ChatEventDescription>{statusLabel}</ChatEventDescription>
+                        {!toolOpen &&
+                          renderToolProgress(graphProgress, eventMessage.toolStatus)}
+                        <CollapsibleContent className="mt-2 min-w-0">
+                          {developerMode ? (
+                            hasDetails ? (
                               <ChatEventContent className="space-y-2">
                                 {logLines.length > 0 && (
                                   <div className="space-y-1 text-[11px] text-muted-foreground">
@@ -981,31 +1360,24 @@ export default function ChatHistoryPanel({
                                   </div>
                                 )}
                               </ChatEventContent>
-                            </CollapsibleContent>
+                            ) : null
+                          ) : (
+                            compactCall && (
+                              <div className="truncate text-[11px] text-muted-foreground">
+                                {compactCall}
+                              </div>
+                            )
                           )}
-                        </Collapsible>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-between gap-2">
-                            <ChatEventTitle className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                              Graph Update
-                            </ChatEventTitle>
-                            {renderCompleteIcon(eventMessage.toolStatus)}
-                          </div>
-                          <ChatEventDescription>{statusLabel}</ChatEventDescription>
-                          {compactCall && (
-                            <div className="mt-1 truncate text-[11px] text-muted-foreground">
-                              {compactCall}
-                            </div>
-                          )}
-                        </>
-                      )}
+                        </CollapsibleContent>
+                      </Collapsible>
                     </ChatEventBody>
                   </ChatEvent>
                 );
+                return wrapToolCard(card);
               }
               if (item.kind === "subagent") {
                 const { message: eventMessage } = item;
+                const toolOpen = toolOpenById[item.id] ?? false;
                 const statusLabel = eventMessage.error
                   ? eventMessage.error
                   : getToolStatusLabel(eventMessage.toolStatus);
@@ -1074,22 +1446,26 @@ export default function ChatHistoryPanel({
                 );
                 const hasDeepSearchDetails = Boolean(deepSearchMessage);
                 const title = eventMessage.toolName ?? outputPayload?.toolName ?? "Subagent";
-                const compactCallEntries = entries
-                  .filter((entry) => entry.kind === "call")
-                  .map((entry) => {
-                    const detailSource = entry.compactDetail ?? entry.fullDetail;
-                    const merged = detailSource
-                      ? `${entry.label}: ${detailSource}`
-                      : entry.label;
-                    return truncateInline(merged);
-                  });
-                const hasDetails = developerMode
-                  ? entries.length > 0 || hasDeepSearchDetails
-                  : compactCallEntries.length > 0 || Boolean(deepSearchCompactSummary);
-                const subagentOpen =
-                  subagentOpenById[item.id] ?? eventMessage.toolStatus === "running";
+                const compactCallEntries = entries.map((entry) => {
+                  const detailSource = entry.compactDetail ?? entry.fullDetail;
+                  const merged = detailSource
+                    ? `${entry.label}: ${detailSource}`
+                    : entry.label;
+                  return truncateInline(merged);
+                });
+                const hasDetails = entries.length > 0 || hasDeepSearchDetails;
+                const progressStatuses: ToolExecutionStatus[] = entries.map(
+                  (entry) => entry.status,
+                );
+                if (deepSearchStatus) {
+                  progressStatuses.push(toExecutionStatus(deepSearchStatus));
+                }
+                if (progressStatuses.length === 0) {
+                  progressStatuses.push(toExecutionStatus(eventMessage.toolStatus));
+                }
+                const subagentProgress = getProgressByStatuses(progressStatuses);
 
-                return (
+                const card = (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("subagent")}</ChatEventAddon>
                     <ChatEventBody
@@ -1099,9 +1475,9 @@ export default function ChatHistoryPanel({
                       )}
                     >
                       <Collapsible
-                        open={subagentOpen}
+                        open={toolOpen}
                         onOpenChange={(nextOpen) => {
-                          setSubagentOpenById((previous) => ({
+                          setToolOpenById((previous) => ({
                             ...previous,
                             [item.id]: nextOpen,
                           }));
@@ -1114,28 +1490,29 @@ export default function ChatHistoryPanel({
                           </ChatEventTitle>
                           <div className="flex items-center gap-1">
                             {renderCompleteIcon(eventMessage.toolStatus)}
-                            {hasDetails && (
-                              <CollapsibleTrigger asChild>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
-                                >
-                                  <ChevronDown className="h-4 w-4" />
-                                </Button>
-                              </CollapsibleTrigger>
-                            )}
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
                           </div>
                         </div>
                         <ChatEventDescription>{statusLabel}</ChatEventDescription>
-                        {hasDetails && (
-                          <CollapsibleContent className="mt-2">
+                        {!toolOpen &&
+                          renderToolProgress(subagentProgress, eventMessage.toolStatus)}
+                        {hasDetails ? (
+                          <CollapsibleContent className="mt-2 min-w-0">
                             <ChatEventContent className="space-y-2">
                               {developerMode ? (
                                 <div className="space-y-1 text-[11px] text-muted-foreground">
                                   {entries.map((entry, index) => {
                                     const detail = entry.fullDetail ?? entry.compactDetail;
+                                    const statusLabel = getExecutionStatusLabel(entry.status);
                                     return (
                                       <div
                                         key={`${item.id}-subagent-${index}`}
@@ -1145,12 +1522,15 @@ export default function ChatHistoryPanel({
                                             "border-amber-400/40 bg-amber-500/10 text-amber-700",
                                         )}
                                       >
-                                        <span className="shrink-0 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-foreground/60">
-                                          {entry.kind === "call" ? "Call" : "Result"}
-                                        </span>
                                         <div className="min-w-0 flex-1">
-                                          <div className="truncate text-xs font-medium text-foreground/80">
-                                            {entry.label}
+                                          <div className="flex items-center justify-between gap-2">
+                                            <div className="truncate text-xs font-medium text-foreground/80">
+                                              {entry.label}
+                                            </div>
+                                            <div className="flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-[0.12em] text-foreground/60">
+                                              <span>{statusLabel}</span>
+                                              {renderExecutionStatusIcon(entry.status)}
+                                            </div>
                                           </div>
                                           {detail && (
                                             <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
@@ -1164,10 +1544,24 @@ export default function ChatHistoryPanel({
                                   {deepSearchMessage && (
                                     <div className="space-y-2 rounded-md border border-border/60 bg-card/40 p-2">
                                       <div className="flex items-center justify-between gap-2">
-                                        <div className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-foreground/80">
-                                          {deepSearchTitle}
+                                        <div className="flex min-w-0 items-center gap-1">
+                                          <SearchIcon className="h-3.5 w-3.5 shrink-0 text-foreground/70" />
+                                          <div className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-foreground/80">
+                                            {deepSearchTitle}
+                                          </div>
                                         </div>
-                                        {deepSearchStatus && renderCompleteIcon(deepSearchStatus)}
+                                        {deepSearchStatus && (
+                                          <div className="flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-[0.12em] text-foreground/60">
+                                            <span>
+                                              {getExecutionStatusLabel(
+                                                toExecutionStatus(deepSearchStatus),
+                                              )}
+                                            </span>
+                                            {renderExecutionStatusIcon(
+                                              toExecutionStatus(deepSearchStatus),
+                                            )}
+                                          </div>
+                                        )}
                                       </div>
                                       <div className="text-[11px] text-muted-foreground">
                                         {deepSearchError ? deepSearchError : deepSearchStatusLabel}
@@ -1208,35 +1602,63 @@ export default function ChatHistoryPanel({
                                 </div>
                               ) : (
                                 <div className="space-y-1 text-[11px] text-muted-foreground">
-                                  {compactCallEntries.map((line, index) => (
-                                    <div
-                                      key={`${item.id}-subagent-call-${index}`}
-                                      className="truncate rounded-md border border-border/60 bg-card/40 px-2 py-1"
-                                      title={line}
-                                    >
-                                      {line}
-                                    </div>
-                                  ))}
+                                  {compactCallEntries.map((line, index) => {
+                                    const entry = entries[index];
+                                    if (!entry) {
+                                      return null;
+                                    }
+                                    return (
+                                      <div
+                                        key={`${item.id}-subagent-call-${index}`}
+                                        className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-card/40 px-2 py-1"
+                                        title={line}
+                                      >
+                                        <span className="min-w-0 flex-1 truncate">
+                                          {line}
+                                        </span>
+                                        <span className="flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-[0.12em] text-foreground/60">
+                                          <span>{getExecutionStatusLabel(entry.status)}</span>
+                                          {renderExecutionStatusIcon(entry.status)}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
                                   {deepSearchCompactSummary && (
                                     <div
-                                      className="truncate rounded-md border border-border/60 bg-card/40 px-2 py-1"
+                                      className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-card/40 px-2 py-1"
                                       title={deepSearchCompactSummary}
                                     >
-                                      {`${deepSearchTitle}: ${deepSearchCompactSummary}`}
+                                      <span className="min-w-0 flex-1 truncate">
+                                        {`${deepSearchTitle}: ${deepSearchCompactSummary}`}
+                                      </span>
+                                      {deepSearchStatus && (
+                                        <span className="flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-[0.12em] text-foreground/60">
+                                          <span>
+                                            {getExecutionStatusLabel(
+                                              toExecutionStatus(deepSearchStatus),
+                                            )}
+                                          </span>
+                                          {renderExecutionStatusIcon(
+                                            toExecutionStatus(deepSearchStatus),
+                                          )}
+                                        </span>
+                                      )}
                                     </div>
                                   )}
                                 </div>
                               )}
                             </ChatEventContent>
                           </CollapsibleContent>
-                        )}
+                        ) : null}
                       </Collapsible>
                     </ChatEventBody>
                   </ChatEvent>
                 );
+                return wrapToolCard(card);
               }
               if (item.kind === "deepsearch") {
                 const { message: eventMessage } = item;
+                const toolOpen = toolOpenById[item.id] ?? false;
                 const statusLabel = eventMessage.error
                   ? eventMessage.error
                   : getToolStatusLabel(eventMessage.toolStatus);
@@ -1282,8 +1704,11 @@ export default function ChatHistoryPanel({
                   compactParts.push(`sources: ${sources.length}`);
                 }
                 const compactSummary = truncateInline(compactParts.join(" | "));
+                const deepSearchProgress = getProgressByStatuses([
+                  toExecutionStatus(eventMessage.toolStatus),
+                ]);
 
-                return (
+                const card = (
                   <ChatEvent key={item.id} className="items-start gap-2 px-2">
                     <ChatEventAddon>{renderEventLogo("deepsearch")}</ChatEventAddon>
                     <ChatEventBody
@@ -1292,33 +1717,42 @@ export default function ChatHistoryPanel({
                         getToolCardClassName(eventMessage.toolStatus),
                       )}
                     >
-                      {developerMode ? (
-                        <Collapsible defaultOpen={eventMessage.toolStatus === "running"} className="min-w-0">
-                          <div className="flex min-w-0 items-center justify-between gap-2">
-                            <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                              {title}
-                            </ChatEventTitle>
-                            <div className="flex items-center gap-1">
-                              {renderCompleteIcon(eventMessage.toolStatus)}
-                              {hasDetails && (
-                                <CollapsibleTrigger asChild>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
-                                  >
-                                    <ChevronDown className="h-4 w-4" />
-                                  </Button>
-                                </CollapsibleTrigger>
-                              )}
-                            </div>
+                      <Collapsible
+                        open={toolOpen}
+                        onOpenChange={(nextOpen) => {
+                          setToolOpenById((previous) => ({
+                            ...previous,
+                            [item.id]: nextOpen,
+                          }));
+                        }}
+                        className="min-w-0"
+                      >
+                        <div className="flex min-w-0 items-center justify-between gap-2">
+                          <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            {title}
+                          </ChatEventTitle>
+                          <div className="flex items-center gap-1">
+                            {renderCompleteIcon(eventMessage.toolStatus)}
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-muted-foreground transition-transform data-[state=open]:rotate-180"
+                              >
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
                           </div>
-                          <ChatEventDescription>
-                            {error ? error : statusLabel}
-                          </ChatEventDescription>
-                          {hasDetails && (
-                            <CollapsibleContent className="mt-2 min-w-0">
+                        </div>
+                        <ChatEventDescription>
+                          {error ? error : statusLabel}
+                        </ChatEventDescription>
+                        {!toolOpen &&
+                          renderToolProgress(deepSearchProgress, eventMessage.toolStatus)}
+                        <CollapsibleContent className="mt-2 min-w-0">
+                          {developerMode ? (
+                            hasDetails ? (
                               <ChatEventContent className="min-w-0 space-y-2">
                                 <div className="space-y-1 break-words text-[11px] text-muted-foreground">
                                   {query && <div className="break-words">{`Query: ${query}`}</div>}
@@ -1413,30 +1847,20 @@ export default function ChatHistoryPanel({
                                   </div>
                                 )}
                               </ChatEventContent>
-                            </CollapsibleContent>
+                            ) : null
+                          ) : (
+                            compactSummary && (
+                              <div className="truncate text-[11px] text-muted-foreground">
+                                {compactSummary}
+                              </div>
+                            )
                           )}
-                        </Collapsible>
-                      ) : (
-                        <>
-                          <div className="flex min-w-0 items-center justify-between gap-2">
-                            <ChatEventTitle className="min-w-0 flex-1 truncate text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                              {title}
-                            </ChatEventTitle>
-                            {renderCompleteIcon(eventMessage.toolStatus)}
-                          </div>
-                          <ChatEventDescription>
-                            {error ? error : statusLabel}
-                          </ChatEventDescription>
-                          {compactSummary && (
-                            <div className="mt-1 truncate text-[11px] text-muted-foreground">
-                              {compactSummary}
-                            </div>
-                          )}
-                        </>
-                      )}
+                        </CollapsibleContent>
+                      </Collapsible>
                     </ChatEventBody>
                   </ChatEvent>
                 );
+                return wrapToolCard(card);
               }
               const message = item.message;
               const timestamp = new Date(message.createdAt).getTime();
@@ -1489,7 +1913,13 @@ export default function ChatHistoryPanel({
                   <div key={item.id} data-message-id={message.id}>
                     <PrimaryMessage
                       senderName={isUser ? "You" : "Assistant"}
-                      avatarFallback={isUser ? "U" : "A"}
+                      avatarFallback={
+                        isUser ? (
+                          <UserRound className="h-4 w-4" />
+                        ) : (
+                          <Bot className="h-4 w-4" />
+                        )
+                      }
                       content={content}
                       timestamp={timestamp}
                     />
@@ -1506,7 +1936,7 @@ export default function ChatHistoryPanel({
           {busy && !hasPendingAssistant && (
             <PrimaryMessage
               senderName="Assistant"
-              avatarFallback="A"
+              avatarFallback={<Bot className="h-4 w-4" />}
               content={
                 <div className="rounded-md bg-secondary px-3 py-2 text-sm text-muted-foreground">
                   Thinking...

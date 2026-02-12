@@ -57,6 +57,17 @@ export interface DeepResearchPersistedPage {
   lineCount: number;
 }
 
+export interface DeepResearchCachedPage {
+  searchId: string;
+  pageId: string;
+  query: string;
+  url: string;
+  title?: string;
+  fetchedAt: string;
+  lineCount: number;
+  markdown: string;
+}
+
 export interface DeepResearchPageInput {
   searchId: string;
   query: string;
@@ -73,9 +84,26 @@ export interface DeepResearchExtractionInput {
   url: string;
   viewpoint: string;
   broken: boolean;
+  inrelavate?: boolean;
   lineCount: number;
   selections: LineSelection[];
   rawModelOutput: string;
+  error?: string;
+  extractedAt: string;
+}
+
+export interface DeepResearchCachedExtraction {
+  searchId: string;
+  pageId: string;
+  query: string;
+  url: string;
+  viewpoint: string;
+  broken: boolean;
+  inrelavate: boolean;
+  lineCount: number;
+  selections: LineSelection[];
+  rawModelOutput: string;
+  error?: string;
   extractedAt: string;
 }
 
@@ -93,6 +121,11 @@ export interface DeepResearchFinalizeInput {
 export interface DeepResearchPersistenceAdapter {
   projectId: string;
   createSearchSession(query: string): Promise<DeepResearchSearchSession>;
+  findCachedPageByUrl(url: string): Promise<DeepResearchCachedPage | null>;
+  findCachedExtractionByPageAndQuery(
+    pageId: string,
+    query: string,
+  ): Promise<DeepResearchCachedExtraction | null>;
   savePage(input: DeepResearchPageInput): Promise<DeepResearchPersistedPage>;
   saveExtraction(input: DeepResearchExtractionInput): Promise<void>;
   finalizeSearch(input: DeepResearchFinalizeInput): Promise<void>;
