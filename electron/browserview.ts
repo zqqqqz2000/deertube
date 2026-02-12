@@ -25,6 +25,7 @@ interface BrowserViewState {
   title?: string;
   canGoBack?: boolean;
   canGoForward?: boolean;
+  isLoading?: boolean;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -615,6 +616,12 @@ class BrowserViewController {
 
     view.webContents.on("did-navigate", handleNav);
     view.webContents.on("did-navigate-in-page", handleNav);
+    view.webContents.on("did-start-loading", () => {
+      this.sendState(tabId, { isLoading: true });
+    });
+    view.webContents.on("did-stop-loading", () => {
+      this.sendState(tabId, { isLoading: false });
+    });
     view.webContents.on("did-finish-load", () => {
       this.sendState(tabId);
       void this.applyPendingHighlight(tabId);
@@ -667,6 +674,7 @@ class BrowserViewController {
       title: view.webContents.getTitle(),
       canGoBack: view.webContents.canGoBack(),
       canGoForward: view.webContents.canGoForward(),
+      isLoading: view.webContents.isLoadingMainFrame(),
       ...partial,
     };
     this.window.webContents.send("browserview-state", payload);

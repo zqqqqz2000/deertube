@@ -11,6 +11,7 @@ export interface BrowserViewTabState {
   title?: string;
   canGoBack?: boolean;
   canGoForward?: boolean;
+  isLoading?: boolean;
 }
 
 export interface BrowserViewSelection {
@@ -33,6 +34,7 @@ export interface BrowserViewStatePayload {
   title?: string;
   canGoBack?: boolean;
   canGoForward?: boolean;
+  isLoading?: boolean;
 }
 
 export interface BrowserViewReferenceHighlight {

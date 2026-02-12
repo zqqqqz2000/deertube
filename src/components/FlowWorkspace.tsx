@@ -22,7 +22,15 @@ import SourceNode from "./nodes/SourceNode";
 import InsightNode from "./nodes/InsightNode";
 import SettingsPanel from "./SettingsPanel";
 import { Button } from "@/components/ui/button";
-import { Globe, LayoutGrid, Lock, LockOpen, MessageSquare, Network } from "lucide-react";
+import {
+  Globe,
+  LayoutGrid,
+  LoaderCircle,
+  Lock,
+  LockOpen,
+  MessageSquare,
+  Network,
+} from "lucide-react";
 import { createProfileDraft } from "../lib/settings";
 import { getNodeSize } from "../lib/elkLayout";
 import FlowHeader from "./flow/FlowHeader";
@@ -1122,6 +1130,7 @@ function FlowWorkspaceInner({
                 title: payload.title ?? tab.title,
                 canGoBack: payload.canGoBack ?? tab.canGoBack,
                 canGoForward: payload.canGoForward ?? tab.canGoForward,
+                isLoading: payload.isLoading ?? tab.isLoading,
               }
             : tab,
         ),
@@ -1228,6 +1237,7 @@ function FlowWorkspaceInner({
         id: tabId,
         url: normalized,
         title: resolvedLabel,
+        isLoading: true,
       };
       setBrowserTabs((prev) => [...prev, nextTab]);
 
@@ -1441,6 +1451,7 @@ function FlowWorkspaceInner({
                 ...tab,
                 url,
                 title: undefined,
+                isLoading: true,
               }
             : tab,
         ),
@@ -1884,7 +1895,11 @@ function FlowWorkspaceInner({
         const label = truncateLabel(rawLabel, BROWSER_TAB_MAX_LABEL_LENGTH);
         return (
           <div className="flex min-w-0 items-center gap-2">
-            <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            {tab?.isLoading ? (
+              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+            ) : (
+              <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            )}
             <span className="max-w-[24ch] truncate text-sm font-medium text-foreground" title={rawLabel}>
               {label}
             </span>
