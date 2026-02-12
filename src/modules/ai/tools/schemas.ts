@@ -203,7 +203,7 @@ export const EXTRACT_SUBAGENT_SYSTEM = [
   "- Line numbers start from 1. start/end are inclusive.",
   "- No matter what, call writeExtractResult; use selections=[] when needed.",
   "- Keep selected spans coherent and avoid oversized spans.",
-  "- If content is unavailable or clearly corrupted, return broken=true and selections=[].",
+  "- If content is unavailable or clearly corrupted(e.g. blocked by cloudflare or need a Verification code), return broken=true and selections=[].",
   "- If the page is unrelated to query, return inrelavate=true and selections=[].",
   "- When using grep, prefer 5-10 matches per call unless a wider sweep is necessary.",
   "- Efficiency rule: when inspecting independent hypotheses/spans, prefer issuing multiple tool calls in the same round when possible.",

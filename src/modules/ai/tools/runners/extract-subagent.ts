@@ -447,6 +447,7 @@ export async function runExtractSubagent({
       "Output format (strict):",
       "- Output exactly one JSON object and nothing else.",
       "- Do not include any explanation text before/after JSON.",
+      "- Do not provide any explanation. Output only the final JSON result.",
       "- Do not include markdown code fences.",
       '- JSON keys must match exactly: "viewpoint", "broken", "inrelavate", "selections", optional "error".',
       "- `selections` must be an array of objects: { \"start\": number, \"end\": number }.",
@@ -457,7 +458,7 @@ export async function runExtractSubagent({
       "Required JSON shape:",
       '{ "viewpoint": "50-100 chars", "broken": false, "inrelavate": false, "selections": [{ "start": 12, "end": 18 }], "error": "optional error message" }',
     ].join("\n");
-    const retryPrompt = [
+    const retryUserPrompt = [
       retryJsonPromptPrefix,
       "",
       "Previous assistant output (context):",
@@ -471,7 +472,13 @@ export async function runExtractSubagent({
     const retryResult = await generateText({
       model,
       system: EXTRACT_SUBAGENT_SYSTEM,
-      prompt: retryPrompt,
+      messages: [
+        ...result.response.messages,
+        {
+          role: "user",
+          content: retryUserPrompt,
+        },
+      ],
       tools: {
         grep: grepTool,
         readLines: readLinesTool,
@@ -507,7 +514,7 @@ export async function runExtractSubagent({
           error: clampText(parsedRetryResult.error, 220),
         });
         if (parsedRetryResult.zodError) {
-          const repairPrompt = [
+          const repairUserPrompt = [
             retryJsonPromptPrefix,
             "",
             "Validation feedback from previous JSON (fix all issues):",
@@ -527,7 +534,13 @@ export async function runExtractSubagent({
           const repairResult = await generateText({
             model,
             system: EXTRACT_SUBAGENT_SYSTEM,
-            prompt: repairPrompt,
+            messages: [
+              ...retryResult.response.messages,
+              {
+                role: "user",
+                content: repairUserPrompt,
+              },
+            ],
             tools: {
               grep: grepTool,
               readLines: readLinesTool,
@@ -558,10 +571,13 @@ export async function runExtractSubagent({
                 selectionCount: parsedRepairResult.parsed.selections.length,
               });
             } else {
-              console.warn("[subagent.extract.agent.retry.json.repair.invalid]", {
-                query: clampText(query, 160),
-                error: clampText(parsedRepairResult.error, 220),
-              });
+              console.warn(
+                "[subagent.extract.agent.retry.json.repair.invalid]",
+                {
+                  query: clampText(query, 160),
+                  error: clampText(parsedRepairResult.error, 220),
+                },
+              );
             }
           }
           continuationResult = repairResult;
@@ -599,14 +615,18 @@ export async function runExtractSubagent({
       broken: true,
       inrelavate: false,
       selections: [],
-      error: "extract subagent did not call writeExtractResult before finishing.",
+      error:
+        "extract subagent did not call writeExtractResult before finishing.",
     } satisfies z.infer<typeof ExtractSubagentFinalSchema>);
   const viewpoint = normalizeExtractViewpoint(parsed.viewpoint);
   const broken = parsed.broken;
   const inrelavate = parsed.inrelavate;
   const parsedSelectionBounds = parsed.selections
     .map((selection) => {
-      const start = Math.max(1, Math.min(lineCount, Math.floor(selection.start)));
+      const start = Math.max(
+        1,
+        Math.min(lineCount, Math.floor(selection.start)),
+      );
       const end = Math.max(1, Math.min(lineCount, Math.floor(selection.end)));
       if (end < start) {
         return null;
