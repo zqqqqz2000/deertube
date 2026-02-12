@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDebounceEffect } from "ahooks";
 import type { ReactFlowInstance } from "reactflow";
 import { trpc } from "../../lib/trpc";
 import type {
@@ -490,7 +491,13 @@ export function useChatActions({
         void runGraphTools(message.id, text);
       },
     });
-  console.log(messages);
+  useDebounceEffect(
+    () => {
+      console.log(messages);
+    },
+    [messages],
+    { wait: 10_000 },
+  );
 
   useEffect(() => {
     messages.forEach((message) => {
@@ -544,17 +551,21 @@ export function useChatActions({
     const withGraphEvents = graphEventMessages.length
       ? mergeGraphEvents(mapped, graphEventMessages)
       : mapped;
-    const subagentEvents = mergePersistedAgentEvents(
-      persistedSubagentEvents,
-      buildSubagentEvents(messages, status),
-    );
-    const withSubagentEvents = subagentEvents.length
-      ? mergeSubagentEvents(withGraphEvents, subagentEvents)
-      : withGraphEvents;
     const deepSearchEvents = mergePersistedAgentEvents(
       persistedDeepSearchEvents,
       buildDeepSearchEvents(messages, status),
     );
+    const deepSearchStatusByToolCall = buildAgentToolStatusByToolCall(
+      deepSearchEvents,
+      "deepsearch-event",
+    );
+    const subagentEvents = mergePersistedAgentEvents(
+      persistedSubagentEvents,
+      buildSubagentEvents(messages, status, deepSearchStatusByToolCall),
+    );
+    const withSubagentEvents = subagentEvents.length
+      ? mergeSubagentEvents(withGraphEvents, subagentEvents)
+      : withGraphEvents;
     if (!deepSearchEvents.length) {
       return withSubagentEvents;
     }
@@ -778,6 +789,7 @@ function extractUiMessageText(message: DeertubeUIMessage): string {
 function buildSubagentEvents(
   messages: DeertubeUIMessage[],
   status: string,
+  deepSearchStatusByToolCall: Map<string, ChatMessage["toolStatus"]>,
 ): ChatMessage[] {
   const byToolCall = new Map<
     string,
@@ -787,7 +799,10 @@ function buildSubagentEvents(
       createdAt: string;
     }
   >();
-  const isRunning = status === "streaming" || status === "submitted";
+  const isStreaming = status === "streaming" || status === "submitted";
+  const activeAssistantMessageId = isStreaming
+    ? getLatestAssistantMessageId(messages)
+    : null;
 
   messages.forEach((message) => {
     if (!Array.isArray(message.parts)) {
@@ -813,20 +828,30 @@ function buildSubagentEvents(
   });
 
   return Array.from(byToolCall.values()).map(
-    ({ payload, parentMessageId, createdAt }) => ({
-      id: `subagent-${payload.toolCallId}`,
-      role: "assistant",
-      content: "",
-      createdAt,
-      kind: "subagent-event",
-      toolName: payload.toolName,
-      toolInput: {
-        responseId: parentMessageId,
-        toolCallId: payload.toolCallId,
-      },
-      toolOutput: payload,
-      toolStatus: isRunning ? "running" : "complete",
-    }),
+    ({ payload, parentMessageId, createdAt }) => {
+      const resolvedFromDeepSearch = deepSearchStatusByToolCall.get(
+        payload.toolCallId,
+      );
+      const toolStatus =
+        resolvedFromDeepSearch ??
+        (isStreaming && parentMessageId === activeAssistantMessageId
+          ? "running"
+          : "complete");
+      return {
+        id: `subagent-${payload.toolCallId}`,
+        role: "assistant",
+        content: "",
+        createdAt,
+        kind: "subagent-event",
+        toolName: payload.toolName,
+        toolInput: {
+          responseId: parentMessageId,
+          toolCallId: payload.toolCallId,
+        },
+        toolOutput: payload,
+        toolStatus,
+      };
+    },
   );
 }
 
@@ -843,7 +868,10 @@ function buildDeepSearchEvents(
       done: boolean;
     }
   >();
-  const isRunning = status === "streaming" || status === "submitted";
+  const isStreaming = status === "streaming" || status === "submitted";
+  const activeAssistantMessageId = isStreaming
+    ? getLatestAssistantMessageId(messages)
+    : null;
 
   messages.forEach((message) => {
     if (!Array.isArray(message.parts)) {
@@ -877,7 +905,14 @@ function buildDeepSearchEvents(
 
   return Array.from(byToolCall.values()).map(
     ({ payload, parentMessageId, createdAt, done }) => {
-      const toolStatus = done ? "complete" : isRunning ? "running" : "complete";
+      const toolStatus =
+        payload.status === "failed"
+          ? "failed"
+          : done
+            ? "complete"
+            : isStreaming && parentMessageId === activeAssistantMessageId
+              ? "running"
+              : "complete";
       return {
         id: `deepsearch-${payload.toolCallId}`,
         role: "assistant",
@@ -1093,6 +1128,36 @@ function mergeDeepSearchEvents(
   return merged;
 }
 
+function getLatestAssistantMessageId(
+  messages: DeertubeUIMessage[],
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant") {
+      return message.id;
+    }
+  }
+  return null;
+}
+
+function buildAgentToolStatusByToolCall(
+  events: ChatMessage[],
+  kind: "subagent-event" | "deepsearch-event",
+): Map<string, ChatMessage["toolStatus"]> {
+  const statusByToolCall = new Map<string, ChatMessage["toolStatus"]>();
+  events.forEach((event) => {
+    if (event.kind !== kind) {
+      return;
+    }
+    const toolCallId = readToolCallId(event.toolInput);
+    if (!toolCallId || !event.toolStatus) {
+      return;
+    }
+    statusByToolCall.set(toolCallId, event.toolStatus);
+  });
+  return statusByToolCall;
+}
+
 function isToolCallEventInput(
   input: ChatMessage["toolInput"],
 ): input is ToolCallEventInput {
@@ -1115,6 +1180,17 @@ function readResponseId(input: ChatMessage["toolInput"]): string | null {
   }
   const responseId = input.responseId;
   return typeof responseId === "string" ? responseId : null;
+}
+
+function readToolCallId(input: ChatMessage["toolInput"]): string | null {
+  if (isToolCallEventInput(input)) {
+    return input.toolCallId;
+  }
+  if (!input || !isJsonObject(input)) {
+    return null;
+  }
+  const toolCallId = input.toolCallId;
+  return typeof toolCallId === "string" ? toolCallId : null;
 }
 
 function getGraphEventResponseId(event: ChatMessage): string | null {

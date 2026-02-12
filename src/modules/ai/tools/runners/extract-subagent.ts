@@ -48,6 +48,57 @@ const normalizeExtractViewpoint = (value: string): string => {
   return normalizedExpanded.slice(0, EXTRACT_VIEWPOINT_MAX).trimEnd();
 };
 
+const stripMarkdownCodeFence = (value: string): string => {
+  const trimmed = value.trim();
+  const matched = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (!matched) return trimmed;
+  return matched[1].trim();
+};
+
+const parseExtractResultFromJsonText = (
+  value: string,
+):
+  | {
+      parsed: z.infer<typeof ExtractSubagentFinalSchema>;
+      source: "raw" | "fence-stripped";
+    }
+  | {
+      parsed: null;
+      error: string;
+    } => {
+  const raw = value.trim();
+  const stripped = stripMarkdownCodeFence(raw);
+  const candidates: { text: string; source: "raw" | "fence-stripped" }[] = [
+    { text: raw, source: "raw" },
+  ];
+  if (stripped !== raw) {
+    candidates.push({ text: stripped, source: "fence-stripped" });
+  }
+
+  let lastError = "empty JSON output";
+  for (const candidate of candidates) {
+    if (candidate.text.length === 0) {
+      lastError = `${candidate.source}: empty JSON output`;
+      continue;
+    }
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(candidate.text);
+    } catch (error) {
+      lastError = `${candidate.source}: ${
+        error instanceof Error ? error.message : "JSON.parse failed"
+      }`;
+      continue;
+    }
+    const validated = ExtractSubagentFinalSchema.safeParse(parsedJson);
+    if (validated.success) {
+      return { parsed: validated.data, source: candidate.source };
+    }
+    lastError = `${candidate.source}: ${validated.error.message}`;
+  }
+  return { parsed: null, error: lastError };
+};
+
 export async function runExtractSubagent({
   query,
   lines,
@@ -370,9 +421,21 @@ export async function runExtractSubagent({
       "",
       "Continuation requirement (mandatory):",
       "- You did not call `writeExtractResult` in the previous attempt.",
-      "- Call `writeExtractResult` now, even if selections is empty.",
+      "- Return the final result as JSON directly now.",
       "- Keep viewpoint length between 50 and 100 characters.",
-      "- Do not output plain-text JSON.",
+      "",
+      "Output format (strict):",
+      "- Output exactly one JSON object and nothing else.",
+      "- Do not include any explanation text before/after JSON.",
+      "- Do not include markdown code fences.",
+      '- JSON keys must match exactly: "viewpoint", "broken", "inrelavate", "selections", optional "error".',
+      "- `selections` must be an array of objects: { \"start\": number, \"end\": number }.",
+      "- `start`/`end` are positive integers and `end` must be >= `start`.",
+      "- If the page is unrelated, set inrelavate=true and selections=[].",
+      "- If extraction failed or content is broken, set broken=true and selections=[].",
+      "",
+      "Required JSON shape:",
+      '{ "viewpoint": "50-100 chars", "broken": false, "inrelavate": false, "selections": [{ "start": 12, "end": 18 }], "error": "optional error message" }',
       "",
       "Previous assistant output (context):",
       result.text.length > 0 ? clampText(result.text, 3200) : "(empty)",
@@ -398,6 +461,28 @@ export async function runExtractSubagent({
       ],
       abortSignal,
     });
+    if (!collectedExtractResult) {
+      const parsedRetryResult = parseExtractResultFromJsonText(retryResult.text);
+      if (parsedRetryResult.parsed) {
+        collectedExtractResult = parsedRetryResult.parsed;
+        console.log("[subagent.extract.agent.retry.json.parsed]", {
+          query: clampText(query, 160),
+          source: parsedRetryResult.source,
+          viewpoint: clampText(
+            normalizeExtractViewpoint(parsedRetryResult.parsed.viewpoint),
+            120,
+          ),
+          broken: parsedRetryResult.parsed.broken,
+          inrelavate: parsedRetryResult.parsed.inrelavate,
+          selectionCount: parsedRetryResult.parsed.selections.length,
+        });
+      } else {
+        console.warn("[subagent.extract.agent.retry.json.invalid]", {
+          query: clampText(query, 160),
+          error: clampText(parsedRetryResult.error, 220),
+        });
+      }
+    }
     result = {
       ...retryResult,
       text:

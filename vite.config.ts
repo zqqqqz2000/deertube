@@ -2,9 +2,10 @@ import { defineConfig } from "vite";
 import path from "node:path";
 import electron from "vite-plugin-electron/simple";
 import react from "@vitejs/plugin-react";
+import reactScan from "@react-scan/vite-plugin-react-scan";
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
@@ -12,6 +13,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    mode === "development" && reactScan({ enable: true }),
     electron({
       main: {
         // Shortcut of `build.lib.entry`.
@@ -32,4 +34,4 @@ export default defineConfig({
           : {},
     }),
   ],
-});
+}));

@@ -290,6 +290,13 @@ const parseGraphToolInput = (value: ChatMessage["toolInput"]): GraphToolInput | 
   return { responseId, selectedNodeId, selectedNodeSummary };
 };
 
+const readToolCallId = (value: ChatMessage["toolInput"]): string | null => {
+  if (!value || !isRecord(value)) {
+    return null;
+  }
+  return typeof value.toolCallId === "string" ? value.toolCallId : null;
+};
+
 export default function ChatHistoryPanel({
   developerMode = false,
   messages,
@@ -392,25 +399,32 @@ export default function ChatHistoryPanel({
   );
   useEffect(() => {
     setSubagentOpenById((previous) => {
-      const next: Record<string, boolean> = {};
+      const next = { ...previous };
+      const activeIds = new Set<string>();
       let changed = false;
       messages.forEach((message) => {
         if (message.kind !== "subagent-event") {
           return;
         }
-        const shouldOpen = message.toolStatus === "running";
-        const prior = previous[message.id];
-        if (prior !== undefined && prior === shouldOpen) {
-          next[message.id] = prior;
+        activeIds.add(message.id);
+        const prior = next[message.id];
+        if (prior === undefined) {
+          next[message.id] = message.toolStatus === "running";
+          changed = true;
           return;
         }
-        next[message.id] = shouldOpen;
+        if (message.toolStatus === "running" && prior !== true) {
+          next[message.id] = true;
+          changed = true;
+        }
+      });
+      Object.keys(next).forEach((id) => {
+        if (activeIds.has(id)) {
+          return;
+        }
+        delete next[id];
         changed = true;
       });
-      const previousIds = Object.keys(previous);
-      if (previousIds.length !== Object.keys(next).length) {
-        changed = true;
-      }
       if (!changed) {
         return previous;
       }
@@ -562,11 +576,35 @@ export default function ChatHistoryPanel({
       | { kind: "primary"; id: string; message: ChatMessage }
       | { kind: "additional"; id: string; message: ChatMessage }
       | { kind: "graph"; id: string; message: ChatMessage }
-      | { kind: "subagent"; id: string; message: ChatMessage }
+      | {
+          kind: "subagent";
+          id: string;
+          message: ChatMessage;
+          deepSearchMessage?: ChatMessage;
+        }
       | { kind: "deepsearch"; id: string; message: ChatMessage }
     )[] = [];
+    const deepSearchByToolCall = new Map<string, ChatMessage>();
+    const subagentToolCallIds = new Set<string>();
     let lastDateKey = "";
     let lastRole: ChatMessage["role"] | null = null;
+
+    sortedMessages.forEach((message) => {
+      if (message.kind === "subagent-event") {
+        const toolCallId = readToolCallId(message.toolInput);
+        if (toolCallId) {
+          subagentToolCallIds.add(toolCallId);
+        }
+      }
+      if (message.kind !== "deepsearch-event") {
+        return;
+      }
+      const toolCallId = readToolCallId(message.toolInput);
+      if (!toolCallId) {
+        return;
+      }
+      deepSearchByToolCall.set(toolCallId, message);
+    });
 
     sortedMessages.forEach((message) => {
       const timestamp = new Date(message.createdAt).getTime();
@@ -592,11 +630,26 @@ export default function ChatHistoryPanel({
         return;
       }
       if (message.kind === "subagent-event") {
-        items.push({ kind: "subagent", id: message.id, message });
+        const toolCallId = readToolCallId(message.toolInput);
+        const deepSearchMessage = toolCallId
+          ? deepSearchByToolCall.get(toolCallId)
+          : undefined;
+        items.push({
+          kind: "subagent",
+          id: message.id,
+          message,
+          deepSearchMessage,
+        });
         lastRole = null;
         return;
       }
       if (message.kind === "deepsearch-event") {
+        const toolCallId = readToolCallId(message.toolInput);
+        if (toolCallId && subagentToolCallIds.has(toolCallId)) {
+          // Prefer rendering deep-search updates inside the matching subagent card.
+          lastRole = null;
+          return;
+        }
         items.push({ kind: "deepsearch", id: message.id, message });
         lastRole = null;
         return;
@@ -956,6 +1009,7 @@ export default function ChatHistoryPanel({
                 const statusLabel = eventMessage.error
                   ? eventMessage.error
                   : getToolStatusLabel(eventMessage.toolStatus);
+                const deepSearchMessage = item.deepSearchMessage;
 
                 const outputPayloadRaw = parseToolPayload(
                   eventMessage.toolOutput,
@@ -966,6 +1020,59 @@ export default function ChatHistoryPanel({
                 const entries = outputPayload
                   ? buildSubagentEntries(outputPayload)
                   : [];
+                const deepSearchOutputPayloadRaw = parseToolPayload(
+                  deepSearchMessage?.toolOutput,
+                );
+                const deepSearchOutputPayload = isDeepSearchPayload(
+                  deepSearchOutputPayloadRaw,
+                )
+                  ? deepSearchOutputPayloadRaw
+                  : null;
+                const deepSearchStatus = deepSearchMessage?.toolStatus;
+                const deepSearchStatusLabel = deepSearchMessage?.error
+                  ? deepSearchMessage.error
+                  : getToolStatusLabel(deepSearchStatus);
+                const deepSearchTitle =
+                  deepSearchMessage?.toolName ??
+                  deepSearchOutputPayload?.toolName ??
+                  "Search";
+                const deepSearchSources = Array.isArray(
+                  deepSearchOutputPayload?.sources,
+                )
+                  ? deepSearchOutputPayload.sources
+                  : [];
+                const deepSearchQuery =
+                  typeof deepSearchOutputPayload?.query === "string"
+                    ? deepSearchOutputPayload.query
+                    : undefined;
+                const deepSearchError =
+                  typeof deepSearchOutputPayload?.error === "string"
+                    ? deepSearchOutputPayload.error
+                    : undefined;
+                const deepSearchCallDetail = stringifyToolDetail(
+                  deepSearchMessage?.toolInput,
+                );
+                const deepSearchResultDetail = stringifyToolDetail(
+                  deepSearchMessage?.toolOutput,
+                );
+                const deepSearchCompactParts: string[] = [];
+                if (deepSearchQuery) {
+                  deepSearchCompactParts.push(`query: ${deepSearchQuery}`);
+                }
+                if (deepSearchSources.length > 0) {
+                  deepSearchCompactParts.push(
+                    `sources: ${deepSearchSources.length}`,
+                  );
+                }
+                if (deepSearchError) {
+                  deepSearchCompactParts.push(
+                    `error: ${truncateInline(deepSearchError, 80)}`,
+                  );
+                }
+                const deepSearchCompactSummary = truncateInline(
+                  deepSearchCompactParts.join(" | "),
+                );
+                const hasDeepSearchDetails = Boolean(deepSearchMessage);
                 const title = eventMessage.toolName ?? outputPayload?.toolName ?? "Subagent";
                 const compactCallEntries = entries
                   .filter((entry) => entry.kind === "call")
@@ -977,8 +1084,8 @@ export default function ChatHistoryPanel({
                     return truncateInline(merged);
                   });
                 const hasDetails = developerMode
-                  ? entries.length > 0
-                  : compactCallEntries.length > 0;
+                  ? entries.length > 0 || hasDeepSearchDetails
+                  : compactCallEntries.length > 0 || Boolean(deepSearchCompactSummary);
                 const subagentOpen =
                   subagentOpenById[item.id] ?? eventMessage.toolStatus === "running";
 
@@ -1054,6 +1161,50 @@ export default function ChatHistoryPanel({
                                       </div>
                                     );
                                   })}
+                                  {deepSearchMessage && (
+                                    <div className="space-y-2 rounded-md border border-border/60 bg-card/40 p-2">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="truncate text-[11px] font-medium uppercase tracking-[0.16em] text-foreground/80">
+                                          {deepSearchTitle}
+                                        </div>
+                                        {deepSearchStatus && renderCompleteIcon(deepSearchStatus)}
+                                      </div>
+                                      <div className="text-[11px] text-muted-foreground">
+                                        {deepSearchError ? deepSearchError : deepSearchStatusLabel}
+                                      </div>
+                                      {(((deepSearchQuery ?? "").length > 0) ||
+                                        deepSearchSources.length > 0) && (
+                                        <div className="space-y-1 text-[11px] text-muted-foreground">
+                                          {deepSearchQuery && (
+                                            <div className="break-words">{`Query: ${deepSearchQuery}`}</div>
+                                          )}
+                                          {deepSearchSources.length > 0 && (
+                                            <div>{`Sources: ${deepSearchSources.length}`}</div>
+                                          )}
+                                        </div>
+                                      )}
+                                      {deepSearchCallDetail && (
+                                        <div className="rounded-md border border-border/60 bg-card/40 p-2">
+                                          <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                                            Call
+                                          </div>
+                                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
+                                            {deepSearchCallDetail}
+                                          </pre>
+                                        </div>
+                                      )}
+                                      {deepSearchResultDetail && (
+                                        <div className="rounded-md border border-border/60 bg-card/40 p-2">
+                                          <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                                            Result
+                                          </div>
+                                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
+                                            {deepSearchResultDetail}
+                                          </pre>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                               ) : (
                                 <div className="space-y-1 text-[11px] text-muted-foreground">
@@ -1066,6 +1217,14 @@ export default function ChatHistoryPanel({
                                       {line}
                                     </div>
                                   ))}
+                                  {deepSearchCompactSummary && (
+                                    <div
+                                      className="truncate rounded-md border border-border/60 bg-card/40 px-2 py-1"
+                                      title={deepSearchCompactSummary}
+                                    >
+                                      {`${deepSearchTitle}: ${deepSearchCompactSummary}`}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </ChatEventContent>
