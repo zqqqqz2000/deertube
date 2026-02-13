@@ -29,7 +29,7 @@ const isParentNode = (value: unknown): value is Parent =>
   Array.isArray((value as { children: unknown }).children);
 
 export const collectTextNodes = (
-  root: Root,
+  root: Root | Parent | Element,
   options: CollectTextNodesOptions,
 ): { entries: TextNodeEntry[]; combinedText: string } => {
   const entries: TextNodeEntry[] = [];

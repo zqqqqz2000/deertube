@@ -9,6 +9,7 @@ import {
   localOverlapsForEntry,
   replaceEntryWithRanges,
 } from "@/components/markdown/rehype-text-ranges";
+import { getHighlightExcerptKey } from "@/components/markdown/highlight-excerpt-key";
 
 const highlightClasses = [
   "rounded",
@@ -68,6 +69,7 @@ export function rehypeHighlightExcerpt(excerpt: string) {
   if (!needle) {
     return () => undefined;
   }
+  const highlightKey = getHighlightExcerptKey(needle);
 
   return (tree: Root | undefined) => {
     if (!tree) {
@@ -104,6 +106,7 @@ export function rehypeHighlightExcerpt(excerpt: string) {
         properties: {
           className: highlightClasses,
           dataHighlightExcerpt: "true",
+          dataHighlightExcerptKey: highlightKey,
         },
         children: [{ type: "text", value: text }],
       }));

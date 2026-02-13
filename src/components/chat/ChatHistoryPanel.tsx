@@ -22,6 +22,7 @@ import {
   MarkdownRenderer,
   type MarkdownReferencePreview,
 } from "@/components/markdown/renderer";
+import { getHighlightExcerptKey } from "@/components/markdown/highlight-excerpt-key";
 import {
   ChatEvent,
   ChatEventAddon,
@@ -133,6 +134,7 @@ type ChatItem =
   | ToolChatItem;
 
 const TOOL_DETAIL_MAX_CHARS = 120;
+const HIGHLIGHT_SCROLL_MAX_RETRIES = 18;
 
 const truncateInline = (value: string, maxChars = TOOL_DETAIL_MAX_CHARS): string => {
   const singleLine = value.replace(/\s+/g, " ").trim();
@@ -475,6 +477,13 @@ export default function ChatHistoryPanel({
     }
     return data.excerpt ?? "";
   }, [selectedNode]);
+  const selectedHighlightExcerptKey = useMemo(() => {
+    const excerpt = selectedExcerpt.trim();
+    if (!excerpt) {
+      return null;
+    }
+    return getHighlightExcerptKey(excerpt);
+  }, [selectedExcerpt]);
   const selectedTagLabel = useMemo(() => {
     if (!selectedSummary) {
       return "";
@@ -627,28 +636,69 @@ export default function ChatHistoryPanel({
     if (!scrollRef.current) {
       return;
     }
+    let frameId: number | null = null;
     if (highlightedId && !ignoreHighlightRef.current) {
-      const target = scrollRef.current.querySelector<HTMLElement>(
-        `[data-message-id="${highlightedId}"]`,
-      );
-      if (target) {
-        const excerpt = target.querySelector<HTMLElement>(
-          'mark[data-highlight-excerpt="true"]',
+      let retryCount = 0;
+
+      const scrollToHighlightedExcerpt = () => {
+        const container = scrollRef.current;
+        if (!container) {
+          return;
+        }
+        const target = container.querySelector<HTMLElement>(
+          `[data-message-id="${highlightedId}"]`,
         );
-        (excerpt ?? target).scrollIntoView({
-          behavior: "smooth",
-          block: "center",
+        if (!target) {
+          return;
+        }
+
+        const excerptSelector = selectedHighlightExcerptKey
+          ? `mark[data-highlight-excerpt-key="${selectedHighlightExcerptKey}"]`
+          : 'mark[data-highlight-excerpt="true"]';
+        const excerpt = target.querySelector<HTMLElement>(excerptSelector);
+        if (excerpt) {
+          excerpt.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+          return;
+        }
+
+        if (retryCount >= HIGHLIGHT_SCROLL_MAX_RETRIES) {
+          target.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+          return;
+        }
+
+        retryCount += 1;
+        frameId = window.requestAnimationFrame(() => {
+          frameId = null;
+          scrollToHighlightedExcerpt();
         });
-      }
-      return;
+      };
+
+      scrollToHighlightedExcerpt();
+      return () => {
+        if (frameId !== null) {
+          window.cancelAnimationFrame(frameId);
+        }
+      };
     }
     ignoreHighlightRef.current = false;
     if (isAtBottom) {
       scrollToBottom("smooth");
     }
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
   }, [
     highlightedId,
     focusSignal,
+    selectedHighlightExcerptKey,
     sortedMessages.length,
     isAtBottom,
     scrollRef,

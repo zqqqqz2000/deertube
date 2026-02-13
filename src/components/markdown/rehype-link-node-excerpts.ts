@@ -74,11 +74,7 @@ const applyRefToScope = (
     focusable?: boolean;
   },
 ): number => {
-  const scopeRoot: Root =
-    scope.type === "root"
-      ? scope
-      : { type: "root", children: scope.children };
-  const { entries, combinedText } = collectTextNodes(scopeRoot, {
+  const { entries, combinedText } = collectTextNodes(scope, {
     ignoredParentTags: scopeIgnoredParentTags,
     shouldSkipParent: (node: Root | Parent | Element) => hasNodeRefFlag(node),
   });
