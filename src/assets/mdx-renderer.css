@@ -136,16 +136,24 @@
 }
 
 .markdown-body .node-ref-link {
+  display: inline;
   color: inherit;
   text-decoration-line: underline;
   text-decoration-color: rgba(125, 211, 252, 0.8);
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
   cursor: pointer;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .markdown-body .node-ref-link:hover {
   color: inherit;
   text-decoration-color: rgba(125, 211, 252, 1);
+}
+
+.markdown-body table .node-ref-link {
+  text-decoration-line: underline !important;
 }
 
 .markdown-body {

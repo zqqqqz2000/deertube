@@ -455,6 +455,7 @@ export const MarkdownRenderer = memo(
                 href={normalizedHref ?? undefined}
                 onClick={(event) => {
                   event.preventDefault();
+                  event.stopPropagation();
                   if (!normalizedHref) {
                     return;
                   }
@@ -510,6 +511,31 @@ export const MarkdownRenderer = memo(
       scheduleHideReferenceTooltip,
       showReferenceTooltip,
     ]);
+
+    useEffect(() => {
+      if (!import.meta.env.DEV) {
+        return;
+      }
+      const hasTable =
+        source.includes("<table") ||
+        source.includes("</table>") ||
+        /(^|\n)\s*\|.+\|\s*$/m.test(source);
+      if (!hasTable) {
+        return;
+      }
+      console.log("[markdown.render.input]", {
+        source,
+        sourceLength: source.length,
+        highlightExcerpt,
+        highlightExcerptLength: highlightExcerpt?.length ?? 0,
+        nodeExcerptRefsCount: nodeExcerptRefs.length,
+        nodeExcerptRefs: nodeExcerptRefs.map((item) => ({
+          id: item.id,
+          textLength: item.text.length,
+          textPreview: item.text.slice(0, 220),
+        })),
+      });
+    }, [highlightExcerpt, nodeExcerptRefs, source]);
 
     const handleArticleClick = useCallback(
       (event: React.MouseEvent<HTMLElement>) => {

@@ -1417,16 +1417,29 @@ export default function ChatHistoryPanel({
                   typeof deepSearchOutputPayload?.query === "string"
                     ? deepSearchOutputPayload.query
                     : undefined;
+                const normalizedDeepSearchQuery = deepSearchQuery?.trim() ?? "";
                 const deepSearchError =
                   typeof deepSearchOutputPayload?.error === "string"
                     ? deepSearchOutputPayload.error
                     : undefined;
+                const subagentDescription =
+                  eventMessage.error ??
+                  (eventMessage.toolStatus === "complete" &&
+                  normalizedDeepSearchQuery.length > 0
+                    ? normalizedDeepSearchQuery
+                    : statusLabel);
                 const deepSearchCallDetail = stringifyToolDetail(
                   deepSearchMessage?.toolInput,
                 );
                 const deepSearchResultDetail = stringifyToolDetail(
                   deepSearchMessage?.toolOutput,
                 );
+                const deepSearchSummaryLabel =
+                  deepSearchError ??
+                  (deepSearchStatus === "complete" &&
+                  normalizedDeepSearchQuery.length > 0
+                    ? normalizedDeepSearchQuery
+                    : deepSearchStatusLabel);
                 const deepSearchCompactParts: string[] = [];
                 if (deepSearchQuery) {
                   deepSearchCompactParts.push(`query: ${deepSearchQuery}`);
@@ -1502,7 +1515,7 @@ export default function ChatHistoryPanel({
                             </CollapsibleTrigger>
                           </div>
                         </div>
-                        <ChatEventDescription>{statusLabel}</ChatEventDescription>
+                        <ChatEventDescription>{subagentDescription}</ChatEventDescription>
                         {!toolOpen &&
                           renderToolProgress(subagentProgress, eventMessage.toolStatus)}
                         {hasDetails ? (
@@ -1564,7 +1577,7 @@ export default function ChatHistoryPanel({
                                         )}
                                       </div>
                                       <div className="text-[11px] text-muted-foreground">
-                                        {deepSearchError ? deepSearchError : deepSearchStatusLabel}
+                                        {deepSearchSummaryLabel}
                                       </div>
                                       {(((deepSearchQuery ?? "").length > 0) ||
                                         deepSearchSources.length > 0) && (
@@ -1680,10 +1693,17 @@ export default function ChatHistoryPanel({
                   typeof outputPayload?.query === "string"
                     ? outputPayload.query
                     : undefined;
+                const normalizedQuery = query?.trim() ?? "";
                 const error =
                   typeof outputPayload?.error === "string"
                     ? outputPayload.error
                     : undefined;
+                const deepSearchDescription =
+                  error ??
+                  (eventMessage.toolStatus === "complete" &&
+                  normalizedQuery.length > 0
+                    ? normalizedQuery
+                    : statusLabel);
                 const callDetail = stringifyToolDetail(eventMessage.toolInput);
                 const resultDetail = stringifyToolDetail(eventMessage.toolOutput);
                 const title =
@@ -1745,9 +1765,7 @@ export default function ChatHistoryPanel({
                             </CollapsibleTrigger>
                           </div>
                         </div>
-                        <ChatEventDescription>
-                          {error ? error : statusLabel}
-                        </ChatEventDescription>
+                        <ChatEventDescription>{deepSearchDescription}</ChatEventDescription>
                         {!toolOpen &&
                           renderToolProgress(deepSearchProgress, eventMessage.toolStatus)}
                         <CollapsibleContent className="mt-2 min-w-0">
