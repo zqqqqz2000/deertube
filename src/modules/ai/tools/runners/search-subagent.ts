@@ -28,6 +28,7 @@ import {
   getAgentSkill,
   listAgentSkills,
   type AgentSkillProfile,
+  type RuntimeAgentSkill,
 } from "../../../../shared/agent-skills";
 import {
   clampText,
@@ -125,6 +126,8 @@ export async function runSearchSubagent({
   deepResearchStore,
   subagentConfig,
   skillProfile,
+  selectedSkillNames,
+  externalSkills,
   fullPromptOverrideEnabled = false,
 }: {
   query: string;
@@ -141,6 +144,8 @@ export async function runSearchSubagent({
   deepResearchStore?: DeepResearchPersistenceAdapter;
   subagentConfig?: DeepResearchSubagentConfigInput;
   skillProfile?: AgentSkillProfile;
+  selectedSkillNames?: string[];
+  externalSkills?: RuntimeAgentSkill[];
   fullPromptOverrideEnabled?: boolean;
 }): Promise<SearchResult[]> {
   console.log("[subagent.runSearch]", {
@@ -149,7 +154,7 @@ export async function runSearchSubagent({
   });
   const resolvedSubagentConfig =
     resolveDeepResearchSubagentConfig(subagentConfig);
-  const availableSkills = listAgentSkills();
+  const availableSkills = listAgentSkills({ externalSkills });
   const accumulatedMessages: SubagentUIMessage[] = [];
   const searchToolErrors: string[] = [];
   const extractToolErrors: string[] = [];
@@ -637,7 +642,7 @@ export async function runSearchSubagent({
       error: z.string().optional(),
     }),
     execute: ({ name }) => {
-      const matched = getAgentSkill(name);
+      const matched = getAgentSkill(name, { externalSkills });
       if (!matched) {
         return {
           name,
@@ -666,7 +671,7 @@ export async function runSearchSubagent({
       error: z.string().optional(),
     }),
     execute: ({ name, task }) => {
-      const matched = getAgentSkill(name);
+      const matched = getAgentSkill(name, { externalSkills });
       if (!matched) {
         return {
           name,
@@ -755,6 +760,8 @@ export async function runSearchSubagent({
     subagentConfig: resolvedSubagentConfig,
     query,
     skillProfile: skillProfile ?? "auto",
+    selectedSkillNames,
+    availableSkills: externalSkills,
     fullPromptOverrideEnabled,
   });
 

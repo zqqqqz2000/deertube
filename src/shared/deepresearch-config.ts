@@ -3,6 +3,7 @@ import {
   AgentSkillProfileSchema,
   buildSkillRegistryPromptBlock,
   type AgentSkillProfile,
+  type RuntimeAgentSkill,
 } from "./agent-skills";
 
 const OptionalStringSchema = z.string().optional();
@@ -38,6 +39,10 @@ export const DEEP_RESEARCH_PROMPT_PLACEHOLDERS = [
   {
     key: "skillProfile",
     description: "Current skill recall strategy.",
+  },
+  {
+    key: "selectedSkillNames",
+    description: "Comma-separated selected skill names.",
   },
   {
     key: "searchComplexity",
@@ -96,6 +101,7 @@ export const DeepResearchConfigSchema = z.object({
   enabled: z.boolean().default(true),
   strictness: DeepResearchStrictnessSchema.default("all-claims"),
   skillProfile: AgentSkillProfileSchema.default("auto"),
+  selectedSkillNames: z.array(z.string()).default([]),
   fullPromptOverrideEnabled: z.boolean().default(false),
   mainPromptOverride: OptionalStringSchema,
   subagent: DeepResearchSubagentConfigSchema.optional(),
@@ -123,6 +129,7 @@ export interface DeepResearchConfig {
   enabled: boolean;
   strictness: DeepResearchStrictness;
   skillProfile: AgentSkillProfile;
+  selectedSkillNames: string[];
   fullPromptOverrideEnabled: boolean;
   mainPromptOverride?: string;
   subagent: DeepResearchSubagentConfig;
@@ -144,6 +151,7 @@ export const DEFAULT_DEEP_RESEARCH_CONFIG: DeepResearchConfig = {
   enabled: true,
   strictness: "all-claims",
   skillProfile: "auto",
+  selectedSkillNames: [],
   fullPromptOverrideEnabled: false,
   subagent: DEFAULT_DEEP_RESEARCH_SUBAGENT_CONFIG,
 };
@@ -151,6 +159,17 @@ export const DEFAULT_DEEP_RESEARCH_CONFIG: DeepResearchConfig = {
 const normalizeOptionalPrompt = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+};
+
+const normalizeSkillNames = (values: string[] | undefined): string[] => {
+  const dedupe = new Set<string>();
+  (values ?? []).forEach((value) => {
+    const normalized = value.trim();
+    if (normalized.length > 0) {
+      dedupe.add(normalized);
+    }
+  });
+  return Array.from(dedupe.values());
 };
 
 export const resolveDeepResearchSubagentConfig = (
@@ -204,6 +223,7 @@ export const resolveDeepResearchConfig = (
       normalized?.strictness ?? DEFAULT_DEEP_RESEARCH_CONFIG.strictness,
     skillProfile:
       normalized?.skillProfile ?? DEFAULT_DEEP_RESEARCH_CONFIG.skillProfile,
+    selectedSkillNames: normalizeSkillNames(normalized?.selectedSkillNames),
     fullPromptOverrideEnabled:
       normalized?.fullPromptOverrideEnabled ??
       DEFAULT_DEEP_RESEARCH_CONFIG.fullPromptOverrideEnabled,
@@ -232,7 +252,7 @@ const buildStrictnessLines = (strictness: DeepResearchStrictness): string[] => {
 export const buildMainAgentSystemPrompt = (
   contextLines: string[],
   input?: DeepResearchConfigInput | null,
-  options?: { query?: string },
+  options?: { query?: string; availableSkills?: RuntimeAgentSkill[] },
 ): string => {
   const config = resolveDeepResearchConfig(input);
   const promptOverride =
@@ -249,6 +269,8 @@ export const buildMainAgentSystemPrompt = (
   const skillRegistryPrompt = buildSkillRegistryPromptBlock({
     query: options?.query ?? "",
     profile: config.skillProfile,
+    selectedSkillNames: config.selectedSkillNames,
+    externalSkills: options?.availableSkills,
     discoverToolName: "discoverSkills",
     loadToolName: "loadSkill",
     executeToolName: "executeSkill",
@@ -307,11 +329,13 @@ const buildSubagentPromptTemplateVariables = (
     query?: string;
     strictness?: DeepResearchStrictness;
     skillProfile?: AgentSkillProfile;
+    selectedSkillNames?: string[];
   },
 ): Record<string, string> => ({
   query: options?.query ?? "",
   strictness: options?.strictness ?? "",
   skillProfile: options?.skillProfile ?? "",
+  selectedSkillNames: normalizeSkillNames(options?.selectedSkillNames).join(", "),
   searchComplexity: config.searchComplexity,
   tavilySearchDepth: config.tavilySearchDepth,
   maxSearchCalls: String(config.maxSearchCalls),
@@ -330,6 +354,7 @@ const buildMainPromptTemplateVariables = (
     query,
     strictness: config.strictness,
     skillProfile: config.skillProfile,
+    selectedSkillNames: config.selectedSkillNames,
   });
 
 const applyPromptTemplate = (
@@ -360,6 +385,8 @@ export const buildSearchSubagentSystemPrompt = (
     subagentConfig?: DeepResearchSubagentConfigInput | null;
     query?: string;
     skillProfile?: AgentSkillProfile;
+    selectedSkillNames?: string[];
+    availableSkills?: RuntimeAgentSkill[];
     fullPromptOverrideEnabled?: boolean;
   },
 ): string => {
@@ -367,6 +394,8 @@ export const buildSearchSubagentSystemPrompt = (
   const skillRegistryPrompt = buildSkillRegistryPromptBlock({
     query: options?.query ?? "",
     profile: options?.skillProfile ?? "auto",
+    selectedSkillNames: normalizeSkillNames(options?.selectedSkillNames),
+    externalSkills: options?.availableSkills,
     discoverToolName: "discoverSkills",
     loadToolName: "loadSkill",
     executeToolName: "executeSkill",
@@ -380,6 +409,7 @@ export const buildSearchSubagentSystemPrompt = (
       buildSubagentPromptTemplateVariables(config, {
         query: options?.query,
         skillProfile: options?.skillProfile,
+        selectedSkillNames: options?.selectedSkillNames,
       }),
     );
   }

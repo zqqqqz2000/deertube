@@ -16,6 +16,7 @@ import type {
 } from "../../types/flow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
 import { Chat } from "@/modules/chat/components/chat";
 import { ChatMessages } from "@/modules/chat/components/chat-messages";
 import {
@@ -48,9 +49,11 @@ import {
   Check,
   CircleCheck,
   ChevronDown,
+  FolderOpen,
   Loader2,
   MessageSquare,
   Network,
+  RefreshCw,
   RotateCw,
   Search as SearchIcon,
   Send,
@@ -169,6 +172,13 @@ type ChatItem =
   | { kind: "primary"; id: string; message: ChatMessage }
   | { kind: "additional"; id: string; message: ChatMessage }
   | ToolChatItem;
+
+interface SearchSkillOption {
+  name: string;
+  title: string;
+  description: string;
+  relativePath?: string;
+}
 
 const TOOL_DETAIL_MAX_CHARS = 120;
 const HIGHLIGHT_SCROLL_MAX_RETRIES = 18;
@@ -508,6 +518,12 @@ export default function ChatHistoryPanel({
   const [advancedPanelOpen, setAdvancedPanelOpen] = useState(false);
   const [deepResearchQuickOpen, setDeepResearchQuickOpen] = useState(false);
   const deepResearchQuickRef = useRef<HTMLDivElement | null>(null);
+  const [skillsDirectory, setSkillsDirectory] = useState("");
+  const [searchSkillOptions, setSearchSkillOptions] = useState<
+    SearchSkillOption[]
+  >([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
   const [toolOpenById, setToolOpenById] = useState<Record<string, boolean>>({});
   const [toolGroupOpenById, setToolGroupOpenById] = useState<
     Record<string, boolean>
@@ -522,6 +538,7 @@ export default function ChatHistoryPanel({
     resolvedDeepResearchConfig.subagent.searchComplexity === "deep";
   const fullPromptOverrideEnabled =
     resolvedDeepResearchConfig.fullPromptOverrideEnabled;
+  const selectedSkillNames = resolvedDeepResearchConfig.selectedSkillNames;
   const defaultOverridePrompts = useMemo(() => {
     const baseConfig = resolveDeepResearchConfig({
       ...resolvedDeepResearchConfig,
@@ -542,6 +559,7 @@ export default function ChatHistoryPanel({
         subagentConfig: baseConfig.subagent,
         query: queryPlaceholder,
         skillProfile: baseConfig.skillProfile,
+        selectedSkillNames: baseConfig.selectedSkillNames,
         fullPromptOverrideEnabled: false,
       }),
       subagentRuntimePrompt: buildSearchSubagentRuntimePrompt({
@@ -1109,6 +1127,82 @@ export default function ChatHistoryPanel({
       resolvedDeepResearchConfig,
     ],
   );
+
+  const refreshSkillCatalog = useCallback(
+    async (useRefreshRoute = false) => {
+      setSkillsLoading(true);
+      setSkillsError(null);
+      try {
+        const payload = useRefreshRoute
+          ? await trpc.skills.refresh.query()
+          : await trpc.skills.list.query();
+        setSkillsDirectory(payload.directory ?? "");
+        const options = payload.skills
+          .filter((skill) => skill.isSearchSkill)
+          .map((skill) => ({
+            name: skill.name,
+            title: skill.title,
+            description: skill.description,
+            relativePath: skill.relativePath,
+          }))
+          .sort((left, right) => left.name.localeCompare(right.name));
+        setSearchSkillOptions(options);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to scan skills directory.";
+        setSkillsError(message);
+      } finally {
+        setSkillsLoading(false);
+      }
+    },
+    [],
+  );
+
+  const handleOpenSkillsDirectory = useCallback(async () => {
+    setSkillsError(null);
+    try {
+      const result = await trpc.skills.openDirectory.mutate();
+      if (!result.ok) {
+        throw new Error(result.error ?? "Failed to open skills directory.");
+      }
+      setSkillsDirectory(result.directory ?? "");
+      await refreshSkillCatalog(true);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to open skills directory.";
+      setSkillsError(message);
+    }
+  }, [refreshSkillCatalog]);
+
+  const handleToggleSelectedSkill = useCallback(
+    (skillName: string) => {
+      const normalizedName = skillName.trim();
+      if (!normalizedName) {
+        return;
+      }
+      const current = new Set(selectedSkillNames);
+      if (current.has(normalizedName)) {
+        current.delete(normalizedName);
+      } else {
+        current.add(normalizedName);
+      }
+      patchDeepResearchConfig({
+        selectedSkillNames: Array.from(current.values()),
+      });
+    },
+    [patchDeepResearchConfig, selectedSkillNames],
+  );
+
+  useEffect(() => {
+    if (!deepResearchQuickOpen) {
+      return;
+    }
+    void refreshSkillCatalog();
+  }, [deepResearchQuickOpen, refreshSkillCatalog]);
 
   useEffect(() => {
     if (!deepResearchQuickOpen) {
@@ -2386,7 +2480,7 @@ export default function ChatHistoryPanel({
                 </button>
                 {deepResearchQuickOpen ? (
                   <div
-                    className="absolute bottom-full left-1/2 z-50 mb-2 w-[260px] -translate-x-1/2 rounded-md border border-border/70 bg-popover p-3 shadow-xl"
+                    className="absolute bottom-full left-1/2 z-50 mb-2 w-[320px] -translate-x-1/2 rounded-md border border-border/70 bg-popover p-3 shadow-xl"
                     onPointerDown={(event) => {
                       event.stopPropagation();
                     }}
@@ -2434,6 +2528,97 @@ export default function ChatHistoryPanel({
                             })
                           }
                         />
+                      </div>
+                      <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                          <div className="text-xs font-medium text-foreground/90">
+                            Search Skills
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 rounded-sm border border-border/70"
+                              title="Refresh skills"
+                              aria-label="Refresh skills"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void refreshSkillCatalog(true);
+                              }}
+                            >
+                              <RefreshCw
+                                className={cn(
+                                  "h-3.5 w-3.5",
+                                  skillsLoading && "animate-spin",
+                                )}
+                              />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 rounded-sm border border-border/70"
+                              title="Open skills folder"
+                              aria-label="Open skills folder"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleOpenSkillsDirectory();
+                              }}
+                            >
+                              <FolderOpen className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                        <div
+                          className="truncate text-[10px] text-muted-foreground"
+                          title={skillsDirectory || undefined}
+                        >
+                          {skillsDirectory || "Skills directory not loaded yet."}
+                        </div>
+                        <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                          Folders with names starting with <code>search-</code> are
+                          treated as search skills. Add new <code>search-*</code>{" "}
+                          skills in this folder, then click refresh.
+                        </div>
+                        {skillsError ? (
+                          <div className="mt-1 text-[10px] text-destructive">
+                            {skillsError}
+                          </div>
+                        ) : null}
+                        <div className="mt-2 max-h-28 space-y-1 overflow-auto pr-1">
+                          {searchSkillOptions.length === 0 ? (
+                            <div className="text-[10px] text-muted-foreground">
+                              No <code>search-*</code> skills found yet.
+                            </div>
+                          ) : (
+                            searchSkillOptions.map((skill) => {
+                              const selected = selectedSkillNames.includes(skill.name);
+                              return (
+                                <button
+                                  key={skill.name}
+                                  type="button"
+                                  className={cn(
+                                    "w-full rounded-md border px-2 py-1 text-left text-[11px] transition",
+                                    selected
+                                      ? "border-primary/45 bg-primary/10 text-primary"
+                                      : "border-border/70 bg-background/60 text-muted-foreground hover:text-foreground",
+                                  )}
+                                  title={`${skill.title}\n${skill.description}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleToggleSelectedSkill(skill.name);
+                                  }}
+                                >
+                                  <div className="truncate font-medium">{skill.name}</div>
+                                  <div className="truncate text-[10px] opacity-80">
+                                    {skill.title}
+                                  </div>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
                       </div>
                       <Button
                         type="button"

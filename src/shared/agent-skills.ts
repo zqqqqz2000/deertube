@@ -20,16 +20,31 @@ interface AgentSkillPreset {
 }
 
 export interface AgentSkillSummary {
-  name: AgentSkillPreset["name"];
+  name: string;
   title: string;
   description: string;
   activationHints: string[];
+  source?: "preset" | "local";
+  isSearchSkill?: boolean;
 }
 
 export interface AgentSkillContent {
-  name: AgentSkillPreset["name"];
+  name: string;
   title: string;
   content: string;
+  source?: "preset" | "local";
+  isSearchSkill?: boolean;
+}
+
+export interface RuntimeAgentSkill {
+  name: string;
+  title: string;
+  description: string;
+  activationHints: string[];
+  content: string;
+  keywords?: string[];
+  source?: "preset" | "local";
+  isSearchSkill?: boolean;
 }
 
 const PRESET_AGENT_SKILLS: AgentSkillPreset[] = [
@@ -196,20 +211,115 @@ const PRESET_AGENT_SKILLS: AgentSkillPreset[] = [
 
 const normalizeText = (value: string): string => value.toLowerCase();
 
-export const listAgentSkills = (): AgentSkillSummary[] =>
-  PRESET_AGENT_SKILLS.map((skill) => ({
+const normalizeSkillName = (value: string): string =>
+  normalizeText(value).trim();
+
+const trimNonEmpty = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+};
+
+const uniqueTrimmedStrings = (values: string[]): string[] => {
+  const dedupe = new Set<string>();
+  values.forEach((value) => {
+    const normalized = value.trim();
+    if (normalized.length > 0) {
+      dedupe.add(normalized);
+    }
+  });
+  return Array.from(dedupe.values());
+};
+
+const presetToRuntimeSkill = (skill: AgentSkillPreset): RuntimeAgentSkill => ({
+  name: skill.name,
+  title: skill.title,
+  description: skill.description,
+  activationHints: skill.activationHints,
+  keywords: skill.keywords,
+  content: skill.content,
+  source: "preset",
+});
+
+const normalizeRuntimeSkill = (
+  skill: RuntimeAgentSkill,
+  fallbackSource: "preset" | "local",
+): RuntimeAgentSkill => {
+  const name = trimNonEmpty(skill.name);
+  if (!name) {
+    return {
+      name: "",
+      title: "",
+      description: "",
+      activationHints: [],
+      content: "",
+      source: fallbackSource,
+    };
+  }
+  const title = trimNonEmpty(skill.title) ?? name;
+  const description =
+    trimNonEmpty(skill.description) ?? `Skill "${name}" loaded at runtime.`;
+  const activationHints = uniqueTrimmedStrings(skill.activationHints ?? []);
+  const content =
+    trimNonEmpty(skill.content) ??
+    `# Skill: ${title}\n\nNo additional guidance content is available.`;
+  const keywords = uniqueTrimmedStrings(skill.keywords ?? []);
+  return {
+    name,
+    title,
+    description,
+    activationHints,
+    content,
+    keywords: keywords.length > 0 ? keywords : undefined,
+    source: skill.source ?? fallbackSource,
+    isSearchSkill: skill.isSearchSkill === true,
+  };
+};
+
+const collectMergedSkills = (options?: {
+  externalSkills?: RuntimeAgentSkill[];
+}): RuntimeAgentSkill[] => {
+  const mergedByName = new Map<string, RuntimeAgentSkill>();
+
+  PRESET_AGENT_SKILLS.map(presetToRuntimeSkill).forEach((skill) => {
+    mergedByName.set(normalizeSkillName(skill.name), skill);
+  });
+
+  (options?.externalSkills ?? []).forEach((skill) => {
+    const normalized = normalizeRuntimeSkill(skill, "local");
+    const key = normalizeSkillName(normalized.name);
+    if (!key) {
+      return;
+    }
+    mergedByName.set(key, normalized);
+  });
+
+  return Array.from(mergedByName.values());
+};
+
+export const listAgentSkills = (options?: {
+  externalSkills?: RuntimeAgentSkill[];
+}): AgentSkillSummary[] =>
+  collectMergedSkills(options).map((skill) => ({
     name: skill.name,
     title: skill.title,
     description: skill.description,
     activationHints: skill.activationHints,
+    source: skill.source,
+    isSearchSkill: skill.isSearchSkill,
   }));
 
 export const getAgentSkill = (
   name: string,
+  options?: {
+    externalSkills?: RuntimeAgentSkill[];
+  },
 ): AgentSkillContent | null => {
-  const normalized = normalizeText(name).trim();
-  const matched = PRESET_AGENT_SKILLS.find(
-    (skill) => normalizeText(skill.name) === normalized,
+  const normalized = normalizeSkillName(name);
+  if (!normalized) {
+    return null;
+  }
+  const matched = collectMergedSkills(options).find(
+    (skill) => normalizeSkillName(skill.name) === normalized,
   );
   if (!matched) {
     return null;
@@ -218,6 +328,8 @@ export const getAgentSkill = (
     name: matched.name,
     title: matched.title,
     content: matched.content,
+    source: matched.source,
+    isSearchSkill: matched.isSearchSkill,
   };
 };
 
@@ -229,42 +341,75 @@ const hasAnyKeyword = (query: string, keywords: string[]): boolean => {
 export const resolveAgentSkillNamesForQuery = ({
   query,
   profile,
+  selectedSkillNames = [],
+  externalSkills,
 }: {
   query: string;
   profile: AgentSkillProfile;
+  selectedSkillNames?: string[];
+  externalSkills?: RuntimeAgentSkill[];
 }): AgentSkillContent["name"][] => {
+  const mergedSkills = collectMergedSkills({ externalSkills });
+  const names: string[] = [];
+  const presetByName = new Map(
+    PRESET_AGENT_SKILLS.map((skill) => [skill.name, skill]),
+  );
+  const mergedByNormalizedName = new Map(
+    mergedSkills.map((skill) => [normalizeSkillName(skill.name), skill]),
+  );
+
+  uniqueTrimmedStrings(selectedSkillNames).forEach((selectedName) => {
+    const matched = mergedByNormalizedName.get(normalizeSkillName(selectedName));
+    if (matched) {
+      names.push(matched.name);
+    }
+  });
+
   if (profile === "none") {
-    return [];
+    return Array.from(new Set(names));
   }
+
   if (profile !== "auto") {
-    return PRESET_AGENT_SKILLS.some((skill) => skill.name === profile)
-      ? [profile]
-      : [];
+    if (presetByName.has(profile)) {
+      names.push(profile);
+    }
+    return Array.from(new Set(names));
   }
-  const matched = PRESET_AGENT_SKILLS.filter((skill) =>
+
+  const matchedPresetSkills = PRESET_AGENT_SKILLS.filter((skill) =>
     hasAnyKeyword(query, skill.keywords),
   ).map((skill) => skill.name);
-  return Array.from(new Set(matched));
+  names.push(...matchedPresetSkills);
+  return Array.from(new Set(names));
 };
 
 export const buildSkillRegistryPromptBlock = ({
   query,
   profile,
+  selectedSkillNames = [],
+  externalSkills,
   discoverToolName,
   loadToolName,
   executeToolName,
 }: {
   query: string;
   profile: AgentSkillProfile;
+  selectedSkillNames?: string[];
+  externalSkills?: RuntimeAgentSkill[];
   discoverToolName: string;
   loadToolName: string;
   executeToolName: string;
 }): string => {
-  const skills = listAgentSkills();
+  const skills = listAgentSkills({ externalSkills });
   if (skills.length === 0) {
     return "";
   }
-  const activeSkillNames = resolveAgentSkillNamesForQuery({ query, profile });
+  const activeSkillNames = resolveAgentSkillNamesForQuery({
+    query,
+    profile,
+    selectedSkillNames,
+    externalSkills,
+  });
   const lines: string[] = [];
   lines.push("Skill registry:");
   lines.push(
@@ -285,10 +430,14 @@ export const buildSkillRegistryPromptBlock = ({
     lines.push(
       "Skill profile is set to `none`; do not call the skill tool unless explicitly asked by the user.",
     );
-  } else if (activeSkillNames.length > 0) {
+  }
+  if (selectedSkillNames.length > 0) {
     lines.push(
-      `Suggested skills for this query: ${activeSkillNames.join(", ")}.`,
+      `User-selected skills: ${uniqueTrimmedStrings(selectedSkillNames).join(", ")}. Prioritize these when applicable.`,
     );
+  }
+  if (activeSkillNames.length > 0) {
+    lines.push(`Suggested skills for this query: ${activeSkillNames.join(", ")}.`);
   }
   return lines.join("\n");
 };

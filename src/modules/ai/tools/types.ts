@@ -4,6 +4,7 @@ import type {
   LineSelection,
 } from "../../../shared/deepresearch";
 import type { DeepResearchConfig } from "../../../shared/deepresearch-config";
+import type { RuntimeAgentSkill } from "../../../shared/agent-skills";
 
 export interface DeertubeMessageMetadata {
   status?: "pending" | "complete" | "failed";
@@ -81,6 +82,7 @@ export interface ToolConfig {
   jinaReaderApiKey?: string;
   deepResearchStore?: DeepResearchPersistenceAdapter;
   deepResearchConfig?: DeepResearchConfig;
+  externalSkills?: RuntimeAgentSkill[];
 }
 
 export interface SearchResult {

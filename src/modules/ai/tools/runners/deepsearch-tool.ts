@@ -4,6 +4,7 @@ import type {
   DeepResearchReferenceRecord,
 } from "../../../../shared/deepresearch";
 import type { DeepResearchConfig } from "../../../../shared/deepresearch-config";
+import type { RuntimeAgentSkill } from "../../../../shared/agent-skills";
 import {
   buildDeepSearchReferences,
   buildDeepSearchSources,
@@ -25,6 +26,7 @@ export async function runDeepSearchTool({
   jinaReaderApiKey,
   deepResearchStore,
   deepResearchConfig,
+  externalSkills,
 }: {
   query: string;
   searchModel: LanguageModel;
@@ -38,6 +40,7 @@ export async function runDeepSearchTool({
   jinaReaderApiKey?: string;
   deepResearchStore?: DeepResearchPersistenceAdapter;
   deepResearchConfig?: DeepResearchConfig;
+  externalSkills?: RuntimeAgentSkill[];
 }): Promise<{
   conclusion?: string;
   sources: DeepSearchSource[];
@@ -93,6 +96,8 @@ export async function runDeepSearchTool({
       deepResearchStore,
       subagentConfig: deepResearchConfig?.subagent,
       skillProfile: deepResearchConfig?.skillProfile,
+      selectedSkillNames: deepResearchConfig?.selectedSkillNames,
+      externalSkills,
       fullPromptOverrideEnabled:
         deepResearchConfig?.fullPromptOverrideEnabled ?? false,
     });

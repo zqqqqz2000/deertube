@@ -5,12 +5,14 @@ import { previewRouter } from './preview'
 import { chatRouter } from './chat'
 import { graphRouter } from './graph'
 import { browserViewRouter } from './browserView'
+import { skillsRouter } from "./skills";
 
 export const appRouter = createTRPCRouter({
   project: projectRouter,
   deepSearch: deepSearchRouter,
   preview: previewRouter,
   browserView: browserViewRouter,
+  skills: skillsRouter,
   chat: chatRouter,
   graph: graphRouter,
 })

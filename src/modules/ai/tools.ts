@@ -30,7 +30,9 @@ export function createTools(
   writer: UIMessageStreamWriter,
   config: ToolConfig = {},
 ) {
-  const availableSkills = listAgentSkills();
+  const availableSkills = listAgentSkills({
+    externalSkills: config.externalSkills,
+  });
   return {
     discoverSkills: tool({
       description:
@@ -73,7 +75,9 @@ export function createTools(
         error: z.string().optional(),
       }),
       execute: ({ name }) => {
-        const matched = getAgentSkill(name);
+        const matched = getAgentSkill(name, {
+          externalSkills: config.externalSkills,
+        });
         if (!matched) {
           return {
             name,
@@ -101,7 +105,9 @@ export function createTools(
         error: z.string().optional(),
       }),
       execute: ({ name, task }) => {
-        const matched = getAgentSkill(name);
+        const matched = getAgentSkill(name, {
+          externalSkills: config.externalSkills,
+        });
         if (!matched) {
           return {
             name,
@@ -201,6 +207,7 @@ export function createTools(
           jinaReaderApiKey: config.jinaReaderApiKey,
           deepResearchStore: config.deepResearchStore,
           deepResearchConfig: config.deepResearchConfig,
+          externalSkills: config.externalSkills,
         });
         return {
           conclusion: result.conclusion,

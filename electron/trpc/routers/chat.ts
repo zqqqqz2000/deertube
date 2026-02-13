@@ -15,8 +15,43 @@ import {
   DeepResearchConfigSchema,
   resolveDeepResearchConfig,
 } from "../../../src/shared/deepresearch-config";
+import { scanLocalAgentSkills } from "../../skills/registry";
+import type { RuntimeAgentSkill } from "../../../src/shared/agent-skills";
 
 const noStepLimit = () => false;
+
+const loadExternalSkills = async (): Promise<RuntimeAgentSkill[]> => {
+  const scanResult = await scanLocalAgentSkills();
+  return scanResult.skills.map((skill) => ({
+    name: skill.name,
+    title: skill.title,
+    description: skill.description,
+    activationHints: skill.activationHints,
+    content: skill.content,
+    source: skill.source,
+    isSearchSkill: skill.isSearchSkill,
+  }));
+};
+
+const filterExternalSkillsBySelection = (
+  skills: RuntimeAgentSkill[],
+  selectedSkillNames: string[],
+): RuntimeAgentSkill[] => {
+  const normalizedSelectedSkillNames = new Set(
+    selectedSkillNames
+      .map((name) => name.trim().toLowerCase())
+      .filter((name) => name.length > 0),
+  );
+  if (normalizedSelectedSkillNames.size === 0) {
+    return skills;
+  }
+  return skills.filter((skill) => {
+    if (!skill.isSearchSkill) {
+      return true;
+    }
+    return normalizedSelectedSkillNames.has(skill.name.trim().toLowerCase());
+  });
+};
 
 const waitForAbort = (signal: AbortSignal): Promise<{ kind: "abort" }> =>
   new Promise((resolve) => {
@@ -196,6 +231,11 @@ export const chatRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ input }) => {
+      const deepResearchConfig = resolveDeepResearchConfig(input.deepResearch);
+      const externalSkills = filterExternalSkillsBySelection(
+        await loadExternalSkills(),
+        deepResearchConfig.selectedSkillNames,
+      );
       const legacyModel = buildLegacyModelSettings(input.settings);
       const chatModelConfig = buildLanguageModel(
         input.settings?.models?.chat,
@@ -222,8 +262,8 @@ export const chatRouter = createTRPCRouter({
           : "";
       const systemPrompt = buildMainAgentSystemPrompt(
         contextLines,
-        input.deepResearch,
-        { query: lastUserContent },
+        deepResearchConfig,
+        { query: lastUserContent, availableSkills: externalSkills },
       );
       const modelInputMessages = injectHiddenRuntimeContextToLatestUserMessage(
         input.messages,
@@ -235,7 +275,7 @@ export const chatRouter = createTRPCRouter({
         lastUserText,
         provider: chatModelConfig.resolved.llmProvider,
         model: chatModelConfig.resolved.llmModelId,
-        deepResearchEnabled: resolveDeepResearchConfig(input.deepResearch).enabled,
+        deepResearchEnabled: deepResearchConfig.enabled,
       });
       const result = await generateText({
         model: chatModelConfig.model,
@@ -264,6 +304,10 @@ export const chatRouter = createTRPCRouter({
     )
     .subscription(async function* ({ input, signal }) {
       const deepResearchConfig = resolveDeepResearchConfig(input.deepResearch);
+      const externalSkills = filterExternalSkillsBySelection(
+        await loadExternalSkills(),
+        deepResearchConfig.selectedSkillNames,
+      );
       const legacyModel = buildLegacyModelSettings(input.settings);
       const chatModelConfig = buildLanguageModel(
         input.settings?.models?.chat,
@@ -304,8 +348,8 @@ export const chatRouter = createTRPCRouter({
           : "";
       const systemPrompt = buildMainAgentSystemPrompt(
         contextLines,
-        input.deepResearch,
-        { query: lastUserContent },
+        deepResearchConfig,
+        { query: lastUserContent, availableSkills: externalSkills },
       );
       const modelInputMessages = injectHiddenRuntimeContextToLatestUserMessage(
         input.messages,
@@ -349,6 +393,7 @@ export const chatRouter = createTRPCRouter({
             jinaReaderApiKey: input.settings?.jinaReaderApiKey,
             deepResearchStore,
             deepResearchConfig,
+            externalSkills,
           });
           const result = streamText({
             model: chatModelConfig.model,
