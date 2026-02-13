@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useDebounceEffect } from "ahooks";
 import type { ReactFlowInstance } from "reactflow";
 import { trpc } from "../../lib/trpc";
 import type {
@@ -51,6 +50,10 @@ interface GraphSnapshot {
   }[];
   edges: { sourceIntId: number; targetIntId: number }[];
 }
+
+const CHAT_ACTION_DEBUG_LOGS_ENABLED =
+  import.meta.env.DEV &&
+  import.meta.env.VITE_CHAT_ACTION_DEBUG_LOGS === "true";
 
 const isStartNode = (node: FlowNode | null) => {
   if (!node || node.type !== "insight") {
@@ -202,6 +205,9 @@ export function useChatActions({
   const loggedStreamPartsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
+    if (!CHAT_ACTION_DEBUG_LOGS_ENABLED) {
+      return;
+    }
     graphEventMessages.forEach((event) => {
       if (event.kind !== "graph-event") {
         return;
@@ -493,15 +499,10 @@ export function useChatActions({
         void runGraphTools(message.id, text);
       },
     });
-  useDebounceEffect(
-    () => {
-      console.log(messages);
-    },
-    [messages],
-    { wait: 10_000 },
-  );
-
   useEffect(() => {
+    if (!CHAT_ACTION_DEBUG_LOGS_ENABLED) {
+      return;
+    }
     messages.forEach((message) => {
       if (!Array.isArray(message.parts)) {
         return;

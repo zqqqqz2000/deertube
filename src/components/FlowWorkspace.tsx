@@ -87,6 +87,10 @@ const CHAT_DEFAULT_WEIGHT = 32;
 const TOTAL_LAYOUT_WEIGHT = 100;
 const BROWSER_TAB_PREFIX = "browser:";
 const BROWSER_TAB_MAX_LABEL_LENGTH = 36;
+const DEFAULT_EDGE_OPTIONS = {
+  type: "smoothstep",
+  style: { stroke: "var(--flow-edge)", strokeWidth: 1.6 },
+} as const;
 
 type ProjectStateInput = Omit<ProjectState, "chat"> & { chat?: ChatMessage[] };
 
@@ -1711,6 +1715,78 @@ function FlowWorkspaceInner({
     },
     [flowInstance, getNode, setSelectedId, suspendAutoLayoutForZoom],
   );
+  const handleRequestClearSelection = useCallback(() => {
+    setSelectedId(null);
+  }, []);
+  const handleFlowInit = useCallback((instance: ReactFlowInstance) => {
+    setFlowInstance(instance);
+    const nextViewport = instance.getViewport();
+    viewportRef.current = nextViewport;
+    setViewport(nextViewport);
+  }, []);
+  const handleFlowMove = useCallback((_: unknown, nextViewport: Viewport) => {
+    if (nextViewport.zoom !== viewportRef.current.zoom) {
+      autoLayoutZoomingRef.current = true;
+    }
+    viewportRef.current = nextViewport;
+    setViewport(nextViewport);
+  }, []);
+  const handleFlowMoveStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+  const handleFlowMoveEnd = useCallback(() => {
+    setIsDragging(false);
+    if (!autoLayoutZoomingRef.current) {
+      return;
+    }
+    autoLayoutZoomingRef.current = false;
+    if (autoLayoutZoomTimeoutRef.current) {
+      window.clearTimeout(autoLayoutZoomTimeoutRef.current);
+      autoLayoutZoomTimeoutRef.current = null;
+    }
+    if (!autoLayoutLocked) {
+      autoLayoutPendingRef.current = false;
+      return;
+    }
+    if (!autoLayoutPendingRef.current || isLayouting) {
+      return;
+    }
+    autoLayoutPendingRef.current = false;
+    void handleAutoLayout();
+  }, [autoLayoutLocked, handleAutoLayout, isLayouting]);
+  const handleFlowNodeClick = useCallback(
+    (_: unknown, node: { id: string }) => {
+      setSelectedId(node.id);
+      setPanelInput("");
+      setChatFocusSignal((prev) => prev + 1);
+    },
+    [setPanelInput],
+  );
+  const handleFlowPaneClick = useCallback(() => {
+    setSelectedId(null);
+    if (flowInstance && inputZoomRef.current) {
+      const { viewport } = inputZoomRef.current;
+      inputZoomRef.current = null;
+      requestAnimationFrame(() => {
+        suspendAutoLayoutForZoom(420);
+        flowInstance.setViewport(viewport, { duration: 350 });
+      });
+    }
+    if (flowInstance && nodeZoomRef.current) {
+      const viewport = nodeZoomRef.current;
+      nodeZoomRef.current = null;
+      requestAnimationFrame(() => {
+        suspendAutoLayoutForZoom(420);
+        flowInstance.setViewport(viewport, { duration: 350 });
+      });
+    }
+  }, [flowInstance, suspendAutoLayoutForZoom]);
+  const handleFlowNodeDragStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+  const handleFlowNodeDragStop = useCallback(() => {
+    setIsDragging(false);
+  }, []);
 
   const renderPanelInput = () => {
     if (!panelNodeId || !flowInstance) {
@@ -1813,7 +1889,7 @@ function FlowWorkspaceInner({
           onInsertBrowserSelection={handleInsertBrowserSelection}
           scrollToBottomSignal={chatScrollSignal}
           focusSignal={chatFocusSignal}
-          onRequestClearSelection={() => setSelectedId(null)}
+          onRequestClearSelection={handleRequestClearSelection}
           input={historyInput}
           busy={chatBusy}
           graphBusy={graphBusy}
@@ -1835,76 +1911,21 @@ function FlowWorkspaceInner({
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             nodesDraggable={!autoLayoutLocked}
-            onInit={(instance) => {
-              setFlowInstance(instance);
-              const nextViewport = instance.getViewport();
-              viewportRef.current = nextViewport;
-              setViewport(nextViewport);
-            }}
-            onMove={(_, nextViewport) => {
-              if (nextViewport.zoom !== viewportRef.current.zoom) {
-                autoLayoutZoomingRef.current = true;
-              }
-              viewportRef.current = nextViewport;
-              setViewport(nextViewport);
-            }}
-            onMoveStart={() => setIsDragging(true)}
-            onMoveEnd={() => {
-              setIsDragging(false);
-              if (!autoLayoutZoomingRef.current) {
-                return;
-              }
-              autoLayoutZoomingRef.current = false;
-              if (autoLayoutZoomTimeoutRef.current) {
-                window.clearTimeout(autoLayoutZoomTimeoutRef.current);
-                autoLayoutZoomTimeoutRef.current = null;
-              }
-              if (!autoLayoutLocked) {
-                autoLayoutPendingRef.current = false;
-                return;
-              }
-              if (!autoLayoutPendingRef.current || isLayouting) {
-                return;
-              }
-              autoLayoutPendingRef.current = false;
-              void handleAutoLayout();
-            }}
-            onNodeClick={(_, node) => {
-              setSelectedId(node.id);
-              setPanelInput("");
-              setChatFocusSignal((prev) => prev + 1);
-            }}
+            onInit={handleFlowInit}
+            onMove={handleFlowMove}
+            onMoveStart={handleFlowMoveStart}
+            onMoveEnd={handleFlowMoveEnd}
+            onNodeClick={handleFlowNodeClick}
             selectNodesOnDrag={false}
-            onPaneClick={() => {
-              setSelectedId(null);
-              if (flowInstance && inputZoomRef.current) {
-                const { viewport } = inputZoomRef.current;
-                inputZoomRef.current = null;
-                requestAnimationFrame(() => {
-                  suspendAutoLayoutForZoom(420);
-                  flowInstance.setViewport(viewport, { duration: 350 });
-                });
-              }
-              if (flowInstance && nodeZoomRef.current) {
-                const viewport = nodeZoomRef.current;
-                nodeZoomRef.current = null;
-                requestAnimationFrame(() => {
-                  suspendAutoLayoutForZoom(420);
-                  flowInstance.setViewport(viewport, { duration: 350 });
-                });
-              }
-            }}
-            onNodeDragStart={() => setIsDragging(true)}
-            onNodeDragStop={() => setIsDragging(false)}
+            onPaneClick={handleFlowPaneClick}
+            onNodeDragStart={handleFlowNodeDragStart}
+            onNodeDragStop={handleFlowNodeDragStop}
             onNodeMouseEnter={handleNodeEnter}
             onNodeMouseLeave={handleNodeLeave}
             onNodeDoubleClick={handleNodeDoubleClick}
             zoomOnDoubleClick={false}
             deleteKeyCode={null}
-            defaultEdgeOptions={{
-              type: "smoothstep",
-              style: { stroke: "var(--flow-edge)", strokeWidth: 1.6 },
-            }}
+            defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
             className="h-full w-full"
             fitView
           >

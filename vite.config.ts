@@ -12,7 +12,11 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [
-    react(),
+    react({
+      babel: {
+        plugins: ["babel-plugin-react-compiler"],
+      },
+    }),
     mode === "development" && reactScan({ enable: true }),
     electron({
       main: {
