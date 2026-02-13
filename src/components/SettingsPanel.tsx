@@ -188,10 +188,11 @@ export default function SettingsPanel({
                 </div>
               </div>
               <Button
-                className="bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-slate-900 shadow-lg shadow-orange-500/30"
+                variant="outline"
+                className="border-primary/35 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
                 onClick={onProfileAdd}
               >
-                Add profile
+                Add Profile
               </Button>
             </div>
 

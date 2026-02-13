@@ -108,18 +108,19 @@ export default function ProjectPicker({ onOpen }: ProjectPickerProps) {
                 className="h-10 w-48 border-border/70 bg-background/70 text-sm text-foreground placeholder:text-muted-foreground"
               />
               <Button
-                className="bg-gradient-to-r from-emerald-400 via-teal-400 to-sky-400 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 hover:-translate-y-0.5 hover:shadow-xl"
+                className="h-10 text-sm font-semibold shadow-sm"
                 onClick={handleCreate}
                 disabled={loading || !projectName.trim()}
               >
-                {loading ? 'Creating...' : 'Create project'}
+                {loading ? 'Creating...' : 'Create Project'}
               </Button>
               <Button
-                className="bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 text-sm font-semibold text-slate-950 shadow-lg shadow-orange-500/20 hover:-translate-y-0.5 hover:shadow-xl"
+                variant="outline"
+                className="h-10 border-border/70 bg-background/70 text-sm font-semibold hover:bg-accent"
                 onClick={handleBrowse}
                 disabled={loading}
               >
-                {loading ? 'Opening...' : 'Browse for folder'}
+                {loading ? 'Opening...' : 'Browse Folder'}
               </Button>
             </div>
           </CardContent>

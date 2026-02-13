@@ -2302,7 +2302,7 @@ export default function ChatHistoryPanel({
               {hasBrowserSelection && (
                 <button
                   type="button"
-                  className="max-w-[220px] truncate rounded-full border border-sky-400/40 bg-sky-500/10 px-2 py-1 text-[11px] font-medium text-sky-100/90 transition hover:border-sky-300/60 hover:bg-sky-500/20"
+                  className="max-w-[220px] truncate rounded-full border border-primary/35 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary transition hover:border-primary/55 hover:bg-primary/15"
                   title={browserSelection?.text}
                   onClick={() => {
                     if (browserSelection && onInsertBrowserSelection) {
@@ -2344,7 +2344,7 @@ export default function ChatHistoryPanel({
               className={cn(
                 "inline-flex h-7 items-center overflow-visible rounded-md border text-[11px] font-medium transition",
                 resolvedDeepResearchConfig.enabled
-                  ? "border-sky-400/50 bg-sky-500/15 text-sky-100"
+                  ? "border-primary/45 bg-primary/10 text-primary shadow-sm"
                   : "border-border/70 bg-muted/40 text-muted-foreground",
               )}
             >
@@ -2353,7 +2353,7 @@ export default function ChatHistoryPanel({
                 className={cn(
                   "h-full px-2 tracking-[0.08em] transition",
                   resolvedDeepResearchConfig.enabled
-                    ? "hover:bg-sky-500/20"
+                    ? "hover:bg-primary/15"
                     : "hover:bg-muted/60",
                 )}
                 aria-pressed={resolvedDeepResearchConfig.enabled}
@@ -2457,7 +2457,7 @@ export default function ChatHistoryPanel({
               className={cn(
                 "h-7 rounded-md border px-2 text-[11px] font-medium transition",
                 graphGenerationEnabled
-                  ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-200"
+                  ? "border-emerald-500/45 bg-emerald-500/12 text-emerald-700 shadow-sm dark:text-emerald-300"
                   : "border-border/70 bg-muted/40 text-muted-foreground hover:text-foreground",
               )}
               aria-pressed={graphGenerationEnabled}
