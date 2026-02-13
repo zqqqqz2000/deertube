@@ -48,6 +48,7 @@ const SEARCH_TOOL_MAX_CALLS = 4;
 const EXTRACT_TOOL_MAX_CALLS = 10;
 const MAX_REPEAT_SEARCH_QUERY = 2;
 const MAX_REPEAT_EXTRACT_URL = 2;
+const ABORT_ERROR_NAME = "AbortError";
 
 const normalizeToolKey = (value: string): string =>
   value.replace(/\s+/g, " ").trim().toLowerCase();
@@ -64,6 +65,22 @@ const normalizeSearchViewpoint = (
   const compact = (value ?? "").replace(/\s+/g, " ").trim();
   return compact.length > 0 ? compact : fallback;
 };
+
+const isAbortError = (error: unknown): boolean =>
+  error instanceof Error && error.name === ABORT_ERROR_NAME;
+
+const throwIfAborted = (signal: AbortSignal | undefined) => {
+  if (!signal?.aborted) {
+    return;
+  }
+  const error = new Error("Operation aborted.");
+  error.name = ABORT_ERROR_NAME;
+  throw error;
+};
+
+const resolveAbortSignal = (
+  ...signals: (AbortSignal | undefined)[]
+): AbortSignal | undefined => signals.find((candidate) => candidate !== undefined);
 
 type SearchSubagentFinalPayload = z.infer<typeof SearchSubagentFinalSchema>;
 interface ExtractedUrlMeta {
@@ -152,8 +169,12 @@ export async function runSearchSubagent({
           .describe("Search error reason when this tool call fails."),
       })
       .describe("Tavily search tool output."),
-    execute: async ({ query: inputQuery }) => {
+    execute: async ({ query: inputQuery }, options) => {
       searchToolCallCount += 1;
+      const requestAbortSignal = resolveAbortSignal(
+        options.abortSignal,
+        abortSignal,
+      );
       const normalizedQuery = normalizeToolKey(inputQuery);
       const repeatedSearchCalls =
         (searchCallCountByQuery.get(normalizedQuery) ?? 0) + 1;
@@ -175,7 +196,14 @@ export async function runSearchSubagent({
         maxResults: 20,
       });
       try {
-        const results = await fetchTavilySearch(inputQuery, 20, tavilyApiKey);
+        throwIfAborted(requestAbortSignal);
+        const results = await fetchTavilySearch(
+          inputQuery,
+          20,
+          tavilyApiKey,
+          requestAbortSignal,
+        );
+        throwIfAborted(requestAbortSignal);
         results.forEach((item) => {
           const url = item.url?.trim();
           if (!url) {
@@ -194,6 +222,9 @@ export async function runSearchSubagent({
         });
         return { results };
       } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         const message = error instanceof Error ? error.message : String(error);
         searchToolErrorCount += 1;
         searchToolErrors.push(message);
@@ -276,6 +307,10 @@ export async function runSearchSubagent({
       options,
     ): Promise<z.infer<typeof ExtractToolOutputSchema>> => {
       extractToolCallCount += 1;
+      const requestAbortSignal = resolveAbortSignal(
+        options.abortSignal,
+        abortSignal,
+      );
       const normalizedUrl = normalizeToolKey(url);
       const repeatedExtractCalls =
         (extractCallCountByUrl.get(normalizedUrl) ?? 0) + 1;
@@ -322,12 +357,14 @@ export async function runSearchSubagent({
       let lineCount = 0;
       let rawModelOutput = "";
       let lines: string[] = [];
+      throwIfAborted(requestAbortSignal);
       console.log("[subagent.extract]", {
         url: clampText(url, 220),
         query: clampText(extractQuery, 160),
       });
       try {
         if (deepResearchStore) {
+          throwIfAborted(requestAbortSignal);
           stage = "load-page-cache";
           const cachedPage = await deepResearchStore.findCachedPageByUrl(url);
           if (cachedPage) {
@@ -345,6 +382,7 @@ export async function runSearchSubagent({
         }
 
         if (lines.length === 0) {
+          throwIfAborted(requestAbortSignal);
           stage = "fetch-markdown";
           const markdownFetchStartedAt = Date.now();
           console.log("[subagent.extract.fetch.start]", {
@@ -355,7 +393,9 @@ export async function runSearchSubagent({
             url,
             jinaReaderBaseUrl,
             jinaReaderApiKey,
+            requestAbortSignal,
           );
+          throwIfAborted(requestAbortSignal);
           console.log("[subagent.extract.fetch.done]", {
             url: clampText(url, 220),
             elapsedMs: Date.now() - markdownFetchStartedAt,
@@ -374,6 +414,7 @@ export async function runSearchSubagent({
             markdownPreview: clampText(markdown, 240),
           });
           if (deepResearchStore) {
+            throwIfAborted(requestAbortSignal);
             stage = "save-page";
             const persistedPage = await deepResearchStore.savePage({
               searchId,
@@ -394,6 +435,7 @@ export async function runSearchSubagent({
         }
 
         if (deepResearchStore && pageId) {
+          throwIfAborted(requestAbortSignal);
           stage = "load-extraction-cache";
           const cachedExtraction =
             await deepResearchStore.findCachedExtractionByPageAndQuery(
@@ -439,10 +481,11 @@ export async function runSearchSubagent({
           query: extractQuery,
           lines,
           model: extractModel ?? model,
-          abortSignal: options.abortSignal,
+          abortSignal: requestAbortSignal,
         });
         rawModelOutput = extractRawModelOutput;
         if (deepResearchStore && pageId) {
+          throwIfAborted(requestAbortSignal);
           stage = "save-extraction";
           await deepResearchStore.saveExtraction({
             searchId,
@@ -502,6 +545,9 @@ export async function runSearchSubagent({
         });
         return result;
       } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         const message = error instanceof Error ? error.message : String(error);
         const errorMessage = `${stage}: ${message}`;
         extractToolErrorCount += 1;
@@ -609,6 +655,7 @@ export async function runSearchSubagent({
     "When evidence is sufficient, call `writeResults` exactly once with { results, errors }.",
   ].join("\n");
 
+  throwIfAborted(abortSignal);
   const result = streamText({
     model,
     system: SEARCH_SUBAGENT_SYSTEM,

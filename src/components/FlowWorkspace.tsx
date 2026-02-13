@@ -881,6 +881,7 @@ function FlowWorkspaceInner({
     retryMessage,
     handleSendFromHistory,
     handleSendFromPanel,
+    stopChatGeneration,
   } = useChatActions({
     projectPath: project.path,
     nodes,
@@ -1770,6 +1771,7 @@ function FlowWorkspaceInner({
           void handleSendFromPanel();
           setChatScrollSignal((prev) => prev + 1);
         }}
+        onStop={stopChatGeneration}
         onRetry={retryMessage}
         retryMessageId={lastFailedMessageId}
         onFocusZoom={handleInputFocusZoom}
@@ -1817,6 +1819,7 @@ function FlowWorkspaceInner({
           graphBusy={graphBusy}
           onInputChange={setHistoryInput}
           onSend={handleSendFromHistory}
+          onStop={stopChatGeneration}
           onRetry={retryMessage}
           lastFailedMessageId={lastFailedMessageId}
         />

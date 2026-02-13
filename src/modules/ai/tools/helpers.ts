@@ -270,6 +270,7 @@ export async function fetchTavilySearch(
   query: string,
   maxResults: number,
   apiKey?: string,
+  abortSignal?: AbortSignal,
 ): Promise<TavilySearchResult[]> {
   const resolvedKey = apiKey ?? process.env.TAVILY_API_KEY;
   if (!resolvedKey) {
@@ -287,6 +288,7 @@ export async function fetchTavilySearch(
       include_raw_content: false,
       search_depth: "advanced",
     }),
+    signal: abortSignal,
   });
   const raw = await response.text();
   if (!response.ok) {
@@ -337,6 +339,7 @@ export async function fetchJinaReaderMarkdown(
   url: string,
   baseUrl?: string,
   apiKey?: string,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const normalizedBase =
     baseUrl && baseUrl.trim().length > 0
@@ -348,6 +351,7 @@ export async function fetchJinaReaderMarkdown(
       Accept: "application/json",
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
+    signal: abortSignal,
   });
   if (!response.ok) {
     throw new Error(`Jina reader failed: ${response.status}`);

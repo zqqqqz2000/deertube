@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, RotateCw, Send } from "lucide-react";
+import { Loader2, RotateCw, Send, Square } from "lucide-react";
 
 interface FlowPanelInputProps {
   visible: boolean;
@@ -14,6 +14,7 @@ interface FlowPanelInputProps {
   busy: boolean;
   onPromptChange: (value: string) => void;
   onSend: () => void;
+  onStop?: () => void;
   onRetry?: (messageId: string) => void;
   retryMessageId?: string | null;
   onFocusZoom?: (focusInput: () => void) => void;
@@ -29,6 +30,7 @@ export default function FlowPanelInput({
   busy,
   onPromptChange,
   onSend,
+  onStop,
   onRetry,
   retryMessageId = null,
   onFocusZoom,
@@ -45,6 +47,12 @@ export default function FlowPanelInput({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const useTextarea = !isMicro && !isCompact;
   const canRetry = Boolean(retryMessageId && onRetry);
+  const canStop = busy && Boolean(onStop);
+  const actionLabel = canStop
+    ? "Stop generation"
+    : canRetry
+      ? "Retry request"
+      : "Send message";
   const buttonSizeClass = isMicro
     ? "h-6 w-6"
     : isCompact
@@ -57,6 +65,10 @@ export default function FlowPanelInput({
       : "[&_svg]:size-4";
 
   const handleAction = () => {
+    if (canStop) {
+      onStop?.();
+      return;
+    }
     if (canRetry) {
       onRetry?.(retryMessageId!);
       return;
@@ -145,14 +157,17 @@ export default function FlowPanelInput({
         <Button
           size="icon"
           variant={canRetry ? "destructive" : "default"}
-          className={`rounded-md ${buttonSizeClass} ${iconSizeClass}`}
+          className={`group relative rounded-md ${buttonSizeClass} ${iconSizeClass}`}
           onClick={handleAction}
-          disabled={busy || (!canRetry && !prompt.trim())}
-          aria-label={canRetry ? "Retry request" : "Send message"}
-          title={canRetry ? "Retry request" : "Send message"}
+          disabled={canStop ? false : busy || (!canRetry && !prompt.trim())}
+          aria-label={actionLabel}
+          title={actionLabel}
         >
-          {busy ? (
-            <Loader2 className="animate-spin" />
+          {canStop ? (
+            <>
+              <Loader2 className="animate-spin transition-opacity duration-150 group-hover:opacity-0" />
+              <Square className="absolute opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+            </>
           ) : canRetry ? (
             <RotateCw />
           ) : (

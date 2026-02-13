@@ -621,6 +621,10 @@ export function useChatActions({
     void sendPrompt(panelInput, () => setPanelInput(""));
   }, [panelInput, sendPrompt]);
 
+  const stopChatGeneration = useCallback(() => {
+    void stop();
+  }, [stop]);
+
   const busy = status === "streaming" || status === "submitted";
 
   return {
@@ -633,6 +637,7 @@ export function useChatActions({
     graphBusy,
     handleSendFromHistory,
     handleSendFromPanel,
+    stopChatGeneration,
     retryMessage,
     selectedNode,
     messages: derivedMessages,

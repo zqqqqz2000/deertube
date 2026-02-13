@@ -53,6 +53,7 @@ import {
   RotateCw,
   Search as SearchIcon,
   Send,
+  Square,
   UserRound,
   Wrench,
 } from "lucide-react";
@@ -85,6 +86,7 @@ interface ChatHistoryPanelProps {
   graphBusy?: boolean;
   onInputChange: (value: string) => void;
   onSend: () => void;
+  onStop?: () => void;
   onRetry?: (messageId: string) => void;
   lastFailedMessageId?: string | null;
 }
@@ -414,6 +416,7 @@ export default function ChatHistoryPanel({
   graphBusy = false,
   onInputChange,
   onSend,
+  onStop,
   onRetry,
   lastFailedMessageId: lastFailedMessageIdProp,
 }: ChatHistoryPanelProps) {
@@ -885,13 +888,23 @@ export default function ChatHistoryPanel({
     return null;
   }, [lastFailedMessageIdProp, messages]);
   const showRetry = Boolean(lastFailedMessageId && onRetry);
+  const canStop = busy && Boolean(onStop);
+  const primaryActionLabel = canStop
+    ? "Stop generation"
+    : showRetry
+      ? "Retry request"
+      : "Send message";
   const handlePrimaryAction = useCallback(() => {
+    if (canStop) {
+      onStop?.();
+      return;
+    }
     if (showRetry && lastFailedMessageId && onRetry) {
       onRetry(lastFailedMessageId);
       return;
     }
     onSend();
-  }, [lastFailedMessageId, onRetry, onSend, showRetry]);
+  }, [canStop, lastFailedMessageId, onRetry, onSend, onStop, showRetry]);
 
   const getToolStatusLabel = useCallback((status: ChatMessage["toolStatus"]) => {
     if (status === "running") {
@@ -2099,14 +2112,17 @@ export default function ChatHistoryPanel({
             <Button
               size="icon"
               variant={showRetry ? "destructive" : "default"}
-              className="h-8 w-8 rounded-md"
+              className="group relative h-8 w-8 rounded-md"
               onClick={handlePrimaryAction}
-              disabled={busy || (!showRetry && !input.trim())}
-              aria-label={showRetry ? "Retry request" : "Send message"}
-              title={showRetry ? "Retry request" : "Send message"}
+              disabled={canStop ? false : busy || (!showRetry && !input.trim())}
+              aria-label={primaryActionLabel}
+              title={primaryActionLabel}
             >
-              {busy ? (
-                <Loader2 className="animate-spin" />
+              {canStop ? (
+                <>
+                  <Loader2 className="animate-spin transition-opacity duration-150 group-hover:opacity-0" />
+                  <Square className="absolute opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+                </>
               ) : showRetry ? (
                 <RotateCw />
               ) : (

@@ -13,6 +13,19 @@ import { createDeepResearchPersistenceAdapter } from "../../deepresearch/store";
 
 const noStepLimit = () => false;
 
+const waitForAbort = (signal: AbortSignal): Promise<{ kind: "abort" }> =>
+  new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve({ kind: "abort" });
+      return;
+    }
+    const handleAbort = () => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve({ kind: "abort" });
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+
 const buildMainAgentSystemPrompt = (contextLines: string[]) =>
   [
     "You are a concise assistant. Answer clearly and directly. Use short paragraphs when helpful.",
@@ -344,13 +357,33 @@ export const chatRouter = createTRPCRouter({
       });
 
       const reader = stream.getReader();
+      const abortPromise = signal ? waitForAbort(signal) : null;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
+      try {
+        while (true) {
+          const next = abortPromise
+            ? await Promise.race([
+                reader
+                  .read()
+                  .then((result) => ({ kind: "chunk" as const, result })),
+                abortPromise,
+              ])
+            : {
+                kind: "chunk" as const,
+                result: await reader.read(),
+              };
+          if (next.kind === "abort") {
+            await reader.cancel("chat stream aborted");
+            break;
+          }
+          const { done, value } = next.result;
+          if (done) {
+            break;
+          }
+          yield value;
         }
-        yield value;
+      } finally {
+        reader.releaseLock();
       }
     }),
 });
