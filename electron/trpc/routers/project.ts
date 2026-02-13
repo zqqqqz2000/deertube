@@ -2,6 +2,8 @@ import { app, BrowserWindow, dialog } from 'electron'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs/promises'
+import { generateText } from 'ai'
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { z } from 'zod'
 import { baseProcedure, createTRPCRouter } from '../init'
 import type { FlowEdge, FlowNode } from '../../../src/types/flow'
@@ -177,16 +179,148 @@ function normalizeFirstQuestion(question: string): string {
   return withoutNodePrefix.replace(/\s+/g, ' ').trim()
 }
 
+const CHAT_TITLE_MAX_CHARS = 20
+const MANUAL_CHAT_TITLE_MAX_CHARS = 80
+
+const ModelSettingsSchema = z.object({
+  llmProvider: z.string().optional(),
+  llmModelId: z.string().optional(),
+  llmApiKey: z.string().optional(),
+  llmBaseUrl: z.string().optional(),
+})
+
+const RuntimeSettingsSchema = z.object({
+  llmProvider: z.string().optional(),
+  llmModelId: z.string().optional(),
+  llmApiKey: z.string().optional(),
+  llmBaseUrl: z.string().optional(),
+  tavilyApiKey: z.string().optional(),
+  jinaReaderBaseUrl: z.string().optional(),
+  jinaReaderApiKey: z.string().optional(),
+  models: z
+    .object({
+      chat: ModelSettingsSchema.optional(),
+      search: ModelSettingsSchema.optional(),
+      extract: ModelSettingsSchema.optional(),
+      graph: ModelSettingsSchema.optional(),
+    })
+    .optional(),
+})
+
+type RuntimeSettings = z.infer<typeof RuntimeSettingsSchema>
+
+const CHAT_TITLE_SYSTEM_PROMPT = [
+  '你是标题生成器。',
+  `请基于用户问题或标题生成一个不超过${CHAT_TITLE_MAX_CHARS}字的聊天标题。`,
+  '标题要简短、具体，直接描述核心意图。',
+  '输出语言与用户问题一致。',
+  '仅输出标题，不要解释，不要引号，不要换行。',
+].join('\n')
+
+const trimOrUndefined = (value?: string): string | undefined => {
+  const trimmed = value?.trim()
+  return trimmed && trimmed.length > 0 ? trimmed : undefined
+}
+
+const clampByCharacters = (value: string, maxChars: number): string => {
+  const chars = Array.from(value.trim())
+  if (chars.length <= maxChars) {
+    return value.trim()
+  }
+  return chars.slice(0, maxChars).join('')
+}
+
 function buildChatTitle(firstQuestion: string): string {
   const normalized = normalizeFirstQuestion(firstQuestion)
   if (!normalized) {
     return 'New chat'
   }
-  const maxLength = 64
-  if (normalized.length <= maxLength) {
-    return normalized
+  return clampByCharacters(normalized, CHAT_TITLE_MAX_CHARS)
+}
+
+function normalizeManualChatTitle(title: string): string {
+  const normalized = title.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    throw new Error('Chat title is required')
   }
-  return `${normalized.slice(0, maxLength - 3)}...`
+  return clampByCharacters(normalized, MANUAL_CHAT_TITLE_MAX_CHARS)
+}
+
+const sanitizeGeneratedTitle = (value: string): string => {
+  const firstLine =
+    value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? ''
+  const withoutPrefix = firstLine.replace(/^标题\s*[:：]\s*/i, '')
+  const withoutQuotes = withoutPrefix.replace(/^["'`“”‘’]+|["'`“”‘’]+$/g, '')
+  const compact = withoutQuotes.replace(/\s+/g, ' ').trim()
+  if (!compact) {
+    return ''
+  }
+  return clampByCharacters(compact, CHAT_TITLE_MAX_CHARS)
+}
+
+const resolveModelSettings = (
+  settings: RuntimeSettings | undefined,
+): {
+  llmProvider: string
+  llmModelId: string
+  llmApiKey?: string
+  llmBaseUrl: string
+} => {
+  const preferred = settings?.models?.chat
+  const llmProvider =
+    trimOrUndefined(preferred?.llmProvider) ??
+    trimOrUndefined(settings?.llmProvider) ??
+    'openai'
+  const llmModelId =
+    trimOrUndefined(preferred?.llmModelId) ??
+    trimOrUndefined(settings?.llmModelId) ??
+    'gpt-4o-mini'
+  const llmApiKey =
+    trimOrUndefined(preferred?.llmApiKey) ??
+    trimOrUndefined(settings?.llmApiKey)
+  const llmBaseUrl =
+    trimOrUndefined(preferred?.llmBaseUrl) ??
+    trimOrUndefined(settings?.llmBaseUrl) ??
+    process.env.OPENAI_BASE_URL ??
+    'https://api.openai.com/v1'
+  return {
+    llmProvider,
+    llmModelId,
+    llmApiKey,
+    llmBaseUrl,
+  }
+}
+
+async function generateChatTitle(
+  firstQuestion: string,
+  settings: RuntimeSettings | undefined,
+): Promise<string> {
+  const normalizedQuestion = normalizeFirstQuestion(firstQuestion)
+  const fallbackTitle = buildChatTitle(normalizedQuestion)
+  if (!normalizedQuestion) {
+    return fallbackTitle
+  }
+  try {
+    const resolved = resolveModelSettings(settings)
+    const provider = createOpenAICompatible({
+      name: resolved.llmProvider,
+      baseURL: resolved.llmBaseUrl,
+      apiKey: resolved.llmApiKey,
+    })
+    const result = await generateText({
+      model: provider(resolved.llmModelId),
+      system: CHAT_TITLE_SYSTEM_PROMPT,
+      prompt: `用户问题或标题：${normalizedQuestion}`,
+    })
+    const generated = sanitizeGeneratedTitle(result.text ?? '')
+    return generated || fallbackTitle
+  } catch (error) {
+    console.warn('[project.chatTitle] generate failed', error)
+    return fallbackTitle
+  }
 }
 
 function findFirstUserQuestion(messages: ChatMessage[]): string {
@@ -458,6 +592,7 @@ export const projectRouter = createTRPCRouter({
       z.object({
         path: z.string(),
         firstQuestion: z.string().min(1),
+        settings: RuntimeSettingsSchema.optional(),
         state: chatStateSchema,
       }),
     )
@@ -465,9 +600,10 @@ export const projectRouter = createTRPCRouter({
       const store = await loadProjectStoreState(input.path)
       const firstQuestion = normalizeFirstQuestion(input.firstQuestion)
       const now = new Date().toISOString()
+      const generatedTitle = await generateChatTitle(firstQuestion, input.settings)
       const nextChat: ProjectChatRecord = {
         id: randomUUID(),
-        title: buildChatTitle(firstQuestion),
+        title: generatedTitle,
         firstQuestion,
         createdAt: now,
         updatedAt: now,
@@ -488,6 +624,67 @@ export const projectRouter = createTRPCRouter({
         activeChatId: nextChat.id,
       }
     }),
+  renameChat: baseProcedure
+    .input(
+      z.object({
+        path: z.string(),
+        chatId: z.string().min(1),
+        title: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const store = await loadProjectStoreState(input.path)
+      const chat = store.chats.find((item) => item.id === input.chatId)
+      if (!chat) {
+        throw new Error('Chat not found')
+      }
+      const nextTitle = normalizeManualChatTitle(input.title)
+      const now = new Date().toISOString()
+      chat.title = nextTitle
+      chat.updatedAt = now
+      store.updatedAt = now
+      await saveProjectStore(input.path, store)
+      return {
+        ok: true,
+        chat: toChatSummary(chat),
+        chats: toChatSummaries(store.chats),
+        activeChatId: store.activeChatId,
+      }
+    }),
+  deleteChat: baseProcedure
+    .input(
+      z.object({
+        path: z.string(),
+        chatId: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const store = await loadProjectStoreState(input.path)
+      const beforeCount = store.chats.length
+      store.chats = store.chats.filter((chat) => chat.id !== input.chatId)
+      if (store.chats.length === beforeCount) {
+        throw new Error('Chat not found')
+      }
+      const fallbackActive = sortChatRecords(store.chats)[0]?.id ?? null
+      if (store.activeChatId === input.chatId) {
+        store.activeChatId = fallbackActive
+      } else if (
+        store.activeChatId &&
+        !store.chats.some((chat) => chat.id === store.activeChatId)
+      ) {
+        store.activeChatId = fallbackActive
+      }
+      store.updatedAt = new Date().toISOString()
+      await saveProjectStore(input.path, store)
+      const activeChat = resolveActiveChat(store)
+      return {
+        ok: true,
+        deletedChatId: input.chatId,
+        activeChatId: activeChat?.id ?? null,
+        chats: toChatSummaries(store.chats),
+        state: activeChat?.state ?? createEmptyChatState(),
+      }
+    }),
   open: baseProcedure
     .input(z.object({ path: z.string() }))
     .mutation(async ({ input }) => openProject(input.path)),
@@ -496,6 +693,7 @@ export const projectRouter = createTRPCRouter({
       z.object({
         path: z.string(),
         chatId: z.string().nullable().optional(),
+        settings: RuntimeSettingsSchema.optional(),
         state: chatStateSchema,
       }),
     )
@@ -514,9 +712,13 @@ export const projectRouter = createTRPCRouter({
       let chat = store.chats.find((item) => item.id === input.chatId)
       if (!chat) {
         const inferredFirstQuestion = findFirstUserQuestion(nextState.chat)
+        const generatedTitle = await generateChatTitle(
+          inferredFirstQuestion,
+          input.settings,
+        )
         chat = {
           id: input.chatId,
-          title: buildChatTitle(inferredFirstQuestion),
+          title: generatedTitle,
           firstQuestion: inferredFirstQuestion,
           createdAt: now,
           updatedAt: now,
@@ -530,7 +732,10 @@ export const projectRouter = createTRPCRouter({
           const inferredFirstQuestion = findFirstUserQuestion(nextState.chat)
           if (inferredFirstQuestion) {
             chat.firstQuestion = inferredFirstQuestion
-            chat.title = buildChatTitle(inferredFirstQuestion)
+            chat.title = await generateChatTitle(
+              inferredFirstQuestion,
+              input.settings,
+            )
           }
         }
       }

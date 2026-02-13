@@ -40,7 +40,11 @@ import {
   MessageSquare,
   Network,
 } from "lucide-react";
-import { createProfileDraft } from "../lib/settings";
+import {
+  buildRuntimeSettings,
+  createProfileDraft,
+  type RuntimeSettingsPayload,
+} from "../lib/settings";
 import { getNodeSize } from "../lib/elkLayout";
 import FlowHeader from "./flow/FlowHeader";
 import FlowPanelInput from "./flow/FlowPanelInput";
@@ -542,10 +546,13 @@ interface FlowWorkspaceInnerProps extends FlowWorkspaceProps {
   activeChatId: string | null;
   chatSummaries: ProjectChatSummary[];
   onSwitchChat: (chatId: string) => Promise<void>;
+  onRenameChat: (chatId: string, title: string) => Promise<void>;
+  onDeleteChat: (chatId: string) => Promise<void>;
   onCreateDraftChat: () => void;
   onPersistDraftChat: (payload: {
     firstQuestion: string;
     state: ProjectState;
+    settings?: RuntimeSettingsPayload;
   }) => Promise<string | null>;
   onSavedChatUpdate: (chat: ProjectChatSummary | null) => void;
 }
@@ -631,9 +638,11 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
     async ({
       firstQuestion,
       state,
+      settings,
     }: {
       firstQuestion: string;
       state: ProjectState;
+      settings?: RuntimeSettingsPayload;
     }) => {
       if (activeChatId) {
         return activeChatId;
@@ -641,6 +650,7 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
       const result = await trpc.project.createChat.mutate({
         path: props.project.path,
         firstQuestion,
+        settings,
         state: {
           version: 1,
           nodes: state.nodes,
@@ -655,6 +665,36 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
       return nextChatId;
     },
     [activeChatId, props.project.path],
+  );
+  const handleRenameChat = useCallback(
+    async (chatId: string, title: string) => {
+      const result = await trpc.project.renameChat.mutate({
+        path: props.project.path,
+        chatId,
+        title,
+      });
+      setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
+      setActiveChatId(result.activeChatId ?? null);
+    },
+    [props.project.path],
+  );
+  const handleDeleteChat = useCallback(
+    async (chatId: string) => {
+      setLoading(true);
+      try {
+        const result = await trpc.project.deleteChat.mutate({
+          path: props.project.path,
+          chatId,
+        });
+        setLoadedState(coerceProjectState(result.state));
+        setActiveChatId(result.activeChatId ?? null);
+        setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
+        setReloadKey((prev) => prev + 1);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [props.project.path],
   );
 
   const handleSavedChatUpdate = useCallback((chat: ProjectChatSummary | null) => {
@@ -693,6 +733,8 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
         activeChatId={activeChatId}
         chatSummaries={chatSummaries}
         onSwitchChat={handleSwitchChat}
+        onRenameChat={handleRenameChat}
+        onDeleteChat={handleDeleteChat}
         onCreateDraftChat={handleCreateDraftChat}
         onPersistDraftChat={handlePersistDraftChat}
         onSavedChatUpdate={handleSavedChatUpdate}
@@ -715,6 +757,8 @@ function FlowWorkspaceInner({
   activeChatId,
   chatSummaries,
   onSwitchChat,
+  onRenameChat,
+  onDeleteChat,
   onCreateDraftChat,
   onPersistDraftChat,
   onSavedChatUpdate,
@@ -793,6 +837,10 @@ function FlowWorkspaceInner({
   } = useProfileSettings(project.path);
   const { panelVisible, panelNodeId } = usePanelState(selectedId, isDragging);
   const displayEdges = useMemo(() => edges, [edges]);
+  const runtimeSettings = useMemo(
+    () => buildRuntimeSettings(activeProfile),
+    [activeProfile],
+  );
   const persistDraftChatBeforeSend = useCallback(
     async (prompt: string) => {
       if (sessionChatId) {
@@ -800,6 +848,7 @@ function FlowWorkspaceInner({
       }
       const nextChatId = await onPersistDraftChat({
         firstQuestion: prompt,
+        settings: runtimeSettings,
         state: {
           nodes,
           edges,
@@ -811,7 +860,14 @@ function FlowWorkspaceInner({
         setSessionChatId(nextChatId);
       }
     },
-    [autoLayoutLocked, edges, nodes, onPersistDraftChat, sessionChatId],
+    [
+      autoLayoutLocked,
+      edges,
+      nodes,
+      onPersistDraftChat,
+      runtimeSettings,
+      sessionChatId,
+    ],
   );
   const {
     historyInput,
@@ -1951,6 +2007,12 @@ function FlowWorkspaceInner({
               onSwitchChat={(chatId) => {
                 void onSwitchChat(chatId);
               }}
+              onRenameChat={(chatId, title) => {
+                void onRenameChat(chatId, title);
+              }}
+              onDeleteChat={(chatId) => {
+                void onDeleteChat(chatId);
+              }}
               onCreateChat={onCreateDraftChat}
             />
           </div>
@@ -1972,6 +2034,8 @@ function FlowWorkspaceInner({
       chatMessages.length,
       chatSummaries,
       onCreateDraftChat,
+      onDeleteChat,
+      onRenameChat,
       onSwitchChat,
       sessionChatId,
     ],
