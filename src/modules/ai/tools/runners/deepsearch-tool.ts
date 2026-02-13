@@ -3,6 +3,7 @@ import type {
   DeepResearchPersistenceAdapter,
   DeepResearchReferenceRecord,
 } from "../../../../shared/deepresearch";
+import type { DeepResearchConfig } from "../../../../shared/deepresearch-config";
 import {
   buildDeepSearchReferences,
   buildDeepSearchSources,
@@ -23,6 +24,7 @@ export async function runDeepSearchTool({
   jinaReaderBaseUrl,
   jinaReaderApiKey,
   deepResearchStore,
+  deepResearchConfig,
 }: {
   query: string;
   searchModel: LanguageModel;
@@ -35,6 +37,7 @@ export async function runDeepSearchTool({
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
   deepResearchStore?: DeepResearchPersistenceAdapter;
+  deepResearchConfig?: DeepResearchConfig;
 }): Promise<{
   conclusion?: string;
   sources: DeepSearchSource[];
@@ -88,6 +91,10 @@ export async function runDeepSearchTool({
       jinaReaderBaseUrl,
       jinaReaderApiKey,
       deepResearchStore,
+      subagentConfig: deepResearchConfig?.subagent,
+      skillProfile: deepResearchConfig?.skillProfile,
+      fullPromptOverrideEnabled:
+        deepResearchConfig?.fullPromptOverrideEnabled ?? false,
     });
     const references = buildDeepSearchReferences(results, projectId, searchId);
     const sources = buildDeepSearchSources(results, references);

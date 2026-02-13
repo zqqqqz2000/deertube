@@ -10,6 +10,11 @@ import { baseProcedure, createTRPCRouter } from "../init";
 import type { DeertubeUIMessage } from "../../../src/modules/ai/tools";
 import { createTools } from "../../../src/modules/ai/tools";
 import { createDeepResearchPersistenceAdapter } from "../../deepresearch/store";
+import {
+  buildMainAgentSystemPrompt,
+  DeepResearchConfigSchema,
+  resolveDeepResearchConfig,
+} from "../../../src/shared/deepresearch-config";
 
 const noStepLimit = () => false;
 
@@ -25,35 +30,6 @@ const waitForAbort = (signal: AbortSignal): Promise<{ kind: "abort" }> =>
     };
     signal.addEventListener("abort", handleAbort, { once: true });
   });
-
-const buildMainAgentSystemPrompt = (contextLines: string[]) =>
-  [
-    "You are a concise assistant. Answer clearly and directly. Use short paragraphs when helpful.",
-    "Always answer in the same language as the user's latest question.",
-    "Unless the user explicitly requests translation, keep the response language identical to the user's question language.",
-    "You are given numbered references built from source excerpts. Use those references as evidence context for your final answer.",
-    "For most user questions, call the `deepSearch` tool and ground the answer in retrieved evidence.",
-    "Skip a new `deepSearch` when the latest question is highly similar to a recently answered one and existing retrieved evidence is still sufficient; also skip for fixed deterministic math/computation tasks that do not depend on external facts.",
-    "For any concept, entity, event, policy, recommendation, or factual claim, use `deepSearch` unless the high-similarity reuse rule clearly applies.",
-    "Treat conceptual questions as search-required by default, even when they look like common knowledge.",
-    "For conceptual content, never answer directly from memory; answer from retrieved evidence.",
-    "Prefer serial search planning: run one `deepSearch`, inspect sources/references, then decide the next query.",
-    "Keep total `deepSearch` calls per user turn within about 1-5 whenever possible.",
-    "Only exceed 5 searches when task complexity is very high and prior subagent evidence is still insufficient.",
-    "If evidence is insufficient, continue searching based on gaps/conflicts from the previous search results instead of restarting blindly.",
-    "If you need citations, you must run `deepSearch` first. Never cite without search.",
-    "Write a concise answer and cite evidence inline using markdown links like [1](deertube://...).",
-    "Do not invent citation markers or URLs. Every citation must come from `deepSearch` output.",
-    "If `deepSearch` returns zero references, do not output any citation markers such as [1](deertube://...), [2](deertube://...), and do not output a `References` section.",
-    "If `deepSearch` returns references, inline citations must use markdown links from `references[].uri`: format `[n](deertube://...)`.",
-    "When citations are used, every marker [n](deertube://...) must map to an existing `refId` and its matching `uri` from the same `deepSearch` result.",
-    "Only cite provided indices. Do not invent new indices and do not output footnotes.",
-    "**Do not** merge citations like [1,2] or [1-2]. Only use separate markers: [1](deertube://...), [2](deertube://...).",
-    "Every citation link must use the deertube URI for that reference ID. Do not use external URLs in citation links, only use deertube://... link",
-    ...contextLines,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
 
 const HIDDEN_RUNTIME_CONTEXT_MARKER = "[[HIDDEN_RUNTIME_CONTEXT]]";
 
@@ -216,6 +192,7 @@ export const chatRouter = createTRPCRouter({
           })
           .optional(),
         settings: SettingsSchema.optional(),
+        deepResearch: DeepResearchConfigSchema.optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -234,25 +211,31 @@ export const chatRouter = createTRPCRouter({
           `Root-to-selected context:\n${input.context.selectedPathSummary}`,
         );
       }
-      const systemPrompt = buildMainAgentSystemPrompt(contextLines);
+      const lastUserMessage = [...input.messages]
+        .reverse()
+        .find((message) => message.role === "user");
+      const lastUserContent =
+        lastUserMessage &&
+        "content" in lastUserMessage &&
+        typeof lastUserMessage.content === "string"
+          ? lastUserMessage.content
+          : "";
+      const systemPrompt = buildMainAgentSystemPrompt(
+        contextLines,
+        input.deepResearch,
+        { query: lastUserContent },
+      );
       const modelInputMessages = injectHiddenRuntimeContextToLatestUserMessage(
         input.messages,
       );
 
-      const lastUserMessage = [...input.messages]
-        .reverse()
-        .find((message) => message.role === "user");
-      const lastUserText =
-        lastUserMessage &&
-        "content" in lastUserMessage &&
-        typeof lastUserMessage.content === "string"
-          ? lastUserMessage.content.slice(0, 200)
-          : "";
+      const lastUserText = lastUserContent.slice(0, 200);
       console.log("[chat.send]", {
         messageCount: input.messages.length,
         lastUserText,
         provider: chatModelConfig.resolved.llmProvider,
         model: chatModelConfig.resolved.llmModelId,
+        deepResearchEnabled: resolveDeepResearchConfig(input.deepResearch).enabled,
       });
       const result = await generateText({
         model: chatModelConfig.model,
@@ -276,24 +259,30 @@ export const chatRouter = createTRPCRouter({
           })
           .optional(),
         settings: SettingsSchema.optional(),
+        deepResearch: DeepResearchConfigSchema.optional(),
       }),
     )
     .subscription(async function* ({ input, signal }) {
+      const deepResearchConfig = resolveDeepResearchConfig(input.deepResearch);
       const legacyModel = buildLegacyModelSettings(input.settings);
       const chatModelConfig = buildLanguageModel(
         input.settings?.models?.chat,
         legacyModel,
       );
-      const searchModelConfig = buildLanguageModel(
-        input.settings?.models?.search,
-        input.settings?.models?.chat ?? legacyModel,
-      );
-      const extractModelConfig = buildLanguageModel(
-        input.settings?.models?.extract,
-        input.settings?.models?.search ??
-          input.settings?.models?.chat ??
-          legacyModel,
-      );
+      const searchModelConfig = deepResearchConfig.enabled
+        ? buildLanguageModel(
+            input.settings?.models?.search,
+            input.settings?.models?.chat ?? legacyModel,
+          )
+        : null;
+      const extractModelConfig = deepResearchConfig.enabled
+        ? buildLanguageModel(
+            input.settings?.models?.extract,
+            input.settings?.models?.search ??
+              input.settings?.models?.chat ??
+              legacyModel,
+          )
+        : null;
 
       const contextLines: string[] = [];
       if (input.context?.selectedNodeSummary) {
@@ -304,49 +293,67 @@ export const chatRouter = createTRPCRouter({
           `Root-to-selected context:\n${input.context.selectedPathSummary}`,
         );
       }
-      const systemPrompt = buildMainAgentSystemPrompt(contextLines);
+      const lastUserMessage = [...input.messages]
+        .reverse()
+        .find((message) => message.role === "user");
+      const lastUserContent =
+        lastUserMessage &&
+        "content" in lastUserMessage &&
+        typeof lastUserMessage.content === "string"
+          ? lastUserMessage.content
+          : "";
+      const systemPrompt = buildMainAgentSystemPrompt(
+        contextLines,
+        input.deepResearch,
+        { query: lastUserContent },
+      );
       const modelInputMessages = injectHiddenRuntimeContextToLatestUserMessage(
         input.messages,
       );
 
-      const lastUserMessage = [...input.messages]
-        .reverse()
-        .find((message) => message.role === "user");
-      const lastUserText =
-        lastUserMessage &&
-        "content" in lastUserMessage &&
-        typeof lastUserMessage.content === "string"
-          ? lastUserMessage.content.slice(0, 200)
-          : "";
+      const lastUserText = lastUserContent.slice(0, 200);
       console.log("[chat.stream]", {
         messageCount: input.messages.length,
         lastUserText,
         provider: chatModelConfig.resolved.llmProvider,
         model: chatModelConfig.resolved.llmModelId,
-        searchModel: searchModelConfig.resolved.llmModelId,
-        extractModel: extractModelConfig.resolved.llmModelId,
+        searchModel: searchModelConfig?.resolved.llmModelId,
+        extractModel: extractModelConfig?.resolved.llmModelId,
+        deepResearchEnabled: deepResearchConfig.enabled,
       });
       const stream = createUIMessageStream<DeertubeUIMessage>({
         originalMessages: input.messages,
         execute: async ({ writer }) => {
+          const modelMessages = await convertToModelMessages(modelInputMessages, {
+            ignoreIncompleteToolCalls: true,
+          });
+          if (!deepResearchConfig.enabled) {
+            const result = streamText({
+              model: chatModelConfig.model,
+              system: systemPrompt,
+              messages: modelMessages,
+              abortSignal: signal,
+            });
+            writer.merge(result.toUIMessageStream());
+            return;
+          }
           const deepResearchStore = createDeepResearchPersistenceAdapter(
             input.projectPath,
           );
           const tools = createTools(writer, {
-            model: searchModelConfig.model,
-            searchModel: searchModelConfig.model,
-            extractModel: extractModelConfig.model,
+            model: searchModelConfig?.model,
+            searchModel: searchModelConfig?.model,
+            extractModel: extractModelConfig?.model,
             tavilyApiKey: input.settings?.tavilyApiKey,
             jinaReaderBaseUrl: input.settings?.jinaReaderBaseUrl,
             jinaReaderApiKey: input.settings?.jinaReaderApiKey,
             deepResearchStore,
+            deepResearchConfig,
           });
           const result = streamText({
             model: chatModelConfig.model,
             system: systemPrompt,
-            messages: await convertToModelMessages(modelInputMessages, {
-              ignoreIncompleteToolCalls: true,
-            }),
+            messages: modelMessages,
             tools,
             toolChoice: "auto",
             stopWhen: noStepLimit,

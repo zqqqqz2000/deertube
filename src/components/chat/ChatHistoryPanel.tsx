@@ -38,6 +38,7 @@ import {
   ChatToolbar,
   ChatToolbarAddonStart,
   ChatToolbarAddonEnd,
+  ChatToolbarUnderInput,
   ChatToolbarTextarea,
 } from "@/modules/chat/components/chat-toolbar";
 import {
@@ -53,6 +54,7 @@ import {
   RotateCw,
   Search as SearchIcon,
   Send,
+  Settings,
   Square,
   UserRound,
   Wrench,
@@ -64,6 +66,35 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import type { BrowserViewSelection } from "@/types/browserview";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  DEEP_RESEARCH_PROMPT_PLACEHOLDERS,
+  buildMainAgentSystemPrompt,
+  buildSearchSubagentRuntimePrompt,
+  buildSearchSubagentSystemPrompt,
+  DeepResearchConfig,
+  resolveDeepResearchConfig,
+  type SubagentSearchComplexity,
+  type TavilySearchDepth,
+} from "@/shared/deepresearch-config";
+import type { AgentSkillProfile } from "@/shared/agent-skills";
 
 interface ChatHistoryPanelProps {
   developerMode?: boolean;
@@ -82,6 +113,10 @@ interface ChatHistoryPanelProps {
   focusSignal?: number;
   onRequestClearSelection?: () => void;
   input: string;
+  deepResearchConfig: DeepResearchConfig;
+  onDeepResearchConfigChange: (next: DeepResearchConfig) => void;
+  graphGenerationEnabled: boolean;
+  onGraphGenerationEnabledChange: (enabled: boolean) => void;
   busy: boolean;
   graphBusy?: boolean;
   onInputChange: (value: string) => void;
@@ -137,6 +172,49 @@ type ChatItem =
 
 const TOOL_DETAIL_MAX_CHARS = 120;
 const HIGHLIGHT_SCROLL_MAX_RETRIES = 18;
+const SKILL_PROFILE_OPTIONS: {
+  value: AgentSkillProfile;
+  label: string;
+}[] = [
+  { value: "auto", label: "Auto Recall" },
+  { value: "web3-investing", label: "Web3 / Investing" },
+  { value: "academic-research", label: "Academic Research" },
+  { value: "news-analysis", label: "News" },
+  { value: "none", label: "Disable Skill" },
+];
+const SEARCH_COMPLEXITY_OPTIONS: {
+  value: SubagentSearchComplexity;
+  label: string;
+}[] = [
+  { value: "standard", label: "Standard" },
+  { value: "balanced", label: "Balanced" },
+  { value: "deep", label: "Deep" },
+];
+const TAVILY_SEARCH_DEPTH_OPTIONS: {
+  value: TavilySearchDepth;
+  label: string;
+}[] = [
+  { value: "basic", label: "Basic" },
+  { value: "advanced", label: "Advanced" },
+];
+const OVERRIDE_TEMPLATE_PLACEHOLDER_KEYS = [
+  "query",
+  "searchComplexity",
+  "tavilySearchDepth",
+  "maxSearchCalls",
+  "maxExtractCalls",
+  "maxRepeatSearchQuery",
+  "maxRepeatExtractUrl",
+] as const;
+const OVERRIDE_TEMPLATE_PLACEHOLDER_HINT = `Placeholders: ${OVERRIDE_TEMPLATE_PLACEHOLDER_KEYS.map((key) => `{{${key}}}`).join(", ")}`;
+const OVERRIDE_TEMPLATE_PLACEHOLDER_TITLES = DEEP_RESEARCH_PROMPT_PLACEHOLDERS
+  .filter((item) =>
+    OVERRIDE_TEMPLATE_PLACEHOLDER_KEYS.includes(
+      item.key as (typeof OVERRIDE_TEMPLATE_PLACEHOLDER_KEYS)[number],
+    ),
+  )
+  .map((item) => `{{${item.key}}}: ${item.description}`)
+  .join("\n");
 
 const truncateInline = (value: string, maxChars = TOOL_DETAIL_MAX_CHARS): string => {
   const singleLine = value.replace(/\s+/g, " ").trim();
@@ -412,6 +490,10 @@ export default function ChatHistoryPanel({
   focusSignal = 0,
   onRequestClearSelection,
   input,
+  deepResearchConfig,
+  onDeepResearchConfigChange,
+  graphGenerationEnabled,
+  onGraphGenerationEnabledChange,
   busy,
   graphBusy = false,
   onInputChange,
@@ -423,10 +505,52 @@ export default function ChatHistoryPanel({
   const { scrollRef, contentRef } = useStickToBottom();
   const highlightedId = selectedResponseId;
   const ignoreHighlightRef = useRef(false);
+  const [advancedPanelOpen, setAdvancedPanelOpen] = useState(false);
+  const [deepResearchQuickOpen, setDeepResearchQuickOpen] = useState(false);
+  const deepResearchQuickRef = useRef<HTMLDivElement | null>(null);
   const [toolOpenById, setToolOpenById] = useState<Record<string, boolean>>({});
   const [toolGroupOpenById, setToolGroupOpenById] = useState<
     Record<string, boolean>
   >({});
+  const resolvedDeepResearchConfig = useMemo(
+    () => resolveDeepResearchConfig(deepResearchConfig),
+    [deepResearchConfig],
+  );
+  const requireCertainClaimSupport =
+    resolvedDeepResearchConfig.strictness === "all-claims";
+  const highSearchComplexity =
+    resolvedDeepResearchConfig.subagent.searchComplexity === "deep";
+  const fullPromptOverrideEnabled =
+    resolvedDeepResearchConfig.fullPromptOverrideEnabled;
+  const defaultOverridePrompts = useMemo(() => {
+    const baseConfig = resolveDeepResearchConfig({
+      ...resolvedDeepResearchConfig,
+      fullPromptOverrideEnabled: false,
+      mainPromptOverride: undefined,
+      subagent: {
+        ...resolvedDeepResearchConfig.subagent,
+        systemPromptOverride: undefined,
+        promptOverride: undefined,
+      },
+    });
+    const queryPlaceholder = "{{query}}";
+    return {
+      mainPrompt: buildMainAgentSystemPrompt([], baseConfig, {
+        query: queryPlaceholder,
+      }),
+      subagentSystemPrompt: buildSearchSubagentSystemPrompt({
+        subagentConfig: baseConfig.subagent,
+        query: queryPlaceholder,
+        skillProfile: baseConfig.skillProfile,
+        fullPromptOverrideEnabled: false,
+      }),
+      subagentRuntimePrompt: buildSearchSubagentRuntimePrompt({
+        query: queryPlaceholder,
+        subagentConfig: baseConfig.subagent,
+        fullPromptOverrideEnabled: false,
+      }),
+    };
+  }, [resolvedDeepResearchConfig]);
   const nodeLookup = useMemo(() => {
     const map = new Map<string, FlowNode>();
     nodes.forEach((node) => map.set(node.id, node));
@@ -907,6 +1031,104 @@ export default function ChatHistoryPanel({
     }
     onSend();
   }, [canStop, lastFailedMessageId, onRetry, onSend, onStop, retryOnly]);
+  const patchDeepResearchConfig = useCallback(
+    (patch: Partial<DeepResearchConfig>) => {
+      onDeepResearchConfigChange(
+        resolveDeepResearchConfig({
+          ...resolvedDeepResearchConfig,
+          ...patch,
+        }),
+      );
+    },
+    [onDeepResearchConfigChange, resolvedDeepResearchConfig],
+  );
+  const patchSubagentConfig = useCallback(
+    (patch: Partial<DeepResearchConfig["subagent"]>) => {
+      onDeepResearchConfigChange(
+        resolveDeepResearchConfig({
+          ...resolvedDeepResearchConfig,
+          subagent: {
+            ...resolvedDeepResearchConfig.subagent,
+            ...patch,
+          },
+        }),
+      );
+    },
+    [onDeepResearchConfigChange, resolvedDeepResearchConfig],
+  );
+  const handleNumericSubagentChange = useCallback(
+    (
+      key:
+        | "maxSearchCalls"
+        | "maxExtractCalls"
+        | "maxRepeatSearchQuery"
+        | "maxRepeatExtractUrl",
+      rawValue: string,
+    ) => {
+      const parsed = Number.parseInt(rawValue, 10);
+      if (!Number.isFinite(parsed)) {
+        return;
+      }
+      patchSubagentConfig({
+        [key]: parsed,
+      } as Partial<DeepResearchConfig["subagent"]>);
+    },
+    [patchSubagentConfig],
+  );
+  const handleFullPromptOverrideToggle = useCallback(
+    (checked: boolean) => {
+      if (!checked) {
+        patchDeepResearchConfig({ fullPromptOverrideEnabled: false });
+        return;
+      }
+      onDeepResearchConfigChange(
+        resolveDeepResearchConfig({
+          ...resolvedDeepResearchConfig,
+          fullPromptOverrideEnabled: true,
+          mainPromptOverride:
+            resolvedDeepResearchConfig.mainPromptOverride ??
+            defaultOverridePrompts.mainPrompt,
+          subagent: {
+            ...resolvedDeepResearchConfig.subagent,
+            systemPromptOverride:
+              resolvedDeepResearchConfig.subagent.systemPromptOverride ??
+              defaultOverridePrompts.subagentSystemPrompt,
+            promptOverride:
+              resolvedDeepResearchConfig.subagent.promptOverride ??
+              defaultOverridePrompts.subagentRuntimePrompt,
+          },
+        }),
+      );
+    },
+    [
+      defaultOverridePrompts.mainPrompt,
+      defaultOverridePrompts.subagentRuntimePrompt,
+      defaultOverridePrompts.subagentSystemPrompt,
+      onDeepResearchConfigChange,
+      patchDeepResearchConfig,
+      resolvedDeepResearchConfig,
+    ],
+  );
+
+  useEffect(() => {
+    if (!deepResearchQuickOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (deepResearchQuickRef.current?.contains(target)) {
+        return;
+      }
+      setDeepResearchQuickOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [deepResearchQuickOpen]);
 
   const getToolStatusLabel = useCallback((status: ChatMessage["toolStatus"]) => {
     if (status === "running") {
@@ -1081,17 +1303,18 @@ export default function ChatHistoryPanel({
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden border border-border/70 bg-background/85 shadow-2xl shadow-black/25 backdrop-blur">
       <Chat>
-        <ChatMessages
-          ref={scrollRef}
-          onScroll={handleScroll}
-          contentRef={contentRef}
-        >
-          {messages.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
-              Ask a question to build the conversation.
-            </div>
-          ) : (
-            chatItems.map((item, index) => {
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <ChatMessages
+            ref={scrollRef}
+            onScroll={handleScroll}
+            contentRef={contentRef}
+          >
+            {messages.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+                Ask a question to build the conversation.
+              </div>
+            ) : (
+              chatItems.map((item, index) => {
               if (item.kind === "date") {
                 return <DateItem key={item.id} timestamp={item.timestamp} />;
               }
@@ -2033,37 +2256,38 @@ export default function ChatHistoryPanel({
                   <AdditionalMessage content={content} timestamp={timestamp} />
                 </div>
               );
-            })
+              })
+            )}
+            {busy && !hasPendingAssistant && (
+              <PrimaryMessage
+                senderName="Assistant"
+                avatarFallback={<Bot className="h-4 w-4" />}
+                content={
+                  <div className="rounded-md bg-secondary px-3 py-2 text-sm text-muted-foreground">
+                    Thinking...
+                  </div>
+                }
+                timestamp={Date.now()}
+              />
+            )}
+          </ChatMessages>
+          {!isAtBottom && (
+            <div className="pointer-events-none absolute bottom-3 left-1/2 z-40 -translate-x-1/2">
+              <Button
+                size="icon"
+                variant="outline"
+                className="pointer-events-auto rounded-full shadow-lg"
+                onClick={() => {
+                  onRequestClearSelection?.();
+                  setIsAtBottom(true);
+                  scrollToBottom("smooth");
+                }}
+              >
+                <ArrowDown className="h-4 w-4" />
+              </Button>
+            </div>
           )}
-          {busy && !hasPendingAssistant && (
-            <PrimaryMessage
-              senderName="Assistant"
-              avatarFallback={<Bot className="h-4 w-4" />}
-              content={
-                <div className="rounded-md bg-secondary px-3 py-2 text-sm text-muted-foreground">
-                  Thinking...
-                </div>
-              }
-              timestamp={Date.now()}
-            />
-          )}
-        </ChatMessages>
-        {!isAtBottom && (
-          <div className="absolute bottom-20 left-1/2 -translate-x-1/2">
-            <Button
-              size="icon"
-              variant="outline"
-              className="rounded-full shadow-lg"
-              onClick={() => {
-                onRequestClearSelection?.();
-                setIsAtBottom(true);
-                scrollToBottom("smooth");
-              }}
-            >
-              <ArrowDown className="h-4 w-4" />
-            </Button>
-          </div>
-        )}
+        </div>
         <ChatToolbar>
           {(selectedTagLabel || hasBrowserSelection) && (
             <ChatToolbarAddonStart>
@@ -2115,6 +2339,135 @@ export default function ChatHistoryPanel({
               }
             }}
           />
+          <ChatToolbarUnderInput className="flex-wrap">
+            <div
+              className={cn(
+                "inline-flex h-7 items-center overflow-visible rounded-md border text-[11px] font-medium transition",
+                resolvedDeepResearchConfig.enabled
+                  ? "border-sky-400/50 bg-sky-500/15 text-sky-100"
+                  : "border-border/70 bg-muted/40 text-muted-foreground",
+              )}
+            >
+              <button
+                type="button"
+                className={cn(
+                  "h-full px-2 tracking-[0.08em] transition",
+                  resolvedDeepResearchConfig.enabled
+                    ? "hover:bg-sky-500/20"
+                    : "hover:bg-muted/60",
+                )}
+                aria-pressed={resolvedDeepResearchConfig.enabled}
+                onClick={() =>
+                  patchDeepResearchConfig({
+                    enabled: !resolvedDeepResearchConfig.enabled,
+                  })
+                }
+              >
+                DeepResearch
+              </button>
+              <div
+                className="relative border-l border-current/20"
+                ref={deepResearchQuickRef}
+              >
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 items-center justify-center text-current/80 transition hover:text-current"
+                  aria-label="DeepResearch quick settings"
+                  title="DeepResearch quick settings"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setDeepResearchQuickOpen((prev) => !prev);
+                  }}
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                </button>
+                {deepResearchQuickOpen ? (
+                  <div
+                    className="absolute bottom-full left-1/2 z-50 mb-2 w-[260px] -translate-x-1/2 rounded-md border border-border/70 bg-popover p-3 shadow-xl"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                    }}
+                  >
+                    <div className="space-y-2.5">
+                      <div
+                        className={cn(
+                          "flex items-center justify-between gap-3",
+                          fullPromptOverrideEnabled && "opacity-45",
+                        )}
+                      >
+                        <div className="text-xs text-foreground/90">
+                          Every Claim Requires Evidence
+                        </div>
+                        <Switch
+                          checked={requireCertainClaimSupport}
+                          disabled={fullPromptOverrideEnabled}
+                          onCheckedChange={(checked) =>
+                            patchDeepResearchConfig({
+                              strictness: checked
+                                ? "all-claims"
+                                : "uncertain-claims",
+                            })
+                          }
+                        />
+                      </div>
+                      <div
+                        className={cn(
+                          "flex items-center justify-between gap-3",
+                          fullPromptOverrideEnabled && "opacity-45",
+                        )}
+                      >
+                        <div className="text-xs text-foreground/90">
+                          Deeper Search
+                        </div>
+                        <Switch
+                          checked={highSearchComplexity}
+                          disabled={fullPromptOverrideEnabled}
+                          onCheckedChange={(checked) =>
+                            patchSubagentConfig({
+                              searchComplexity: checked ? "deep" : "balanced",
+                            })
+                          }
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-7 w-full justify-center border border-border/70 text-[11px]"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeepResearchQuickOpen(false);
+                          setAdvancedPanelOpen(true);
+                        }}
+                      >
+                        More
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            <button
+              type="button"
+              className={cn(
+                "h-7 rounded-md border px-2 text-[11px] font-medium transition",
+                graphGenerationEnabled
+                  ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-200"
+                  : "border-border/70 bg-muted/40 text-muted-foreground hover:text-foreground",
+              )}
+              aria-pressed={graphGenerationEnabled}
+              onClick={() =>
+                onGraphGenerationEnabledChange(!graphGenerationEnabled)
+              }
+            >
+              Graph Generate
+            </button>
+          </ChatToolbarUnderInput>
           <ChatToolbarAddonEnd>
             <Button
               size="icon"
@@ -2145,6 +2498,312 @@ export default function ChatHistoryPanel({
             </Button>
           </ChatToolbarAddonEnd>
         </ChatToolbar>
+        <Dialog open={advancedPanelOpen} onOpenChange={setAdvancedPanelOpen}>
+          <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>DeepResearch Advanced Settings</DialogTitle>
+              <DialogDescription>
+                Defaults are designed to stay close to the current prompt behavior.
+                You can tune subagent strategy here or override full prompts.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-1">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Full Prompt Override</Label>
+                  <div className="flex h-9 items-center justify-between rounded-md border border-border bg-muted/30 px-3">
+                    <span className="text-xs text-foreground/90">
+                      Enable to use full custom prompts instead of composed prompts.
+                    </span>
+                    <Switch
+                      checked={fullPromptOverrideEnabled}
+                      onCheckedChange={handleFullPromptOverrideToggle}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dr-skill-profile">Skill Recall Strategy</Label>
+                  <Select
+                    value={resolvedDeepResearchConfig.skillProfile}
+                    onValueChange={(value) =>
+                      patchDeepResearchConfig({
+                        skillProfile: value as AgentSkillProfile,
+                      })
+                    }
+                  >
+                    <SelectTrigger id="dr-skill-profile">
+                      <SelectValue placeholder="Select skill mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SKILL_PROFILE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div
+                  className={cn(
+                    "space-y-1.5",
+                    fullPromptOverrideEnabled && "opacity-45",
+                  )}
+                >
+                  <Label>Every Claim Requires Evidence</Label>
+                  <div className="flex h-9 items-center justify-between rounded-md border border-border bg-muted/30 px-3">
+                    <span className="text-xs text-foreground/90">
+                      When enabled, every claim must be supported by evidence.
+                    </span>
+                    <Switch
+                      checked={requireCertainClaimSupport}
+                      disabled={fullPromptOverrideEnabled}
+                      onCheckedChange={(checked) =>
+                        patchDeepResearchConfig({
+                          strictness: checked
+                            ? "all-claims"
+                            : "uncertain-claims",
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+                <div
+                  className={cn(
+                    "space-y-1.5",
+                    fullPromptOverrideEnabled && "opacity-45",
+                  )}
+                >
+                  <Label htmlFor="dr-search-complexity">Search Complexity</Label>
+                  <Select
+                    value={resolvedDeepResearchConfig.subagent.searchComplexity}
+                    disabled={fullPromptOverrideEnabled}
+                    onValueChange={(value) =>
+                      patchSubagentConfig({
+                        searchComplexity: value as SubagentSearchComplexity,
+                      })
+                    }
+                  >
+                    <SelectTrigger id="dr-search-complexity">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SEARCH_COMPLEXITY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="dr-search-depth">Tavily Search Depth</Label>
+                  <Select
+                    value={resolvedDeepResearchConfig.subagent.tavilySearchDepth}
+                    onValueChange={(value) =>
+                      patchSubagentConfig({
+                        tavilySearchDepth: value as TavilySearchDepth,
+                      })
+                    }
+                  >
+                    <SelectTrigger id="dr-search-depth">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TAVILY_SEARCH_DEPTH_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="dr-max-search">Max Search Calls</Label>
+                  <Input
+                    id="dr-max-search"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={String(resolvedDeepResearchConfig.subagent.maxSearchCalls)}
+                    onChange={(event) =>
+                      handleNumericSubagentChange(
+                        "maxSearchCalls",
+                        event.target.value,
+                      )
+                    }
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dr-max-extract">Max Extract Calls</Label>
+                  <Input
+                    id="dr-max-extract"
+                    type="number"
+                    min={1}
+                    max={40}
+                    value={String(resolvedDeepResearchConfig.subagent.maxExtractCalls)}
+                    onChange={(event) =>
+                      handleNumericSubagentChange(
+                        "maxExtractCalls",
+                        event.target.value,
+                      )
+                    }
+                  />
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="dr-repeat-search">
+                    Max Repeat for Same Query
+                  </Label>
+                  <Input
+                    id="dr-repeat-search"
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={String(
+                      resolvedDeepResearchConfig.subagent.maxRepeatSearchQuery,
+                    )}
+                    onChange={(event) =>
+                      handleNumericSubagentChange(
+                        "maxRepeatSearchQuery",
+                        event.target.value,
+                      )
+                    }
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dr-repeat-url">
+                    Max Repeat for Same URL
+                  </Label>
+                  <Input
+                    id="dr-repeat-url"
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={String(
+                      resolvedDeepResearchConfig.subagent.maxRepeatExtractUrl,
+                    )}
+                    onChange={(event) =>
+                      handleNumericSubagentChange(
+                        "maxRepeatExtractUrl",
+                        event.target.value,
+                      )
+                    }
+                  />
+                </div>
+              </div>
+              {fullPromptOverrideEnabled ? (
+                <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  Prompt-level subagent strategy fields are hidden while Full Prompt
+                  Override is enabled. The depth and call-limit values above stay active
+                  and can be injected into override templates.
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dr-source-policy">
+                      Source Selection Policy (Subagent)
+                    </Label>
+                    <Textarea
+                      id="dr-source-policy"
+                      rows={3}
+                      value={resolvedDeepResearchConfig.subagent.sourceSelectionPolicy}
+                      onChange={(event) =>
+                        patchSubagentConfig({
+                          sourceSelectionPolicy: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dr-split-strategy">
+                      Search Split Strategy (Subagent)
+                    </Label>
+                    <Textarea
+                      id="dr-split-strategy"
+                      rows={3}
+                      value={resolvedDeepResearchConfig.subagent.splitStrategy}
+                      onChange={(event) =>
+                        patchSubagentConfig({
+                          splitStrategy: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                </>
+              )}
+              {fullPromptOverrideEnabled ? (
+                <>
+                  <div
+                    className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+                    title={OVERRIDE_TEMPLATE_PLACEHOLDER_TITLES}
+                  >
+                    {OVERRIDE_TEMPLATE_PLACEHOLDER_HINT}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dr-main-prompt-override">
+                      Main Agent Full Prompt Override
+                    </Label>
+                    <Textarea
+                      id="dr-main-prompt-override"
+                      rows={4}
+                      placeholder="Generated from current prompt settings by default"
+                      value={resolvedDeepResearchConfig.mainPromptOverride ?? ""}
+                      onChange={(event) =>
+                        patchDeepResearchConfig({
+                          mainPromptOverride: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dr-subagent-system-override">
+                      Subagent System Prompt Override
+                    </Label>
+                    <Textarea
+                      id="dr-subagent-system-override"
+                      rows={4}
+                      placeholder="Generated from current prompt settings by default"
+                      value={
+                        resolvedDeepResearchConfig.subagent.systemPromptOverride ??
+                        ""
+                      }
+                      onChange={(event) =>
+                        patchSubagentConfig({
+                          systemPromptOverride: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dr-subagent-prompt-override">
+                      Subagent Runtime Prompt Override
+                    </Label>
+                    <Textarea
+                      id="dr-subagent-prompt-override"
+                      rows={4}
+                      placeholder="Generated from current prompt settings by default"
+                      value={
+                        resolvedDeepResearchConfig.subagent.promptOverride ?? ""
+                      }
+                      onChange={(event) =>
+                        patchSubagentConfig({
+                          promptOverride: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                </>
+              ) : null}
+            </div>
+          </DialogContent>
+        </Dialog>
       </Chat>
     </div>
   );

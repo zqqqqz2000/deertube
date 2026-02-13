@@ -2,11 +2,13 @@ import type { ChatRequestOptions, ChatTransport, UIMessageChunk } from "ai";
 import { trpcClient } from "@/lib/trpc";
 import type { LlmRuntimeModelSettings, LlmPurpose } from "@/lib/settings";
 import type { DeertubeUIMessage } from "@/modules/ai/tools";
+import type { DeepResearchConfigInput } from "@/shared/deepresearch-config";
 
 export interface ChatContext {
   projectPath: string;
   selectedNodeSummary?: string;
   selectedPathSummary?: string;
+  deepResearch?: DeepResearchConfigInput;
   settings?: {
     llmProvider?: string;
     llmModelId?: string;
@@ -41,34 +43,35 @@ export class ElectronChatTransport implements ChatTransport<DeertubeUIMessage> {
     return Promise.resolve(
       new ReadableStream({
         start(controller) {
-        const subscription = trpcClient.chat.stream.subscribe(
-          {
-            projectPath: context?.projectPath ?? "",
-            messages: options.messages,
-            settings: context?.settings,
-            context: {
-              selectedNodeSummary: context?.selectedNodeSummary,
-              selectedPathSummary: context?.selectedPathSummary,
+          const subscription = trpcClient.chat.stream.subscribe(
+            {
+              projectPath: context?.projectPath ?? "",
+              messages: options.messages,
+              settings: context?.settings,
+              deepResearch: context?.deepResearch,
+              context: {
+                selectedNodeSummary: context?.selectedNodeSummary,
+                selectedPathSummary: context?.selectedPathSummary,
+              },
             },
-          },
-          {
-            onData: (chunk) => {
-              controller.enqueue(chunk);
+            {
+              onData: (chunk) => {
+                controller.enqueue(chunk);
+              },
+              onError: (error) => {
+                controller.error(error);
+              },
+              onComplete: () => {
+                controller.close();
+              },
             },
-            onError: (error) => {
-              controller.error(error);
-            },
-            onComplete: () => {
-              controller.close();
-            },
-          },
-        );
+          );
 
-        if (options.abortSignal) {
-          options.abortSignal.addEventListener("abort", () => {
-            subscription.unsubscribe();
-            controller.close();
-          });
+          if (options.abortSignal) {
+            options.abortSignal.addEventListener("abort", () => {
+              subscription.unsubscribe();
+              controller.close();
+            });
           }
         },
       }),

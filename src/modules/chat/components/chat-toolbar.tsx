@@ -14,7 +14,7 @@ export function ChatToolbar({
     >
       <div
         className={cn(
-          "grid grid-cols-[max-content_auto_max-content] gap-x-2 rounded-md border px-3 py-2",
+          "grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_max-content] gap-x-2 gap-y-1 rounded-md border px-3 py-2",
         )}
       >
         {children}
@@ -31,7 +31,7 @@ export function ChatToolbarAddonStart({
   return (
     <div
       className={cn(
-        "row-start-1 col-start-1 flex h-10 items-center gap-1.5",
+        "row-start-1 col-start-1 flex h-10 min-w-0 items-center gap-1.5 overflow-hidden",
         className,
       )}
       {...props}
@@ -61,7 +61,7 @@ export function ChatToolbarTextarea({
   };
 
   return (
-    <div className="col-start-2 row-span-2 grid w-full flex-1">
+    <div className="col-start-2 row-start-1 grid min-w-0 w-full flex-1">
       <Textarea
         id="toolbar-input"
         placeholder="Type your message..."
@@ -85,6 +85,24 @@ export function ChatToolbarTextarea({
         value={value}
         {...props}
       />
+    </div>
+  );
+}
+
+export function ChatToolbarUnderInput({
+  children,
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      className={cn(
+        "col-start-1 col-span-3 row-start-2 mt-1 flex min-h-7 items-center gap-2",
+        className,
+      )}
+      {...props}
+    >
+      {children}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type {
   DeepResearchPersistenceAdapter,
   LineSelection,
 } from "../../../shared/deepresearch";
+import type { DeepResearchConfig } from "../../../shared/deepresearch-config";
 
 export interface DeertubeMessageMetadata {
   status?: "pending" | "complete" | "failed";
@@ -79,6 +80,7 @@ export interface ToolConfig {
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
   deepResearchStore?: DeepResearchPersistenceAdapter;
+  deepResearchConfig?: DeepResearchConfig;
 }
 
 export interface SearchResult {

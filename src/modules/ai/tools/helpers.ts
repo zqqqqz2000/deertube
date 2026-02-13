@@ -5,6 +5,7 @@ import {
   buildDeepResearchRefUri,
   type LineSelection,
 } from "../../../shared/deepresearch";
+import type { TavilySearchDepth } from "../../../shared/deepresearch-config";
 import { TavilyResponseSchema, type TavilySearchResult } from "./schemas";
 import type {
   DeepSearchReference,
@@ -270,6 +271,7 @@ export async function fetchTavilySearch(
   query: string,
   maxResults: number,
   apiKey?: string,
+  searchDepth: TavilySearchDepth = "advanced",
   abortSignal?: AbortSignal,
 ): Promise<TavilySearchResult[]> {
   const resolvedKey = apiKey ?? process.env.TAVILY_API_KEY;
@@ -286,7 +288,7 @@ export async function fetchTavilySearch(
       query,
       max_results: maxResults,
       include_raw_content: false,
-      search_depth: "advanced",
+      search_depth: searchDepth,
     }),
     signal: abortSignal,
   });

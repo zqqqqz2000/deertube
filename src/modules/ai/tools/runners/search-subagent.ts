@@ -15,10 +15,20 @@ import type {
 } from "../../../../shared/deepresearch";
 import {
   LineSelectionSchema,
-  SEARCH_SUBAGENT_SYSTEM,
   SearchSubagentFinalSchema,
   TavilySearchResultSchema,
 } from "../schemas";
+import {
+  buildSearchSubagentRuntimePrompt,
+  buildSearchSubagentSystemPrompt,
+  type DeepResearchSubagentConfigInput,
+  resolveDeepResearchSubagentConfig,
+} from "../../../../shared/deepresearch-config";
+import {
+  getAgentSkill,
+  listAgentSkills,
+  type AgentSkillProfile,
+} from "../../../../shared/agent-skills";
 import {
   clampText,
   collectToolOutputs,
@@ -44,10 +54,6 @@ import type {
 import { runExtractSubagent } from "./extract-subagent";
 
 const SEARCH_SUBAGENT_MAX_STEPS = 16;
-const SEARCH_TOOL_MAX_CALLS = 4;
-const EXTRACT_TOOL_MAX_CALLS = 10;
-const MAX_REPEAT_SEARCH_QUERY = 2;
-const MAX_REPEAT_EXTRACT_URL = 2;
 const ABORT_ERROR_NAME = "AbortError";
 
 const normalizeToolKey = (value: string): string =>
@@ -117,6 +123,9 @@ export async function runSearchSubagent({
   jinaReaderBaseUrl,
   jinaReaderApiKey,
   deepResearchStore,
+  subagentConfig,
+  skillProfile,
+  fullPromptOverrideEnabled = false,
 }: {
   query: string;
   searchId: string;
@@ -130,11 +139,17 @@ export async function runSearchSubagent({
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
   deepResearchStore?: DeepResearchPersistenceAdapter;
+  subagentConfig?: DeepResearchSubagentConfigInput;
+  skillProfile?: AgentSkillProfile;
+  fullPromptOverrideEnabled?: boolean;
 }): Promise<SearchResult[]> {
   console.log("[subagent.runSearch]", {
     query,
     toolCallId,
   });
+  const resolvedSubagentConfig =
+    resolveDeepResearchSubagentConfig(subagentConfig);
+  const availableSkills = listAgentSkills();
   const accumulatedMessages: SubagentUIMessage[] = [];
   const searchToolErrors: string[] = [];
   const extractToolErrors: string[] = [];
@@ -179,14 +194,16 @@ export async function runSearchSubagent({
       const repeatedSearchCalls =
         (searchCallCountByQuery.get(normalizedQuery) ?? 0) + 1;
       searchCallCountByQuery.set(normalizedQuery, repeatedSearchCalls);
-      if (searchToolCallCount > SEARCH_TOOL_MAX_CALLS) {
-        const message = `search call budget exceeded (${SEARCH_TOOL_MAX_CALLS}).`;
+      if (searchToolCallCount > resolvedSubagentConfig.maxSearchCalls) {
+        const message = `search call budget exceeded (${resolvedSubagentConfig.maxSearchCalls}).`;
         searchToolErrorCount += 1;
         searchToolErrors.push(message);
         return { results: [], error: message };
       }
-      if (repeatedSearchCalls > MAX_REPEAT_SEARCH_QUERY) {
-        const message = `repeated search query blocked (${MAX_REPEAT_SEARCH_QUERY}x max): ${inputQuery}`;
+      if (
+        repeatedSearchCalls > resolvedSubagentConfig.maxRepeatSearchQuery
+      ) {
+        const message = `repeated search query blocked (${resolvedSubagentConfig.maxRepeatSearchQuery}x max): ${inputQuery}`;
         searchToolErrorCount += 1;
         searchToolErrors.push(message);
         return { results: [], error: message };
@@ -201,6 +218,7 @@ export async function runSearchSubagent({
           inputQuery,
           20,
           tavilyApiKey,
+          resolvedSubagentConfig.tavilySearchDepth,
           requestAbortSignal,
         );
         throwIfAborted(requestAbortSignal);
@@ -314,8 +332,8 @@ export async function runSearchSubagent({
       const repeatedExtractCalls =
         (extractCallCountByUrl.get(normalizedUrl) ?? 0) + 1;
       extractCallCountByUrl.set(normalizedUrl, repeatedExtractCalls);
-      if (extractToolCallCount > EXTRACT_TOOL_MAX_CALLS) {
-        const errorMessage = `extract call budget exceeded (${EXTRACT_TOOL_MAX_CALLS}).`;
+      if (extractToolCallCount > resolvedSubagentConfig.maxExtractCalls) {
+        const errorMessage = `extract call budget exceeded (${resolvedSubagentConfig.maxExtractCalls}).`;
         extractToolErrorCount += 1;
         extractToolErrors.push(errorMessage);
         return {
@@ -331,8 +349,10 @@ export async function runSearchSubagent({
           rawModelOutput: "",
         };
       }
-      if (repeatedExtractCalls > MAX_REPEAT_EXTRACT_URL) {
-        const errorMessage = `repeated extract URL blocked (${MAX_REPEAT_EXTRACT_URL}x max): ${url}`;
+      if (
+        repeatedExtractCalls > resolvedSubagentConfig.maxRepeatExtractUrl
+      ) {
+        const errorMessage = `repeated extract URL blocked (${resolvedSubagentConfig.maxRepeatExtractUrl}x max): ${url}`;
         extractToolErrorCount += 1;
         extractToolErrors.push(errorMessage);
         return {
@@ -575,6 +595,99 @@ export async function runSearchSubagent({
     },
   });
 
+  const discoverSkillsTool = tool({
+    description:
+      "List available domain skills with activation hints so the agent can pick one before search planning.",
+    inputSchema: z.object({}),
+    outputSchema: z.object({
+      skills: z.array(
+        z.object({
+          name: z.string(),
+          title: z.string(),
+          description: z.string(),
+          activationHints: z.array(z.string()),
+        }),
+      ),
+    }),
+    execute: () => ({
+      skills: availableSkills.map((skill) => ({
+        name: skill.name,
+        title: skill.title,
+        description: skill.description,
+        activationHints: skill.activationHints,
+      })),
+    }),
+  });
+
+  const loadSkillTool = tool({
+    description:
+      "Load one domain skill by exact name and return full guidance markdown.",
+    inputSchema: z.object({
+      name: z
+        .string()
+        .min(1)
+        .describe(
+          `Exact skill name. Available: ${availableSkills.map((skill) => skill.name).join(", ")}`,
+        ),
+    }),
+    outputSchema: z.object({
+      name: z.string(),
+      title: z.string().optional(),
+      content: z.string().optional(),
+      error: z.string().optional(),
+    }),
+    execute: ({ name }) => {
+      const matched = getAgentSkill(name);
+      if (!matched) {
+        return {
+          name,
+          error: `Unknown skill "${name}".`,
+        };
+      }
+      return {
+        name: matched.name,
+        title: matched.title,
+        content: matched.content,
+      };
+    },
+  });
+
+  const executeSkillTool = tool({
+    description:
+      "Apply one loaded skill to a concrete task and return task-specific guidance text.",
+    inputSchema: z.object({
+      name: z.string().min(1),
+      task: z.string().min(1),
+    }),
+    outputSchema: z.object({
+      name: z.string(),
+      task: z.string(),
+      guidance: z.string().optional(),
+      error: z.string().optional(),
+    }),
+    execute: ({ name, task }) => {
+      const matched = getAgentSkill(name);
+      if (!matched) {
+        return {
+          name,
+          task,
+          error: `Unknown skill "${name}".`,
+        };
+      }
+      return {
+        name: matched.name,
+        task,
+        guidance: [
+          `Apply skill "${matched.title}" to the task below.`,
+          "",
+          `Task: ${task}`,
+          "",
+          matched.content,
+        ].join("\n"),
+      };
+    },
+  });
+
   const writeResultsTool = tool({
     description:
       "Write the final search-subagent payload with per-URL results and global errors.",
@@ -633,34 +746,27 @@ export async function runSearchSubagent({
     },
   });
 
-  const searchSubagentPrompt = [
-    `User question: ${query}`,
-    "Plan the final answer first, then output only the evidence references needed to support it.",
-    "Split the question into a small set of distinct search tasks when needed; avoid overlapping or repetitive tasks.",
-    "Prefer serial search: run one search call, inspect its results, then decide the next query.",
-    "Language fallback strategy: start in the user-question language; only try English/other languages when results are empty, weak, or off-topic.",
-    "Each result item must include: url, viewpoint, content, selections.",
-    "Selections must be precise and minimal. Avoid broad/full-page spans unless strictly necessary.",
-    "When one source supports multiple points, keep multiple small selections under the same URL.",
-    "Merge duplicate viewpoints into one consolidated result item; do not repeat equivalent viewpoints.",
-    "You may run additional focused search/extract rounds based on collected evidence to fill gaps or resolve conflicts.",
-    "The extract tool returns line-numbered selections. Your returned selections must be anchored to those line numbers.",
-    "Control extraction usage: extract only pages that add novel evidence; skip highly similar/redundant pages unless they add clear new signal.",
-    `Budget: at most ${SEARCH_TOOL_MAX_CALLS} search calls and ${EXTRACT_TOOL_MAX_CALLS} extract calls.`,
-    "Stay conservative with call usage and prioritize quality over quantity.",
-    `Do not repeat the same search query more than ${MAX_REPEAT_SEARCH_QUERY} times.`,
-    `Do not extract the same URL more than ${MAX_REPEAT_EXTRACT_URL} times.`,
-    "Finalization rule (strict): your very last step must be exactly one `writeResults` call.",
-    "If `writeResults` is not called at the end, the run is treated as failed.",
-    "When evidence is sufficient, call `writeResults` exactly once with { results, errors }.",
-  ].join("\n");
+  const searchSubagentPrompt = buildSearchSubagentRuntimePrompt({
+    query,
+    subagentConfig: resolvedSubagentConfig,
+    fullPromptOverrideEnabled,
+  });
+  const searchSubagentSystemPrompt = buildSearchSubagentSystemPrompt({
+    subagentConfig: resolvedSubagentConfig,
+    query,
+    skillProfile: skillProfile ?? "auto",
+    fullPromptOverrideEnabled,
+  });
 
   throwIfAborted(abortSignal);
   const result = streamText({
     model,
-    system: SEARCH_SUBAGENT_SYSTEM,
+    system: searchSubagentSystemPrompt,
     prompt: searchSubagentPrompt,
     tools: {
+      discoverSkills: discoverSkillsTool,
+      loadSkill: loadSkillTool,
+      executeSkill: executeSkillTool,
       search: searchTool,
       extract: extractTool,
       writeResults: writeResultsTool,

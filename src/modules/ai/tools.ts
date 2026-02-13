@@ -1,6 +1,7 @@
 import { InferUITools, UIMessage, type UIMessageStreamWriter, tool } from "ai";
 import { z } from "zod";
 import { runDeepSearchTool } from "./tools/runner";
+import { getAgentSkill, listAgentSkills } from "../../shared/agent-skills";
 import type {
   DeepSearchReference,
   DeepSearchSource,
@@ -29,7 +30,98 @@ export function createTools(
   writer: UIMessageStreamWriter,
   config: ToolConfig = {},
 ) {
+  const availableSkills = listAgentSkills();
   return {
+    discoverSkills: tool({
+      description:
+        "List available domain skills with activation hints so the agent can decide whether to load one.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        skills: z.array(
+          z.object({
+            name: z.string(),
+            title: z.string(),
+            description: z.string(),
+            activationHints: z.array(z.string()),
+          }),
+        ),
+      }),
+      execute: () => ({
+        skills: availableSkills.map((skill) => ({
+          name: skill.name,
+          title: skill.title,
+          description: skill.description,
+          activationHints: skill.activationHints,
+        })),
+      }),
+    }),
+    loadSkill: tool({
+      description:
+        "Load one domain skill by exact name and return its full guidance markdown.",
+      inputSchema: z.object({
+        name: z
+          .string()
+          .min(1)
+          .describe(
+            `Exact skill name. Available: ${availableSkills.map((skill) => skill.name).join(", ")}`,
+          ),
+      }),
+      outputSchema: z.object({
+        name: z.string(),
+        title: z.string().optional(),
+        content: z.string().optional(),
+        error: z.string().optional(),
+      }),
+      execute: ({ name }) => {
+        const matched = getAgentSkill(name);
+        if (!matched) {
+          return {
+            name,
+            error: `Unknown skill "${name}".`,
+          };
+        }
+        return {
+          name: matched.name,
+          title: matched.title,
+          content: matched.content,
+        };
+      },
+    }),
+    executeSkill: tool({
+      description:
+        "Apply one loaded skill to a concrete task and return task-specific guidance text.",
+      inputSchema: z.object({
+        name: z.string().min(1),
+        task: z.string().min(1),
+      }),
+      outputSchema: z.object({
+        name: z.string(),
+        task: z.string(),
+        guidance: z.string().optional(),
+        error: z.string().optional(),
+      }),
+      execute: ({ name, task }) => {
+        const matched = getAgentSkill(name);
+        if (!matched) {
+          return {
+            name,
+            task,
+            error: `Unknown skill "${name}".`,
+          };
+        }
+        return {
+          name: matched.name,
+          task,
+          guidance: [
+            `Apply skill "${matched.title}" to the task below.`,
+            "",
+            `Task: ${task}`,
+            "",
+            matched.content,
+          ].join("\n"),
+        };
+      },
+    }),
     deepSearch: tool({
       description:
         "Run deep research via network search and a subagent, returning structured references for citation. For citations, use references[].uri as inline markdown links like [1](deertube://...).",
@@ -108,6 +200,7 @@ export function createTools(
           jinaReaderBaseUrl: config.jinaReaderBaseUrl,
           jinaReaderApiKey: config.jinaReaderApiKey,
           deepResearchStore: config.deepResearchStore,
+          deepResearchConfig: config.deepResearchConfig,
         });
         return {
           conclusion: result.conclusion,

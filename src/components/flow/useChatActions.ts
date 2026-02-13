@@ -24,6 +24,11 @@ import type {
   DeertubeMessageMetadata,
   DeertubeUIMessage,
 } from "@/modules/ai/tools";
+import {
+  resolveDeepResearchConfig,
+  type DeepResearchConfig,
+  type DeepResearchConfigInput,
+} from "@/shared/deepresearch-config";
 import { isJsonObject } from "@/types/json";
 import { useContextBuilder } from "./useContextBuilder";
 
@@ -54,6 +59,9 @@ interface GraphSnapshot {
 const CHAT_ACTION_DEBUG_LOGS_ENABLED =
   import.meta.env.DEV &&
   import.meta.env.VITE_CHAT_ACTION_DEBUG_LOGS === "true";
+const DEEP_RESEARCH_CONFIG_BY_PROJECT_KEY =
+  "deertube:deepResearchConfigByProject";
+const GRAPH_AUTOGEN_BY_PROJECT_KEY = "deertube:graphAutoGenByProject";
 
 const isStartNode = (node: FlowNode | null) => {
   if (!node || node.type !== "insight") {
@@ -177,6 +185,77 @@ const buildNodeQuote = (node: FlowNode | null) => {
   return `[[node:${node.id}|${label}]]`;
 };
 
+const readLocalStorageJson = <T,>(key: string, fallback: T): T => {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return fallback;
+  }
+  const raw = window.localStorage.getItem(key);
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const loadDeepResearchConfig = (projectPath: string): DeepResearchConfig => {
+  const mapping = readLocalStorageJson<Record<string, unknown>>(
+    DEEP_RESEARCH_CONFIG_BY_PROJECT_KEY,
+    {},
+  );
+  return resolveDeepResearchConfig(
+    (mapping[projectPath] as DeepResearchConfigInput | null | undefined) ??
+      undefined,
+  );
+};
+
+const saveDeepResearchConfig = (
+  projectPath: string,
+  config: DeepResearchConfig,
+) => {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  const mapping = readLocalStorageJson<Record<string, unknown>>(
+    DEEP_RESEARCH_CONFIG_BY_PROJECT_KEY,
+    {},
+  );
+  mapping[projectPath] = config;
+  window.localStorage.setItem(
+    DEEP_RESEARCH_CONFIG_BY_PROJECT_KEY,
+    JSON.stringify(mapping),
+  );
+};
+
+const loadGraphAutoGenerationEnabled = (projectPath: string): boolean => {
+  const mapping = readLocalStorageJson<Record<string, unknown>>(
+    GRAPH_AUTOGEN_BY_PROJECT_KEY,
+    {},
+  );
+  const value = mapping[projectPath];
+  return typeof value === "boolean" ? value : true;
+};
+
+const saveGraphAutoGenerationEnabled = (
+  projectPath: string,
+  enabled: boolean,
+) => {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  const mapping = readLocalStorageJson<Record<string, unknown>>(
+    GRAPH_AUTOGEN_BY_PROJECT_KEY,
+    {},
+  );
+  mapping[projectPath] = enabled;
+  window.localStorage.setItem(
+    GRAPH_AUTOGEN_BY_PROJECT_KEY,
+    JSON.stringify(mapping),
+  );
+};
+
 export function useChatActions({
   projectPath,
   nodes,
@@ -191,6 +270,10 @@ export function useChatActions({
 }: UseChatActionsOptions) {
   const [historyInput, setHistoryInput] = useState("");
   const [panelInput, setPanelInput] = useState("");
+  const [deepResearchConfig, setDeepResearchConfig] =
+    useState<DeepResearchConfig>(() => loadDeepResearchConfig(projectPath));
+  const [graphGenerationEnabled, setGraphGenerationEnabled] =
+    useState<boolean>(() => loadGraphAutoGenerationEnabled(projectPath));
   const [graphBusy, setGraphBusy] = useState(false);
   const [graphEventMessages, setGraphEventMessages] = useState<ChatMessage[]>(
     () => initialMessages.filter((message) => message.kind === "graph-event"),
@@ -204,6 +287,19 @@ export function useChatActions({
   const loggedGraphEventsRef = useRef<Map<string, string>>(new Map());
   const loggedStreamPartsRef = useRef<Map<string, string>>(new Map());
   const fallbackCreatedAtByIdRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    setDeepResearchConfig(loadDeepResearchConfig(projectPath));
+    setGraphGenerationEnabled(loadGraphAutoGenerationEnabled(projectPath));
+  }, [projectPath]);
+
+  useEffect(() => {
+    saveDeepResearchConfig(projectPath, deepResearchConfig);
+  }, [deepResearchConfig, projectPath]);
+
+  useEffect(() => {
+    saveGraphAutoGenerationEnabled(projectPath, graphGenerationEnabled);
+  }, [graphGenerationEnabled, projectPath]);
 
   useEffect(() => {
     if (!CHAT_ACTION_DEBUG_LOGS_ENABLED) {
@@ -487,9 +583,13 @@ export function useChatActions({
         projectPath,
         selectedNodeSummary,
         selectedPathSummary,
+        deepResearch: deepResearchConfig,
         settings: runtimeSettings,
       },
       onFinish: ({ message }: { message?: DeertubeUIMessage }) => {
+        if (!graphGenerationEnabled) {
+          return;
+        }
         if (!message || message.role !== "assistant") {
           return;
         }
@@ -639,6 +739,10 @@ export function useChatActions({
     setHistoryInput,
     panelInput,
     setPanelInput,
+    deepResearchConfig,
+    setDeepResearchConfig,
+    graphGenerationEnabled,
+    setGraphGenerationEnabled,
     busy,
     chatBusy: busy,
     graphBusy,

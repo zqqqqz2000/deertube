@@ -879,6 +879,10 @@ function FlowWorkspaceInner({
     setHistoryInput,
     panelInput,
     setPanelInput,
+    deepResearchConfig,
+    setDeepResearchConfig,
+    graphGenerationEnabled,
+    setGraphGenerationEnabled,
     messages: chatMessages,
     busy,
     chatBusy,
@@ -1892,6 +1896,10 @@ function FlowWorkspaceInner({
           focusSignal={chatFocusSignal}
           onRequestClearSelection={handleRequestClearSelection}
           input={historyInput}
+          deepResearchConfig={deepResearchConfig}
+          onDeepResearchConfigChange={setDeepResearchConfig}
+          graphGenerationEnabled={graphGenerationEnabled}
+          onGraphGenerationEnabledChange={setGraphGenerationEnabled}
           busy={chatBusy}
           graphBusy={graphBusy}
           onInputChange={setHistoryInput}
