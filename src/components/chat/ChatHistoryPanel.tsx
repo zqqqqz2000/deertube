@@ -888,10 +888,12 @@ export default function ChatHistoryPanel({
     return null;
   }, [lastFailedMessageIdProp, messages]);
   const showRetry = Boolean(lastFailedMessageId && onRetry);
+  const hasInput = input.trim().length > 0;
+  const retryOnly = showRetry && !hasInput;
   const canStop = busy && Boolean(onStop);
   const primaryActionLabel = canStop
     ? "Stop generation"
-    : showRetry
+    : retryOnly
       ? "Retry request"
       : "Send message";
   const handlePrimaryAction = useCallback(() => {
@@ -899,12 +901,12 @@ export default function ChatHistoryPanel({
       onStop?.();
       return;
     }
-    if (showRetry && lastFailedMessageId && onRetry) {
+    if (retryOnly && lastFailedMessageId && onRetry) {
       onRetry(lastFailedMessageId);
       return;
     }
     onSend();
-  }, [canStop, lastFailedMessageId, onRetry, onSend, onStop, showRetry]);
+  }, [canStop, lastFailedMessageId, onRetry, onSend, onStop, retryOnly]);
 
   const getToolStatusLabel = useCallback((status: ChatMessage["toolStatus"]) => {
     if (status === "running") {
@@ -1010,7 +1012,12 @@ export default function ChatHistoryPanel({
     if (status === "failed") {
       return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
     }
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />;
+    return (
+      <Loader2
+        className="h-3.5 w-3.5 animate-spin text-sky-400"
+        style={{ animationDuration: "2.2s" }}
+      />
+    );
   }, []);
 
   const renderToolProgress = useCallback(
@@ -2111,23 +2118,26 @@ export default function ChatHistoryPanel({
           <ChatToolbarAddonEnd>
             <Button
               size="icon"
-              variant={showRetry ? "destructive" : "default"}
+              variant={retryOnly ? "destructive" : "default"}
               className={`group relative h-8 w-8 rounded-md ${
                 canStop
                   ? "hover:bg-destructive hover:text-destructive-foreground"
                   : ""
               }`}
               onClick={handlePrimaryAction}
-              disabled={canStop ? false : busy || (!showRetry && !input.trim())}
+              disabled={canStop ? false : busy || (!retryOnly && !hasInput)}
               aria-label={primaryActionLabel}
               title={primaryActionLabel}
             >
               {canStop ? (
                 <>
-                  <Loader2 className="animate-[spin_1.8s_linear_infinite] transition-opacity duration-150 group-hover:opacity-0" />
+                  <Loader2
+                    className="animate-spin transition-opacity duration-150 group-hover:opacity-0"
+                    style={{ animationDuration: "2.8s" }}
+                  />
                   <Square className="absolute opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
                 </>
-              ) : showRetry ? (
+              ) : retryOnly ? (
                 <RotateCw />
               ) : (
                 <Send />

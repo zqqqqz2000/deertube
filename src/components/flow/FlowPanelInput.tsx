@@ -47,10 +47,12 @@ export default function FlowPanelInput({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const useTextarea = !isMicro && !isCompact;
   const canRetry = Boolean(retryMessageId && onRetry);
+  const hasPrompt = prompt.trim().length > 0;
+  const retryOnly = canRetry && !hasPrompt;
   const canStop = busy && Boolean(onStop);
   const actionLabel = canStop
     ? "Stop generation"
-    : canRetry
+    : retryOnly
       ? "Retry request"
       : "Send message";
   const buttonSizeClass = isMicro
@@ -69,7 +71,7 @@ export default function FlowPanelInput({
       onStop?.();
       return;
     }
-    if (canRetry) {
+    if (retryOnly) {
       onRetry?.(retryMessageId!);
       return;
     }
@@ -156,23 +158,26 @@ export default function FlowPanelInput({
         )}
         <Button
           size="icon"
-          variant={canRetry ? "destructive" : "default"}
+          variant={retryOnly ? "destructive" : "default"}
           className={`group relative rounded-md ${buttonSizeClass} ${iconSizeClass} ${
             canStop
               ? "hover:bg-destructive hover:text-destructive-foreground"
               : ""
           }`}
           onClick={handleAction}
-          disabled={canStop ? false : busy || (!canRetry && !prompt.trim())}
+          disabled={canStop ? false : busy || (!retryOnly && !hasPrompt)}
           aria-label={actionLabel}
           title={actionLabel}
         >
           {canStop ? (
             <>
-              <Loader2 className="animate-[spin_1.8s_linear_infinite] transition-opacity duration-150 group-hover:opacity-0" />
+              <Loader2
+                className="animate-spin transition-opacity duration-150 group-hover:opacity-0"
+                style={{ animationDuration: "2.8s" }}
+              />
               <Square className="absolute opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
             </>
-          ) : canRetry ? (
+          ) : retryOnly ? (
             <RotateCw />
           ) : (
             <Send />
