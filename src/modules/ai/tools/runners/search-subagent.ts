@@ -264,10 +264,9 @@ export async function runSearchSubagent({
         .describe("Whether the page is judged unrelated to query."),
       viewpoint: z
         .string()
-        .min(50)
-        .max(100)
+        .min(1)
         .describe(
-          "Extracted source-level viewpoint for this URL (50-100 characters).",
+          "Extracted source-level viewpoint for this URL. Should stay concise.",
         ),
       selections: z
         .array(LineSelectionSchema)
@@ -479,6 +478,7 @@ export async function runSearchSubagent({
           rawModelOutput: extractRawModelOutput,
         } = await runExtractSubagent({
           query: extractQuery,
+          sourceUrl: url,
           lines,
           model: extractModel ?? model,
           abortSignal: requestAbortSignal,

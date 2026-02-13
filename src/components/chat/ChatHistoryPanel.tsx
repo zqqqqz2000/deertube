@@ -2112,7 +2112,11 @@ export default function ChatHistoryPanel({
             <Button
               size="icon"
               variant={showRetry ? "destructive" : "default"}
-              className="group relative h-8 w-8 rounded-md"
+              className={`group relative h-8 w-8 rounded-md ${
+                canStop
+                  ? "hover:bg-destructive hover:text-destructive-foreground"
+                  : ""
+              }`}
               onClick={handlePrimaryAction}
               disabled={canStop ? false : busy || (!showRetry && !input.trim())}
               aria-label={primaryActionLabel}
@@ -2120,7 +2124,7 @@ export default function ChatHistoryPanel({
             >
               {canStop ? (
                 <>
-                  <Loader2 className="animate-spin transition-opacity duration-150 group-hover:opacity-0" />
+                  <Loader2 className="animate-[spin_1.8s_linear_infinite] transition-opacity duration-150 group-hover:opacity-0" />
                   <Square className="absolute opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
                 </>
               ) : showRetry ? (

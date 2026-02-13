@@ -203,6 +203,7 @@ export function useChatActions({
   );
   const loggedGraphEventsRef = useRef<Map<string, string>>(new Map());
   const loggedStreamPartsRef = useRef<Map<string, string>>(new Map());
+  const fallbackCreatedAtByIdRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!CHAT_ACTION_DEBUG_LOGS_ENABLED) {
@@ -550,7 +551,12 @@ export function useChatActions({
   }, [messages]);
 
   const derivedMessages = useMemo(() => {
-    const mapped = mapUiMessagesToChat(messages, status, error);
+    const mapped = mapUiMessagesToChat(
+      messages,
+      status,
+      error,
+      fallbackCreatedAtByIdRef.current,
+    );
     const withGraphEvents = graphEventMessages.length
       ? mergeGraphEvents(mapped, graphEventMessages)
       : mapped;
@@ -952,15 +958,31 @@ function mapUiMessagesToChat(
   messages: DeertubeUIMessage[],
   status: string,
   error: Error | undefined,
+  fallbackCreatedAtById: Map<string, string>,
 ): ChatMessage[] {
+  const activeMessageIds = new Set(messages.map((message) => message.id));
+  Array.from(fallbackCreatedAtById.keys()).forEach((messageId) => {
+    if (activeMessageIds.has(messageId)) {
+      return;
+    }
+    fallbackCreatedAtById.delete(messageId);
+  });
   const mapped: ChatMessage[] = messages.map((message) => {
     const content = extractUiMessageText(message);
-    const createdAt =
-      "createdAt" in message && message.createdAt
-        ? message.createdAt instanceof Date
+    const createdAt = (() => {
+      if ("createdAt" in message && message.createdAt) {
+        return message.createdAt instanceof Date
           ? message.createdAt.toISOString()
-          : String(message.createdAt)
-        : new Date().toISOString();
+          : String(message.createdAt);
+      }
+      const existing = fallbackCreatedAtById.get(message.id);
+      if (existing) {
+        return existing;
+      }
+      const next = new Date().toISOString();
+      fallbackCreatedAtById.set(message.id, next);
+      return next;
+    })();
     const { status: persistedStatus, error: persistedError } =
       extractMessageMetadata(message.metadata);
     const resolvedError = persistedError;

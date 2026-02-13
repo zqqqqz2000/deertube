@@ -157,7 +157,11 @@ export default function FlowPanelInput({
         <Button
           size="icon"
           variant={canRetry ? "destructive" : "default"}
-          className={`group relative rounded-md ${buttonSizeClass} ${iconSizeClass}`}
+          className={`group relative rounded-md ${buttonSizeClass} ${iconSizeClass} ${
+            canStop
+              ? "hover:bg-destructive hover:text-destructive-foreground"
+              : ""
+          }`}
           onClick={handleAction}
           disabled={canStop ? false : busy || (!canRetry && !prompt.trim())}
           aria-label={actionLabel}
@@ -165,7 +169,7 @@ export default function FlowPanelInput({
         >
           {canStop ? (
             <>
-              <Loader2 className="animate-spin transition-opacity duration-150 group-hover:opacity-0" />
+              <Loader2 className="animate-[spin_1.8s_linear_infinite] transition-opacity duration-150 group-hover:opacity-0" />
               <Square className="absolute opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
             </>
           ) : canRetry ? (

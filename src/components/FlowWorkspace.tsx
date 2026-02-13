@@ -43,6 +43,7 @@ import {
 import {
   buildRuntimeSettings,
   createProfileDraft,
+  type ProviderProfile,
   type RuntimeSettingsPayload,
 } from "../lib/settings";
 import { getNodeSize } from "../lib/elkLayout";
@@ -1637,10 +1638,10 @@ function FlowWorkspaceInner({
     sessionChatId,
   ]);
 
-  const handleExit = () => {
+  const handleExit = useCallback(() => {
     trpc.preview.hide.mutate().catch(() => undefined);
     onExit();
-  };
+  }, [onExit]);
 
   const handleFocusNode = useCallback(
     (nodeId: string) => {
@@ -1983,6 +1984,24 @@ function FlowWorkspaceInner({
     }
     return null;
   };
+  const handleSwitchChatAction = useCallback(
+    (chatId: string) => {
+      void onSwitchChat(chatId);
+    },
+    [onSwitchChat],
+  );
+  const handleRenameChatAction = useCallback(
+    (chatId: string, title: string) => {
+      void onRenameChat(chatId, title);
+    },
+    [onRenameChat],
+  );
+  const handleDeleteChatAction = useCallback(
+    (chatId: string) => {
+      void onDeleteChat(chatId);
+    },
+    [onDeleteChat],
+  );
 
   const renderTabLabel = useCallback(
     (tabId: string) => {
@@ -2028,15 +2047,9 @@ function FlowWorkspaceInner({
               chats={chatSummaries}
               activeChatId={sessionChatId}
               busy={busy}
-              onSwitchChat={(chatId) => {
-                void onSwitchChat(chatId);
-              }}
-              onRenameChat={(chatId, title) => {
-                void onRenameChat(chatId, title);
-              }}
-              onDeleteChat={(chatId) => {
-                void onDeleteChat(chatId);
-              }}
+              onSwitchChat={handleSwitchChatAction}
+              onRenameChat={handleRenameChatAction}
+              onDeleteChat={handleDeleteChatAction}
               onCreateChat={onCreateDraftChat}
             />
           </div>
@@ -2057,10 +2070,10 @@ function FlowWorkspaceInner({
       busy,
       chatMessages.length,
       chatSummaries,
+      handleDeleteChatAction,
+      handleRenameChatAction,
+      handleSwitchChatAction,
       onCreateDraftChat,
-      onDeleteChat,
-      onRenameChat,
-      onSwitchChat,
       sessionChatId,
     ],
   );
@@ -2117,10 +2130,57 @@ function FlowWorkspaceInner({
       projectTitleClickTimestampsRef.current = [];
     }
   }, []);
+  const questionActionValue = useMemo(
+    () => ({ retryQuestion, busy }),
+    [retryQuestion, busy],
+  );
+  const handleOpenSettings = useCallback(() => {
+    setSettingsOpen(true);
+  }, []);
+  const handleFocusChat = useCallback(() => {
+    openOrFocusTab("chat");
+  }, [openOrFocusTab]);
+  const handleFocusGraph = useCallback(() => {
+    openOrFocusTab("graph");
+  }, [openOrFocusTab]);
+  const handleCloseSettings = useCallback(() => {
+    setSettingsOpen(false);
+  }, []);
+  const handleActiveProfileChange = useCallback((id: string) => {
+    setActiveProfileId(id);
+  }, [setActiveProfileId]);
+  const handleProfileAdd = useCallback(() => {
+    setProfiles((prev) => {
+      const nextIndex = prev.length + 1;
+      return [...prev, createProfileDraft(`Profile ${nextIndex}`)];
+    });
+  }, [setProfiles]);
+  const handleProfileDelete = useCallback(
+    (id: string) => {
+      setProfiles((prev) => {
+        const next = prev.filter((profile) => profile.id !== id);
+        if (activeProfileId === id) {
+          setActiveProfileId(next[0]?.id ?? null);
+        }
+        return next;
+      });
+    },
+    [activeProfileId, setActiveProfileId, setProfiles],
+  );
+  const handleProfileChange = useCallback(
+    (id: string, patch: Partial<ProviderProfile>) => {
+      setProfiles((prev) =>
+        prev.map((profile) =>
+          profile.id === id ? { ...profile, ...patch } : profile,
+        ),
+      );
+    },
+    [setProfiles],
+  );
 
 
   return (
-    <QuestionActionProvider value={{ retryQuestion, busy }}>
+    <QuestionActionProvider value={questionActionValue}>
       <div className="flex h-screen w-screen flex-col bg-gradient-to-br from-[var(--surface-1)] via-[var(--surface-2)] to-[var(--surface-3)] text-foreground">
         <FlowHeader
           projectName={project.name}
@@ -2128,9 +2188,9 @@ function FlowWorkspaceInner({
           developerMode={developerMode}
           busy={busy}
           onProjectNameClick={handleProjectNameClick}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onFocusChat={() => openOrFocusTab("chat")}
-          onFocusGraph={() => openOrFocusTab("graph")}
+          onOpenSettings={handleOpenSettings}
+          onFocusChat={handleFocusChat}
+          onFocusGraph={handleFocusGraph}
           theme={theme}
           onToggleTheme={onToggleTheme}
           onExit={handleExit}
@@ -2148,30 +2208,11 @@ function FlowWorkspaceInner({
           open={settingsOpen}
           profiles={profiles}
           activeProfileId={activeProfileId}
-          onClose={() => setSettingsOpen(false)}
-          onActiveProfileChange={(id) => setActiveProfileId(id)}
-          onProfileAdd={() => {
-            setProfiles((prev) => {
-              const nextIndex = prev.length + 1;
-              return [...prev, createProfileDraft(`Profile ${nextIndex}`)];
-            });
-          }}
-          onProfileDelete={(id) => {
-            setProfiles((prev) => {
-              const next = prev.filter((profile) => profile.id !== id);
-              if (activeProfileId === id) {
-                setActiveProfileId(next[0]?.id ?? null);
-              }
-              return next;
-            });
-          }}
-          onProfileChange={(id, patch) => {
-            setProfiles((prev) =>
-              prev.map((profile) =>
-                profile.id === id ? { ...profile, ...patch } : profile,
-              ),
-            );
-          }}
+          onClose={handleCloseSettings}
+          onActiveProfileChange={handleActiveProfileChange}
+          onProfileAdd={handleProfileAdd}
+          onProfileDelete={handleProfileDelete}
+          onProfileChange={handleProfileChange}
         />
       </div>
     </QuestionActionProvider>

@@ -33,56 +33,70 @@ export function FlowFlexLayout({
 }: FlowFlexLayoutProps) {
   const layoutHostRef = useRef<HTMLDivElement | null>(null);
   const layoutModel = useMemo(() => Model.fromJson(model), [model]);
+  const onModelChangeRef = useRef(onModelChange);
+  const renderTabRef = useRef(renderTab);
+  const renderTabLabelRef = useRef(renderTabLabel);
+  const renderTabButtonsRef = useRef(renderTabButtons);
+  const renderTabSetActionsRef = useRef(renderTabSetActions);
+
+  onModelChangeRef.current = onModelChange;
+  renderTabRef.current = renderTab;
+  renderTabLabelRef.current = renderTabLabel;
+  renderTabButtonsRef.current = renderTabButtons;
+  renderTabSetActionsRef.current = renderTabSetActions;
 
   const factory = useCallback(
     (node: TabNode) => {
       const component = node.getComponent() ?? node.getId();
-      return renderTab(component);
+      return renderTabRef.current(component);
     },
-    [renderTab],
+    [],
   );
 
   const handleModelChange = useCallback(
     (nextModel: Model) => {
-      onModelChange(nextModel.toJson());
+      onModelChangeRef.current(nextModel.toJson());
     },
-    [onModelChange],
+    [],
   );
 
   const onRenderTab = useCallback(
     (node: TabNode, renderValues: ITabRenderValues) => {
       const component = node.getComponent() ?? node.getId();
-      if (!renderTabLabel) {
-        if (renderTabButtons) {
-          const buttons = renderTabButtons(component);
+      const renderTabLabelCurrent = renderTabLabelRef.current;
+      const renderTabButtonsCurrent = renderTabButtonsRef.current;
+      if (!renderTabLabelCurrent) {
+        if (renderTabButtonsCurrent) {
+          const buttons = renderTabButtonsCurrent(component);
           if (buttons?.length) {
             renderValues.buttons.push(...buttons);
           }
         }
       } else {
-        renderValues.content = renderTabLabel(component);
-        if (renderTabButtons) {
-          const buttons = renderTabButtons(component);
+        renderValues.content = renderTabLabelCurrent(component);
+        if (renderTabButtonsCurrent) {
+          const buttons = renderTabButtonsCurrent(component);
           if (buttons?.length) {
             renderValues.buttons.push(...buttons);
           }
         }
       }
     },
-    [renderTabButtons, renderTabLabel],
+    [],
   );
 
   const onRenderTabSet = useCallback(
     (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
-      if (!renderTabSetActions) {
+      const renderTabSetActionsCurrent = renderTabSetActionsRef.current;
+      if (!renderTabSetActionsCurrent) {
         return;
       }
-      const actions = renderTabSetActions(node);
+      const actions = renderTabSetActionsCurrent(node);
       if (actions) {
         renderValues.stickyButtons.push(actions);
       }
     },
-    [renderTabSetActions],
+    [],
   );
 
   useEffect(() => {

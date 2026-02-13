@@ -5,6 +5,9 @@ import {
   tool,
   type LanguageModel,
 } from "ai";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import type { LineSelection } from "../../../../shared/deepresearch";
 import {
@@ -19,33 +22,87 @@ import {
   summarizeSelections,
 } from "../helpers";
 
-const EXTRACT_VIEWPOINT_MIN = 50;
-const EXTRACT_VIEWPOINT_MAX = 100;
-const EXTRACT_VIEWPOINT_FILLER =
-  "This source needs additional validation before it can support a reliable claim for the query.";
 const EXTRACT_VIEWPOINT_FALLBACK =
   "Extraction halted early; this source cannot yet provide a reliable, query-grounded viewpoint.";
+const EXTRACT_MESSAGES_LOG_DIR_ENV = "DEERTUBE_EXTRACT_MESSAGES_LOG_DIR";
+
+type ExtractMessagesLogStage =
+  | "empty-input"
+  | "initial"
+  | "retry-writeExtractResult"
+  | "retry-json-repair";
+
+const resolveExtractMessagesLogDir = (): string => {
+  const configured = process.env[EXTRACT_MESSAGES_LOG_DIR_ENV]?.trim();
+  if (!configured) {
+    return path.resolve(process.cwd(), ".deertube", "extract-messages");
+  }
+  return path.isAbsolute(configured)
+    ? configured
+    : path.resolve(process.cwd(), configured);
+};
+
+const buildExtractRunId = (): string => {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `extract-${timestamp}-${randomUUID()}`;
+};
+
+const appendExtractMessagesLog = async ({
+  filePath,
+  runId,
+  stage,
+  sourceUrl,
+  query,
+  lineCount,
+  markdownCharCount,
+  stepCount,
+  rawText,
+  messages,
+}: {
+  filePath: string;
+  runId: string;
+  stage: ExtractMessagesLogStage;
+  sourceUrl?: string;
+  query: string;
+  lineCount: number;
+  markdownCharCount: number;
+  stepCount: number;
+  rawText: string;
+  messages: unknown;
+}): Promise<void> => {
+  const entry = {
+    version: 1,
+    runId,
+    stage,
+    sourceUrl,
+    query,
+    lineCount,
+    markdownCharCount,
+    stepCount,
+    rawText,
+    rawTextPreview: clampText(rawText, 400),
+    capturedAt: new Date().toISOString(),
+    messages,
+  };
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const serialized = JSON.stringify(entry);
+    if (!serialized) {
+      return;
+    }
+    await fs.appendFile(filePath, `${serialized}\n`, "utf-8");
+  } catch (error) {
+    console.warn("[subagent.extract.agent.messagesLog.error]", {
+      stage,
+      filePath,
+      error: error instanceof Error ? clampText(error.message, 220) : "unknown",
+    });
+  }
+};
 
 const normalizeExtractViewpoint = (value: string): string => {
   const compact = value.replace(/\s+/g, " ").trim();
-  if (
-    compact.length >= EXTRACT_VIEWPOINT_MIN &&
-    compact.length <= EXTRACT_VIEWPOINT_MAX
-  ) {
-    return compact;
-  }
-  if (compact.length > EXTRACT_VIEWPOINT_MAX) {
-    return compact.slice(0, EXTRACT_VIEWPOINT_MAX).trimEnd();
-  }
-  const expanded =
-    compact.length > 0
-      ? `${compact} ${EXTRACT_VIEWPOINT_FILLER}`
-      : EXTRACT_VIEWPOINT_FALLBACK;
-  const normalizedExpanded = expanded.replace(/\s+/g, " ").trim();
-  if (normalizedExpanded.length <= EXTRACT_VIEWPOINT_MAX) {
-    return normalizedExpanded;
-  }
-  return normalizedExpanded.slice(0, EXTRACT_VIEWPOINT_MAX).trimEnd();
+  return compact.length > 0 ? compact : EXTRACT_VIEWPOINT_FALLBACK;
 };
 
 const stripMarkdownCodeFence = (value: string): string => {
@@ -53,6 +110,105 @@ const stripMarkdownCodeFence = (value: string): string => {
   const matched = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   if (!matched) return trimmed;
   return matched[1].trim();
+};
+
+type JsonTextCandidateSource =
+  | "raw"
+  | "fence-stripped"
+  | "fence-block"
+  | "embedded-object";
+
+const extractFencedJsonBlocks = (value: string): string[] => {
+  const blocks: string[] = [];
+  const pattern = /```(?:json)?\s*([\s\S]*?)\s*```/gi;
+  for (const matched of value.matchAll(pattern)) {
+    const block = matched[1]?.trim();
+    if (!block) {
+      continue;
+    }
+    blocks.push(block);
+  }
+  return blocks;
+};
+
+const extractEmbeddedJsonObjects = (value: string): string[] => {
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) {
+        start = index;
+      }
+      depth += 1;
+      continue;
+    }
+    if (char !== "}" || depth === 0) {
+      continue;
+    }
+    depth -= 1;
+    if (depth !== 0 || start < 0) {
+      continue;
+    }
+    const candidate = value.slice(start, index + 1).trim();
+    if (candidate.length > 0) {
+      objects.push(candidate);
+    }
+    start = -1;
+  }
+
+  return objects;
+};
+
+const collectJsonTextCandidates = (
+  value: string,
+): { text: string; source: JsonTextCandidateSource }[] => {
+  const raw = value.trim();
+  const stripped = stripMarkdownCodeFence(raw);
+  const candidates: { text: string; source: JsonTextCandidateSource }[] = [];
+  const seen = new Set<string>();
+
+  const addCandidate = (text: string, source: JsonTextCandidateSource) => {
+    const normalized = text.trim();
+    if (normalized.length === 0 || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    candidates.push({ text: normalized, source });
+  };
+
+  addCandidate(raw, "raw");
+  if (stripped !== raw) {
+    addCandidate(stripped, "fence-stripped");
+  }
+
+  extractFencedJsonBlocks(raw).forEach((block) => {
+    addCandidate(block, "fence-block");
+  });
+  extractEmbeddedJsonObjects(raw).forEach((objectText) => {
+    addCandidate(objectText, "embedded-object");
+  });
+
+  return candidates;
 };
 
 const formatZodIssues = (error: z.ZodError): string =>
@@ -68,7 +224,7 @@ const parseExtractResultFromJsonText = (
 ):
   | {
       parsed: z.infer<typeof ExtractSubagentFinalSchema>;
-      source: "raw" | "fence-stripped";
+      source: JsonTextCandidateSource;
     }
   | {
       parsed: null;
@@ -76,14 +232,7 @@ const parseExtractResultFromJsonText = (
       zodError?: string;
       zodCandidate?: string;
     } => {
-  const raw = value.trim();
-  const stripped = stripMarkdownCodeFence(raw);
-  const candidates: { text: string; source: "raw" | "fence-stripped" }[] = [
-    { text: raw, source: "raw" },
-  ];
-  if (stripped !== raw) {
-    candidates.push({ text: stripped, source: "fence-stripped" });
-  }
+  const candidates = collectJsonTextCandidates(value);
 
   let lastError = "empty JSON output";
   let latestZodError: string | undefined;
@@ -121,11 +270,13 @@ const parseExtractResultFromJsonText = (
 
 export async function runExtractSubagent({
   query,
+  sourceUrl,
   lines,
   model,
   abortSignal,
 }: {
   query: string;
+  sourceUrl?: string;
   lines: string[];
   model: LanguageModel;
   abortSignal?: AbortSignal;
@@ -143,12 +294,32 @@ export async function runExtractSubagent({
     (total, line) => total + line.length + 1,
     0,
   );
+  const extractRunId = buildExtractRunId();
+  const extractMessagesLogPath = path.join(
+    resolveExtractMessagesLogDir(),
+    `${extractRunId}.jsonl`,
+  );
   console.log("[subagent.extract.agent.start]", {
     query: clampText(query, 160),
+    sourceUrl: sourceUrl ? clampText(sourceUrl, 220) : undefined,
     lineCount,
     markdownCharCount,
+    runId: extractRunId,
+    messagesLogPath: extractMessagesLogPath,
   });
   if (lineCount === 0) {
+    await appendExtractMessagesLog({
+      filePath: extractMessagesLogPath,
+      runId: extractRunId,
+      stage: "empty-input",
+      sourceUrl,
+      query,
+      lineCount,
+      markdownCharCount,
+      stepCount: 0,
+      rawText: "Empty markdown input.",
+      messages: [],
+    });
     console.log("[subagent.extract.agent.empty]", {
       query,
       lineCount,
@@ -404,7 +575,7 @@ export async function runExtractSubagent({
     "- Use grep/readLines as needed to locate evidence.",
     "- For grep, prefer returning around 5-10 matches per call unless you need broader coverage.",
     "- Efficiency: if multiple checks are independent, prefer issuing multiple tool calls in the same round.",
-    "- You must provide one viewpoint between 50 and 100 characters.",
+    "- You must provide one concise viewpoint.",
     "- No matter what, you must call `writeExtractResult`, even when selections is empty.",
     "- When done, call `writeExtractResult` exactly once with { viewpoint, broken, inrelavate, selections, error? }.",
     "- Do not return final JSON in plain text.",
@@ -435,6 +606,18 @@ export async function runExtractSubagent({
     ],
     abortSignal,
   });
+  await appendExtractMessagesLog({
+    filePath: extractMessagesLogPath,
+    runId: extractRunId,
+    stage: "initial",
+    sourceUrl,
+    query,
+    lineCount,
+    markdownCharCount,
+    stepCount: result.steps.length,
+    rawText: result.text,
+    messages: result.response.messages,
+  });
   if (!collectedExtractResult) {
     const retryJsonPromptPrefix = [
       extractSubagentPrompt,
@@ -442,7 +625,7 @@ export async function runExtractSubagent({
       "Continuation requirement (mandatory):",
       "- You did not call `writeExtractResult` in the previous attempt.",
       "- Return the final result as JSON directly now.",
-      "- Keep viewpoint length between 50 and 100 characters.",
+      "- Keep viewpoint concise and specific.",
       "",
       "Output format (strict):",
       "- Output exactly one JSON object and nothing else.",
@@ -456,7 +639,7 @@ export async function runExtractSubagent({
       "- If extraction failed or content is broken, set broken=true and selections=[].",
       "",
       "Required JSON shape:",
-      '{ "viewpoint": "50-100 chars", "broken": false, "inrelavate": false, "selections": [{ "start": 12, "end": 18 }], "error": "optional error message" }',
+      '{ "viewpoint": "concise viewpoint", "broken": false, "inrelavate": false, "selections": [{ "start": 12, "end": 18 }], "error": "optional error message" }',
     ].join("\n");
     const retryUserPrompt = [
       retryJsonPromptPrefix,
@@ -491,6 +674,18 @@ export async function runExtractSubagent({
       ],
       abortSignal,
     });
+    await appendExtractMessagesLog({
+      filePath: extractMessagesLogPath,
+      runId: extractRunId,
+      stage: "retry-writeExtractResult",
+      sourceUrl,
+      query,
+      lineCount,
+      markdownCharCount,
+      stepCount: retryResult.steps.length,
+      rawText: retryResult.text,
+      messages: retryResult.response.messages,
+    });
     let continuationResult = retryResult;
     let continuationText = retryResult.text;
     if (!collectedExtractResult) {
@@ -513,79 +708,123 @@ export async function runExtractSubagent({
           query: clampText(query, 160),
           error: clampText(parsedRetryResult.error, 220),
         });
-        if (parsedRetryResult.zodError) {
-          const repairUserPrompt = [
-            retryJsonPromptPrefix,
-            "",
-            "Validation feedback from previous JSON (fix all issues):",
-            clampText(parsedRetryResult.zodError, 2400),
-            "",
-            "Previous JSON candidate:",
-            parsedRetryResult.zodCandidate
-              ? clampText(parsedRetryResult.zodCandidate, 3200)
+        const jsonSchemaText = [
+          "{",
+          '  "type": "object",',
+          '  "required": ["viewpoint", "broken", "inrelavate", "selections"],',
+          '  "properties": {',
+          '    "viewpoint": { "type": "string", "minLength": 1 },',
+          '    "broken": { "type": "boolean" },',
+          '    "inrelavate": { "type": "boolean" },',
+          '    "selections": {',
+          '      "type": "array",',
+          '      "items": {',
+          '        "type": "object",',
+          '        "required": ["start", "end"],',
+          '        "properties": {',
+          '          "start": { "type": "integer", "minimum": 1 },',
+          '          "end": { "type": "integer", "minimum": 1 }',
+          "        },",
+          '        "additionalProperties": false',
+          "      }",
+          "    },",
+          '    "error": { "type": "string" }',
+          "  },",
+          '  "additionalProperties": false',
+          "}",
+        ].join("\n");
+        const repairUserPrompt = [
+          retryJsonPromptPrefix,
+          "",
+          "Your previous output is still not valid for this task.",
+          "You must output exactly one valid JSON object and nothing else.",
+          "Do not add any explanation, reasoning, markdown, or code fences.",
+          "",
+          "Validation / parse error:",
+          clampText(parsedRetryResult.zodError ?? parsedRetryResult.error, 2400),
+          "",
+          "JSON schema (must comply):",
+          jsonSchemaText,
+          "",
+          "Previous output candidate:",
+          parsedRetryResult.zodCandidate
+            ? clampText(parsedRetryResult.zodCandidate, 3200)
+            : retryResult.text.length > 0
+              ? clampText(retryResult.text, 3200)
               : "(none)",
-            "",
-            "Return corrected JSON only.",
-          ].join("\n");
-          console.warn("[subagent.extract.agent.retry.json.repair]", {
-            query: clampText(query, 160),
-            zodError: clampText(parsedRetryResult.zodError, 220),
-          });
-          const repairResult = await generateText({
-            model,
-            system: EXTRACT_SUBAGENT_SYSTEM,
-            messages: [
-              ...retryResult.response.messages,
-              {
-                role: "user",
-                content: repairUserPrompt,
-              },
-            ],
-            tools: {
-              grep: grepTool,
-              readLines: readLinesTool,
-              writeExtractResult: writeExtractResultTool,
+          "",
+          "Return corrected JSON only.",
+        ].join("\n");
+        console.warn("[subagent.extract.agent.retry.json.repair]", {
+          query: clampText(query, 160),
+          error: clampText(parsedRetryResult.error, 220),
+          zodError: parsedRetryResult.zodError
+            ? clampText(parsedRetryResult.zodError, 220)
+            : undefined,
+        });
+        const repairResult = await generateText({
+          model,
+          system: EXTRACT_SUBAGENT_SYSTEM,
+          messages: [
+            ...retryResult.response.messages,
+            {
+              role: "user",
+              content: repairUserPrompt,
             },
-            toolChoice: "auto",
-            stopWhen: [
-              hasToolCall("writeExtractResult"),
-              stepCountIs(EXTRACT_SUBAGENT_MAX_STEPS),
-            ],
-            abortSignal,
-          });
-          if (!collectedExtractResult) {
-            const parsedRepairResult = parseExtractResultFromJsonText(
-              repairResult.text,
-            );
-            if (parsedRepairResult.parsed) {
-              collectedExtractResult = parsedRepairResult.parsed;
-              console.log("[subagent.extract.agent.retry.json.repair.parsed]", {
-                query: clampText(query, 160),
-                source: parsedRepairResult.source,
-                viewpoint: clampText(
-                  normalizeExtractViewpoint(parsedRepairResult.parsed.viewpoint),
-                  120,
-                ),
-                broken: parsedRepairResult.parsed.broken,
-                inrelavate: parsedRepairResult.parsed.inrelavate,
-                selectionCount: parsedRepairResult.parsed.selections.length,
-              });
-            } else {
-              console.warn(
-                "[subagent.extract.agent.retry.json.repair.invalid]",
-                {
-                  query: clampText(query, 160),
-                  error: clampText(parsedRepairResult.error, 220),
-                },
-              );
-            }
+          ],
+          tools: {
+            grep: grepTool,
+            readLines: readLinesTool,
+            writeExtractResult: writeExtractResultTool,
+          },
+          toolChoice: "auto",
+          stopWhen: [
+            hasToolCall("writeExtractResult"),
+            stepCountIs(EXTRACT_SUBAGENT_MAX_STEPS),
+          ],
+          abortSignal,
+        });
+        await appendExtractMessagesLog({
+          filePath: extractMessagesLogPath,
+          runId: extractRunId,
+          stage: "retry-json-repair",
+          sourceUrl,
+          query,
+          lineCount,
+          markdownCharCount,
+          stepCount: repairResult.steps.length,
+          rawText: repairResult.text,
+          messages: repairResult.response.messages,
+        });
+        if (!collectedExtractResult) {
+          const parsedRepairResult = parseExtractResultFromJsonText(
+            repairResult.text,
+          );
+          if (parsedRepairResult.parsed) {
+            collectedExtractResult = parsedRepairResult.parsed;
+            console.log("[subagent.extract.agent.retry.json.repair.parsed]", {
+              query: clampText(query, 160),
+              source: parsedRepairResult.source,
+              viewpoint: clampText(
+                normalizeExtractViewpoint(parsedRepairResult.parsed.viewpoint),
+                120,
+              ),
+              broken: parsedRepairResult.parsed.broken,
+              inrelavate: parsedRepairResult.parsed.inrelavate,
+              selectionCount: parsedRepairResult.parsed.selections.length,
+            });
+          } else {
+            console.warn("[subagent.extract.agent.retry.json.repair.invalid]", {
+              query: clampText(query, 160),
+              error: clampText(parsedRepairResult.error, 220),
+            });
           }
-          continuationResult = repairResult;
-          continuationText =
-            retryResult.text.length > 0
-              ? `${retryResult.text}\n\n${repairResult.text}`
-              : repairResult.text;
         }
+        continuationResult = repairResult;
+        continuationText =
+          retryResult.text.length > 0
+            ? `${retryResult.text}\n\n${repairResult.text}`
+            : repairResult.text;
       }
     }
     result = {
@@ -598,6 +837,9 @@ export async function runExtractSubagent({
   }
   console.log("[subagent.extract.agent.raw]", {
     query: clampText(query, 160),
+    sourceUrl: sourceUrl ? clampText(sourceUrl, 220) : undefined,
+    runId: extractRunId,
+    messagesLogPath: extractMessagesLogPath,
     rawLength: result.text.length,
     rawPreview: clampText(result.text, 240),
   });

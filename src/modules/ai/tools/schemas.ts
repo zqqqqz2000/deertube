@@ -83,9 +83,8 @@ export const ExtractSubagentFinalSchema = z
   .object({
     viewpoint: z
       .string()
-      .min(50)
-      .max(100)
-      .describe("Single concise viewpoint (50-100 characters)."),
+      .min(1)
+      .describe("Single concise viewpoint. Keep it short and evidence-grounded."),
     broken: z
       .boolean()
       .default(false)
@@ -203,7 +202,7 @@ export const EXTRACT_SUBAGENT_SYSTEM = [
   "Goal: select the most relevant line spans for the query.",
   "Available tools: grep, readLines, writeExtractResult.",
   "Output must be submitted via writeExtractResult({ viewpoint, broken, inrelavate, selections, error? }).",
-  "You must provide one `viewpoint` with 50-100 characters.",
+  "You must provide one concise `viewpoint`.",
   "Rules:",
   "- Line numbers start from 1. start/end are inclusive.",
   "- No matter what, call writeExtractResult; use selections=[] when needed.",
@@ -213,6 +212,6 @@ export const EXTRACT_SUBAGENT_SYSTEM = [
   "- When using grep, prefer 5-10 matches per call unless a wider sweep is necessary.",
   "- Efficiency rule: when inspecting independent hypotheses/spans, prefer issuing multiple tool calls in the same round when possible.",
   "- For large markdown, prioritize the grep/readLines tools to explore before deciding selections.",
-  "- Keep `viewpoint` specific and evidence-grounded, with length between 50 and 100 characters.",
+  "- Keep `viewpoint` specific, evidence-grounded, and short.",
   "Finalize by calling writeExtractResult exactly once.",
 ].join("\n");
