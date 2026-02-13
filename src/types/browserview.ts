@@ -12,6 +12,7 @@ export interface BrowserViewTabState {
   canGoBack?: boolean;
   canGoForward?: boolean;
   isLoading?: boolean;
+  referenceHighlight?: BrowserViewReferenceHighlight;
 }
 
 export interface BrowserViewSelection {

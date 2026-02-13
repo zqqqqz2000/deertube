@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type SyntheticEvent,
+} from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -28,6 +36,7 @@ import {
   LoaderCircle,
   Lock,
   LockOpen,
+  LocateFixed,
   MessageSquare,
   Network,
 } from "lucide-react";
@@ -271,6 +280,15 @@ const truncateLabel = (value: string, maxLength: number) => {
   }
   return `${value.slice(0, maxLength - 3)}...`;
 };
+
+const toReferenceHighlightPayload = (
+  reference: DeepResearchResolvedReference,
+): BrowserViewReferenceHighlight => ({
+  refId: reference.refId,
+  text: reference.text,
+  startLine: reference.startLine,
+  endLine: reference.endLine,
+});
 
 const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => {
   const ids = new Set<string>();
@@ -1220,13 +1238,27 @@ function FlowWorkspaceInner({
   );
 
   const openBrowserUrl = useCallback(
-    (rawUrl: string, label?: string): string | null => {
+    (
+      rawUrl: string,
+      label?: string,
+      referenceHighlight?: BrowserViewReferenceHighlight,
+    ): string | null => {
       if (!isHttpUrl(rawUrl)) {
         return null;
       }
       const normalized = new URL(rawUrl).toString();
       const existing = browserTabs.find((tab) => tab.url === normalized);
       if (existing) {
+        setBrowserTabs((prev) =>
+          prev.map((tab) =>
+            tab.id === existing.id
+              ? {
+                  ...tab,
+                  referenceHighlight,
+                }
+              : tab,
+          ),
+        );
         selectBrowserTab(existing.id);
         return existing.id;
       }
@@ -1238,6 +1270,7 @@ function FlowWorkspaceInner({
         url: normalized,
         title: resolvedLabel,
         isLoading: true,
+        referenceHighlight,
       };
       setBrowserTabs((prev) => [...prev, nextTab]);
 
@@ -1282,7 +1315,7 @@ function FlowWorkspaceInner({
   const scheduleBrowserReferenceHighlight = useCallback(
     (
       tabId: string,
-      reference: DeepResearchResolvedReference,
+      reference: BrowserViewReferenceHighlight,
       attempt = 0,
     ) => {
       if (attempt > 8) {
@@ -1291,16 +1324,10 @@ function FlowWorkspaceInner({
       const delay = attempt === 0 ? 180 : Math.min(1300, 220 * (attempt + 1));
       const timerId = window.setTimeout(() => {
         browserHighlightTimersRef.current.delete(timerId);
-        const payload: BrowserViewReferenceHighlight = {
-          refId: reference.refId,
-          text: reference.text,
-          startLine: reference.startLine,
-          endLine: reference.endLine,
-        };
         trpc.browserView.highlightReference
           .mutate({
             tabId,
-            reference: payload,
+            reference,
           })
           .then((result) => {
             if (!result.ok) {
@@ -1373,14 +1400,16 @@ function FlowWorkspaceInner({
         if (!reference) {
           return;
         }
+        const highlight = toReferenceHighlightPayload(reference);
         const tabId = openBrowserUrl(
           reference.url,
           reference.title ?? label ?? `Ref ${reference.refId}`,
+          highlight,
         );
         if (!tabId) {
           return;
         }
-        scheduleBrowserReferenceHighlight(tabId, reference);
+        scheduleBrowserReferenceHighlight(tabId, highlight);
       });
     },
     [openBrowserUrl, resolveBrowserReference, scheduleBrowserReferenceHighlight],
@@ -1452,6 +1481,7 @@ function FlowWorkspaceInner({
                 url,
                 title: undefined,
                 isLoading: true,
+                referenceHighlight: undefined,
               }
             : tab,
         ),
@@ -1947,6 +1977,44 @@ function FlowWorkspaceInner({
     ],
   );
 
+  const renderTabButtons = useCallback(
+    (tabId: string) => {
+      const browserTabId = parseBrowserTabId(tabId);
+      if (!browserTabId) {
+        return null;
+      }
+      const tab = browserTabMap.get(browserTabId);
+      const reference = tab?.referenceHighlight;
+      if (!reference) {
+        return null;
+      }
+      const stopTabHeaderEvent = (event: SyntheticEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      return [
+        <button
+          key={`${browserTabId}-refocus-reference`}
+          type="button"
+          className="flexlayout__tab_button_trailing"
+          title="Scroll and highlight reference"
+          aria-label="Scroll and highlight reference"
+          onMouseDown={(event) => {
+            stopTabHeaderEvent(event);
+          }}
+          onClick={(event) => {
+            stopTabHeaderEvent(event);
+            selectBrowserTab(browserTabId);
+            scheduleBrowserReferenceHighlight(browserTabId, reference);
+          }}
+        >
+          <LocateFixed className="h-3.5 w-3.5" />
+        </button>,
+      ];
+    },
+    [browserTabMap, scheduleBrowserReferenceHighlight, selectBrowserTab],
+  );
+
   const handleProjectNameClick = useCallback(() => {
     const now = Date.now();
     const windowMs = 2000;
@@ -1985,6 +2053,7 @@ function FlowWorkspaceInner({
             onModelChange={handleLayoutChange}
             renderTab={renderTab}
             renderTabLabel={renderTabLabel}
+            renderTabButtons={renderTabButtons}
           />
         </div>
         <SettingsPanel

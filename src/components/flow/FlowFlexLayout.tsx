@@ -17,6 +17,7 @@ interface FlowFlexLayoutProps {
   onModelChange: (model: IJsonModel) => void;
   renderTab: (tabId: string) => ReactNode;
   renderTabLabel?: (tabId: string) => ReactNode;
+  renderTabButtons?: (tabId: string) => ReactNode[] | null;
   renderTabSetActions?: (node: TabSetNode | BorderNode) => ReactNode | null;
   realtimeResize?: boolean;
 }
@@ -26,6 +27,7 @@ export function FlowFlexLayout({
   onModelChange,
   renderTab,
   renderTabLabel,
+  renderTabButtons,
   renderTabSetActions,
   realtimeResize = true,
 }: FlowFlexLayoutProps) {
@@ -49,13 +51,25 @@ export function FlowFlexLayout({
 
   const onRenderTab = useCallback(
     (node: TabNode, renderValues: ITabRenderValues) => {
-      if (!renderTabLabel) {
-        return;
-      }
       const component = node.getComponent() ?? node.getId();
-      renderValues.content = renderTabLabel(component);
+      if (!renderTabLabel) {
+        if (renderTabButtons) {
+          const buttons = renderTabButtons(component);
+          if (buttons?.length) {
+            renderValues.buttons.push(...buttons);
+          }
+        }
+      } else {
+        renderValues.content = renderTabLabel(component);
+        if (renderTabButtons) {
+          const buttons = renderTabButtons(component);
+          if (buttons?.length) {
+            renderValues.buttons.push(...buttons);
+          }
+        }
+      }
     },
-    [renderTabLabel],
+    [renderTabButtons, renderTabLabel],
   );
 
   const onRenderTabSet = useCallback(
