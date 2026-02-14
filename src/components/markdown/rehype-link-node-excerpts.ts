@@ -1,9 +1,8 @@
-import type {
-  Parent,
-  Root,
-  Element,
-} from "hast";
-import { findFlexibleRanges, mergeRanges } from "@/components/markdown/text-match";
+import type { Parent, Root, Element } from "hast";
+import {
+  findFlexibleRanges,
+  mergeRanges,
+} from "@/components/markdown/text-match";
 import {
   collectTextNodes,
   localOverlapsForEntry,
@@ -17,12 +16,7 @@ export interface NodeExcerptRef {
 
 const isDev = import.meta.env.DEV;
 
-const inlineIgnoredParentTags = new Set([
-  "button",
-  "code",
-  "mark",
-  "pre",
-]);
+const inlineIgnoredParentTags = new Set(["button", "code", "mark", "pre"]);
 
 const ignoredParentTags = new Set([
   ...inlineIgnoredParentTags,
@@ -139,10 +133,7 @@ const hasNodeRefFlag = (value: unknown): boolean => {
   if (typeof properties !== "object" || properties === null) {
     return false;
   }
-  return (
-    "dataNodeRef" in properties ||
-    "data-node-ref" in properties
-  );
+  return "dataNodeRef" in properties || "data-node-ref" in properties;
 };
 
 export function rehypeLinkNodeExcerpts(
@@ -154,9 +145,7 @@ export function rehypeLinkNodeExcerpts(
       id: item.id,
       text: item.text.trim(),
     }))
-    .filter(
-      (item) => item.id.trim().length > 0 && item.text.length > 0,
-    );
+    .filter((item) => item.id.trim().length > 0 && item.text.length > 0);
 
   if (refs.length === 0) {
     return () => undefined;
@@ -170,9 +159,14 @@ export function rehypeLinkNodeExcerpts(
 
     for (const ref of refs) {
       // Global matching excludes tables to prevent cross-cell matching artifacts.
-      const globalReplacementCount = applyRefToScope(tree, ref, ignoredParentTags, {
-        focusable: true,
-      });
+      const globalReplacementCount = applyRefToScope(
+        tree,
+        ref,
+        ignoredParentTags,
+        {
+          focusable: true,
+        },
+      );
       const tableNeedles = buildTableNeedles(ref.text);
       // Table matching is scoped per cell to keep table layout stable.
       let tableReplacementCount = 0;

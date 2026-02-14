@@ -1010,6 +1010,119 @@ const readDeepSearchPartPayload = (
   };
 };
 
+const readKnownToolStatus = (value: unknown): ChatMessage["toolStatus"] | null => {
+  if (value === "running" || value === "complete" || value === "failed") {
+    return value;
+  }
+  return null;
+};
+
+const readToolPartResultStatus = (
+  part: DeertubeMessagePart,
+): ChatMessage["toolStatus"] | null => {
+  const partState =
+    "state" in part && typeof part.state === "string" ? part.state : undefined;
+  const hasErrorState =
+    (partState?.includes("error") ?? false) ||
+    (partState?.includes("denied") ?? false);
+  if (hasErrorState) {
+    return "failed";
+  }
+  if ("output" in part && part.output !== undefined) {
+    if (isJsonObject(part.output)) {
+      const status = readKnownToolStatus(part.output.status);
+      if (status) {
+        return status;
+      }
+    }
+    return "complete";
+  }
+  if (partState === "output-available") {
+    return "complete";
+  }
+  return null;
+};
+
+const isToolExecutionPart = (part: DeertubeMessagePart): boolean =>
+  part.type.startsWith("tool-") || part.type === "dynamic-tool";
+
+const deriveSubagentResultStatus = (
+  payload: SubagentStreamPayload,
+): ChatMessage["toolStatus"] | null => {
+  const lastMessage = payload.messages.at(-1);
+  if (
+    !lastMessage ||
+    typeof lastMessage !== "object" ||
+    !("parts" in lastMessage) ||
+    !Array.isArray((lastMessage as { parts?: unknown }).parts)
+  ) {
+    return null;
+  }
+  const parts = (lastMessage as { parts: DeertubeMessagePart[] }).parts;
+  const statuses = parts
+    .filter(isToolExecutionPart)
+    .map((part) => readToolPartResultStatus(part))
+    .filter((status): status is ChatMessage["toolStatus"] => status !== null);
+  if (statuses.includes("failed")) {
+    return "failed";
+  }
+  if (statuses.includes("running")) {
+    return "running";
+  }
+  if (statuses.includes("complete")) {
+    return "complete";
+  }
+  return null;
+};
+
+const deriveDeepSearchResultStatus = (
+  payload: DeepSearchStreamPayload,
+  done: boolean,
+): ChatMessage["toolStatus"] | null => {
+  const payloadStatus = readKnownToolStatus(payload.status);
+  if (payloadStatus === "failed") {
+    return "failed";
+  }
+  if (payloadStatus === "complete") {
+    return "complete";
+  }
+  if (done) {
+    return "complete";
+  }
+  const hasError =
+    typeof payload.error === "string" && payload.error.trim().length > 0;
+  if (hasError) {
+    return "failed";
+  }
+  const hasConclusion =
+    typeof payload.conclusion === "string" && payload.conclusion.trim().length > 0;
+  const hasSources = Array.isArray(payload.sources) && payload.sources.length > 0;
+  const hasReferences =
+    Array.isArray(payload.references) && payload.references.length > 0;
+  if (hasConclusion || hasSources || hasReferences) {
+    return payloadStatus ?? "complete";
+  }
+  return payloadStatus;
+};
+
+const resolveToolStatusByChatState = ({
+  resultStatus,
+  isActiveAssistantMessage,
+  isStreaming,
+}: {
+  resultStatus: ChatMessage["toolStatus"] | null;
+  isActiveAssistantMessage: boolean;
+  isStreaming: boolean;
+}): ChatMessage["toolStatus"] => {
+  if (resultStatus) {
+    return resultStatus;
+  }
+  if (isActiveAssistantMessage && isStreaming) {
+    return "running";
+  }
+  return "failed";
+};
+
 const extractDeepSearchToolText = (part: DeertubeMessagePart): string | null => {
   const isDeepSearchToolPart =
     part.type === "tool-deepSearch" ||
@@ -1114,14 +1227,17 @@ function buildSubagentEvents(
 
   return Array.from(byToolCall.values()).map(
     ({ payload, parentMessageId, createdAt }) => {
-      const resolvedFromDeepSearch = deepSearchStatusByToolCall.get(
+      const resultStatusFromDeepSearch = deepSearchStatusByToolCall.get(
         payload.toolCallId,
       );
-      const toolStatus =
-        resolvedFromDeepSearch ??
-        (isStreaming && parentMessageId === activeAssistantMessageId
-          ? "running"
-          : "complete");
+      const resultStatus =
+        resultStatusFromDeepSearch ?? deriveSubagentResultStatus(payload);
+      const toolStatus = resolveToolStatusByChatState({
+        resultStatus,
+        isActiveAssistantMessage:
+          parentMessageId === activeAssistantMessageId,
+        isStreaming,
+      });
       return {
         id: `subagent-${payload.toolCallId}`,
         role: "assistant",
@@ -1190,14 +1306,13 @@ function buildDeepSearchEvents(
 
   return Array.from(byToolCall.values()).map(
     ({ payload, parentMessageId, createdAt, done }) => {
-      const toolStatus =
-        payload.status === "failed"
-          ? "failed"
-          : done
-            ? "complete"
-            : isStreaming && parentMessageId === activeAssistantMessageId
-              ? "running"
-              : "complete";
+      const resultStatus = deriveDeepSearchResultStatus(payload, done);
+      const toolStatus = resolveToolStatusByChatState({
+        resultStatus,
+        isActiveAssistantMessage:
+          parentMessageId === activeAssistantMessageId,
+        isStreaming,
+      });
       return {
         id: `deepsearch-${payload.toolCallId}`,
         role: "assistant",
@@ -1317,14 +1432,15 @@ function mergeGraphEvents(
     }
   });
 
+  const residualEvents: ChatMessage[] = [];
   if (byResponseId.size > 0) {
-    byResponseId.forEach((events) => merged.push(...events));
+    byResponseId.forEach((events) => residualEvents.push(...events));
   }
   if (unattached.length > 0) {
-    merged.push(...unattached);
+    residualEvents.push(...unattached);
   }
 
-  return merged;
+  return insertResidualEventsByCreatedAt(merged, residualEvents);
 }
 
 function mergePersistedAgentEvents(
@@ -1378,14 +1494,15 @@ function mergeSubagentEvents(
     }
   });
 
+  const residualEvents: ChatMessage[] = [];
   if (byResponseId.size > 0) {
-    byResponseId.forEach((events) => merged.push(...events));
+    byResponseId.forEach((events) => residualEvents.push(...events));
   }
   if (unattached.length > 0) {
-    merged.push(...unattached);
+    residualEvents.push(...unattached);
   }
 
-  return merged;
+  return insertResidualEventsByCreatedAt(merged, residualEvents);
 }
 
 function mergeDeepSearchEvents(
@@ -1419,15 +1536,51 @@ function mergeDeepSearchEvents(
     }
   });
 
+  const residualEvents: ChatMessage[] = [];
   if (byResponseId.size > 0) {
-    byResponseId.forEach((events) => merged.push(...events));
+    byResponseId.forEach((events) => residualEvents.push(...events));
   }
   if (unattached.length > 0) {
-    merged.push(...unattached);
+    residualEvents.push(...unattached);
   }
 
-  return merged;
+  return insertResidualEventsByCreatedAt(merged, residualEvents);
 }
+
+const toMessageTimestamp = (value: string): number => {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return parsed;
+};
+
+const insertResidualEventsByCreatedAt = (
+  baseMessages: ChatMessage[],
+  residualEvents: ChatMessage[],
+): ChatMessage[] => {
+  if (residualEvents.length === 0) {
+    return baseMessages;
+  }
+  const sortedResidualEvents = [...residualEvents].sort((left, right) => {
+    const leftTimestamp = toMessageTimestamp(left.createdAt);
+    const rightTimestamp = toMessageTimestamp(right.createdAt);
+    return leftTimestamp - rightTimestamp;
+  });
+  const merged = [...baseMessages];
+  sortedResidualEvents.forEach((event) => {
+    const eventTimestamp = toMessageTimestamp(event.createdAt);
+    const insertIndex = merged.findIndex(
+      (message) => toMessageTimestamp(message.createdAt) > eventTimestamp,
+    );
+    if (insertIndex < 0) {
+      merged.push(event);
+      return;
+    }
+    merged.splice(insertIndex, 0, event);
+  });
+  return merged;
+};
 
 function getLatestAssistantMessageId(
   messages: DeertubeUIMessage[],

@@ -427,6 +427,32 @@ const toExecutionStatus = (
   return "running";
 };
 
+const resolveSubagentParentExecutionStatus = (
+  subagentMessage: ChatMessage,
+  deepSearchMessage?: ChatMessage,
+): ToolExecutionStatus => {
+  if (deepSearchMessage?.toolStatus) {
+    return toExecutionStatus(deepSearchMessage.toolStatus);
+  }
+  const resolvedError = subagentMessage.error ?? deepSearchMessage?.error;
+  if (typeof resolvedError === "string" && resolvedError.trim().length > 0) {
+    return "failed";
+  }
+  return toExecutionStatus(subagentMessage.toolStatus);
+};
+
+const normalizeSubagentEntryStatuses = (
+  entries: SubagentEntry[],
+  parentStatus: ToolExecutionStatus,
+): SubagentEntry[] => {
+  if (parentStatus === "running") {
+    return entries;
+  }
+  return entries.map((entry) =>
+    entry.status === "running" ? { ...entry, status: parentStatus } : entry,
+  );
+};
+
 const getProgressByStatuses = (statuses: ToolExecutionStatus[]): ToolProgress => {
   const total = statuses.length;
   const done = statuses.filter((status) => status !== "running").length;
@@ -1464,13 +1490,21 @@ export default function ChatHistoryPanel({
         ? outputPayloadRaw
         : null;
       const entries = outputPayload ? buildSubagentEntries(outputPayload) : [];
-      const statuses = entries.map((entry) => entry.status);
+      const parentStatus = resolveSubagentParentExecutionStatus(
+        item.message,
+        item.deepSearchMessage,
+      );
+      const normalizedEntries = normalizeSubagentEntryStatuses(
+        entries,
+        parentStatus,
+      );
+      const statuses = normalizedEntries.map((entry) => entry.status);
       const deepSearchStatus = item.deepSearchMessage?.toolStatus;
       if (deepSearchStatus) {
         statuses.push(toExecutionStatus(deepSearchStatus));
       }
       if (statuses.length === 0) {
-        statuses.push(toExecutionStatus(item.message.toolStatus));
+        statuses.push(parentStatus);
       }
       return statuses;
     },
@@ -1997,6 +2031,14 @@ export default function ChatHistoryPanel({
                   ? deepSearchOutputPayloadRaw
                   : null;
                 const deepSearchStatus = deepSearchMessage?.toolStatus;
+                const parentExecutionStatus = resolveSubagentParentExecutionStatus(
+                  eventMessage,
+                  deepSearchMessage,
+                );
+                const normalizedEntries = normalizeSubagentEntryStatuses(
+                  entries,
+                  parentExecutionStatus,
+                );
                 const deepSearchStatusLabel = deepSearchMessage?.error
                   ? deepSearchMessage.error
                   : getToolStatusLabel(deepSearchStatus);
@@ -2055,15 +2097,16 @@ export default function ChatHistoryPanel({
                 );
                 const hasDeepSearchDetails = Boolean(deepSearchMessage);
                 const title = eventMessage.toolName ?? outputPayload?.toolName ?? "Subagent";
-                const compactCallEntries = entries.map((entry) => {
+                const compactCallEntries = normalizedEntries.map((entry) => {
                   const detailSource = entry.compactDetail ?? entry.fullDetail;
                   const merged = detailSource
                     ? `${entry.label}: ${detailSource}`
                     : entry.label;
                   return truncateInline(merged);
                 });
-                const hasDetails = entries.length > 0 || hasDeepSearchDetails;
-                const progressStatuses: ToolExecutionStatus[] = entries.map(
+                const hasDetails =
+                  normalizedEntries.length > 0 || hasDeepSearchDetails;
+                const progressStatuses: ToolExecutionStatus[] = normalizedEntries.map(
                   (entry) => entry.status,
                 );
                 if (deepSearchStatus) {
@@ -2119,7 +2162,7 @@ export default function ChatHistoryPanel({
                             <ChatEventContent className="space-y-2">
                               {developerMode ? (
                                 <div className="space-y-1 text-[11px] text-muted-foreground">
-                                  {entries.map((entry, index) => {
+                                  {normalizedEntries.map((entry, index) => {
                                     const detail = entry.fullDetail ?? entry.compactDetail;
                                     const statusLabel = getExecutionStatusLabel(entry.status);
                                     return (
@@ -2212,7 +2255,7 @@ export default function ChatHistoryPanel({
                               ) : (
                                 <div className="space-y-1 text-[11px] text-muted-foreground">
                                   {compactCallEntries.map((line, index) => {
-                                    const entry = entries[index];
+                                    const entry = normalizedEntries[index];
                                     if (!entry) {
                                       return null;
                                     }
