@@ -93,7 +93,6 @@ export function ChatTabActions({
       ),
     [chats],
   );
-  const switchDisabled = busy;
   const stopHeaderEvent = (event: SyntheticEvent) => {
     event.stopPropagation();
   };
@@ -174,7 +173,6 @@ export function ChatTabActions({
         <Select
           value={activeChatId ?? undefined}
           onValueChange={handleSelectChange}
-          disabled={switchDisabled}
         >
           <SelectTrigger
             className="h-6 w-6 shrink-0 justify-center rounded-full border-0 bg-transparent p-0 text-foreground/80 shadow-none hover:bg-accent/50 [&>svg:last-child]:hidden"
