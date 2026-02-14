@@ -240,6 +240,9 @@ const presetToRuntimeSkill = (skill: AgentSkillPreset): RuntimeAgentSkill => ({
   source: "preset",
 });
 
+export const getPresetAgentSkills = (): RuntimeAgentSkill[] =>
+  PRESET_AGENT_SKILLS.map((skill) => presetToRuntimeSkill(skill));
+
 const normalizeRuntimeSkill = (
   skill: RuntimeAgentSkill,
   fallbackSource: "preset" | "local",

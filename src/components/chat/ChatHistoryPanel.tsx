@@ -81,6 +81,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -517,7 +522,6 @@ export default function ChatHistoryPanel({
   const ignoreHighlightRef = useRef(false);
   const [advancedPanelOpen, setAdvancedPanelOpen] = useState(false);
   const [deepResearchQuickOpen, setDeepResearchQuickOpen] = useState(false);
-  const deepResearchQuickRef = useRef<HTMLDivElement | null>(null);
   const [skillsDirectory, setSkillsDirectory] = useState("");
   const [searchSkillOptions, setSearchSkillOptions] = useState<
     SearchSkillOption[]
@@ -1203,26 +1207,6 @@ export default function ChatHistoryPanel({
     }
     void refreshSkillCatalog();
   }, [deepResearchQuickOpen, refreshSkillCatalog]);
-
-  useEffect(() => {
-    if (!deepResearchQuickOpen) {
-      return;
-    }
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        return;
-      }
-      if (deepResearchQuickRef.current?.contains(target)) {
-        return;
-      }
-      setDeepResearchQuickOpen(false);
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-    };
-  }, [deepResearchQuickOpen]);
 
   const getToolStatusLabel = useCallback((status: ChatMessage["toolStatus"]) => {
     if (status === "running") {
@@ -2459,36 +2443,43 @@ export default function ChatHistoryPanel({
               >
                 DeepResearch
               </button>
-              <div
-                className="relative border-l border-current/20"
-                ref={deepResearchQuickRef}
+              <Popover
+                open={deepResearchQuickOpen}
+                onOpenChange={setDeepResearchQuickOpen}
               >
-                <button
-                  type="button"
-                  className="inline-flex h-7 w-7 items-center justify-center text-current/80 transition hover:text-current"
-                  aria-label="DeepResearch quick settings"
-                  title="DeepResearch quick settings"
+                <div className="border-l border-current/20">
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex h-7 w-7 items-center justify-center text-current/80 transition hover:text-current"
+                      aria-label="DeepResearch quick settings"
+                      title="DeepResearch quick settings"
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                      }}
+                    >
+                      <Settings className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                </div>
+                <PopoverContent
+                  side="top"
+                  align="center"
+                  sideOffset={8}
+                  collisionPadding={8}
+                  avoidCollisions
+                  className="w-[min(320px,calc(100vw-16px))] max-h-[calc(100vh-16px)] overflow-y-auto p-3"
                   onPointerDown={(event) => {
                     event.stopPropagation();
                   }}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setDeepResearchQuickOpen((prev) => !prev);
                   }}
                 >
-                  <Settings className="h-3.5 w-3.5" />
-                </button>
-                {deepResearchQuickOpen ? (
-                  <div
-                    className="absolute bottom-full left-1/2 z-50 mb-2 w-[320px] -translate-x-1/2 rounded-md border border-border/70 bg-popover p-3 shadow-xl"
-                    onPointerDown={(event) => {
-                      event.stopPropagation();
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                    }}
-                  >
-                    <div className="space-y-2.5">
+                  <div className="space-y-2.5">
                       <div
                         className={cn(
                           "flex items-center justify-between gap-3",
@@ -2632,10 +2623,9 @@ export default function ChatHistoryPanel({
                       >
                         More
                       </Button>
-                    </div>
                   </div>
-                ) : null}
-              </div>
+                </PopoverContent>
+              </Popover>
             </div>
             <button
               type="button"

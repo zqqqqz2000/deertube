@@ -2,7 +2,10 @@ import { app, shell } from "electron";
 import fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import type { RuntimeAgentSkill } from "../../src/shared/agent-skills";
+import {
+  getPresetAgentSkills,
+  type RuntimeAgentSkill,
+} from "../../src/shared/agent-skills";
 
 const SKILL_FILENAME = "SKILL.md";
 const WALK_SKIP_DIRECTORIES = new Set(["node_modules", ".git", ".DS_Store"]);
@@ -18,6 +21,12 @@ export interface LocalAgentSkillScanResult {
   scannedAt: string;
   skills: LocalAgentSkill[];
 }
+
+const BUILTIN_SEARCH_SKILL_FOLDERS: Record<string, string> = {
+  "web3-investing": "search-web3-investing",
+  "academic-research": "search-academic-research",
+  "news-analysis": "search-news-analysis",
+};
 
 const normalizeWhitespace = (value: string): string =>
   value.replace(/\s+/g, " ").trim();
@@ -93,6 +102,81 @@ const parseActivationHints = (frontmatterBlock: string | null): string[] => {
     .filter((value) => value.length > 0);
 };
 
+const yamlQuote = (value: string): string =>
+  `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
+const buildFrontmatterArray = (values: string[]): string =>
+  `[${values.map((value) => yamlQuote(value)).join(", ")}]`;
+
+const buildSkillMarkdownContent = (skill: RuntimeAgentSkill): string => {
+  const title = skill.title.trim() || skill.name;
+  const description =
+    skill.description.trim() || `Local skill "${skill.name}"`;
+  const activationHints = skill.activationHints
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const content = skill.content.trim();
+  return [
+    "---",
+    `id: ${yamlQuote(skill.name)}`,
+    `name: ${yamlQuote(title)}`,
+    `description: ${yamlQuote(description)}`,
+    `activationHints: ${buildFrontmatterArray(activationHints)}`,
+    "---",
+    "",
+    content.length > 0 ? content : `# Skill: ${title}`,
+    "",
+  ].join("\n");
+};
+
+const resolveBuiltinSearchSkillSeeds = (): {
+  folderName: string;
+  skill: RuntimeAgentSkill;
+}[] =>
+  getPresetAgentSkills().map((skill) => ({
+    folderName:
+      BUILTIN_SEARCH_SKILL_FOLDERS[skill.name] ?? `search-${skill.name}`,
+    skill: {
+      ...skill,
+      source: "local",
+      isSearchSkill: true,
+    },
+  }));
+
+export const ensureBuiltinSearchSkillsSeeded = async (): Promise<{
+  directory: string;
+  seededFolders: string[];
+}> => {
+  const directory = resolveSkillsDirectory();
+  await fs.mkdir(directory, { recursive: true });
+  const seededFolders: string[] = [];
+  for (const seed of resolveBuiltinSearchSkillSeeds()) {
+    const folderPath = path.join(directory, seed.folderName);
+    const skillFilePath = path.join(folderPath, SKILL_FILENAME);
+    let skillFileExists = false;
+    try {
+      const stat = await fs.stat(skillFilePath);
+      skillFileExists = stat.isFile();
+    } catch {
+      skillFileExists = false;
+    }
+    if (skillFileExists) {
+      continue;
+    }
+    await fs.mkdir(folderPath, { recursive: true });
+    await fs.writeFile(
+      skillFilePath,
+      buildSkillMarkdownContent(seed.skill),
+      "utf-8",
+    );
+    seededFolders.push(seed.folderName);
+  }
+  return {
+    directory,
+    seededFolders,
+  };
+};
+
 export const resolveSkillsDirectory = (): string =>
   path.join(app.getPath("userData"), "skills");
 
@@ -148,7 +232,12 @@ const parseLocalSkill = async (
   if (!folderName) {
     return null;
   }
-  let skillName = folderName;
+  const frontmatterBlock = parseFrontmatterBlock(rawContent);
+  const frontmatterSkillId = parseFrontmatterValue(frontmatterBlock, "id");
+  let skillName = frontmatterSkillId ?? folderName;
+  if (!skillName.trim()) {
+    skillName = folderName;
+  }
   const normalizedBaseName = normalizeSkillName(skillName);
   if (usedNames.has(normalizedBaseName)) {
     const withPathName = `${folderName}-${relativePath
@@ -160,7 +249,6 @@ const parseLocalSkill = async (
   const normalizedName = normalizeSkillName(skillName);
   usedNames.add(normalizedName);
 
-  const frontmatterBlock = parseFrontmatterBlock(rawContent);
   const title =
     parseFrontmatterValue(frontmatterBlock, "name") ??
     parseMarkdownTitle(rawContent) ??
@@ -186,6 +274,7 @@ const parseLocalSkill = async (
 };
 
 export const scanLocalAgentSkills = async (): Promise<LocalAgentSkillScanResult> => {
+  await ensureBuiltinSearchSkillsSeeded();
   const directory = resolveSkillsDirectory();
   let directoryExists = false;
   try {
@@ -233,6 +322,7 @@ export const openSkillsDirectoryInFileManager = async (): Promise<{
   ok: boolean;
   error?: string;
 }> => {
+  await ensureBuiltinSearchSkillsSeeded();
   const directory = resolveSkillsDirectory();
   await fs.mkdir(directory, { recursive: true });
   const openResult = await shell.openPath(directory);

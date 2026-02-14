@@ -7,6 +7,7 @@ import { createTRPCContext } from './trpc/init'
 import { appRouter } from './trpc/routers/_app'
 import { getPreviewController } from './trpc/preview'
 import { getBrowserViewController } from './browserview'
+import { ensureBuiltinSearchSkillsSeeded } from "./skills/registry";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -147,7 +148,13 @@ app.on('activate', () => {
   }
 })
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  try {
+    await ensureBuiltinSearchSkillsSeeded();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[skills.seed.error]", message);
+  }
   registerDevDockMenu()
   createWindow()
 })
