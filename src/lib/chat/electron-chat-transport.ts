@@ -83,6 +83,7 @@ export class ElectronChatTransport implements ChatTransport<DeertubeUIMessage> {
       chatId: string;
     } & ChatRequestOptions,
   ): Promise<ReadableStream<UIMessageChunk> | null> {
+    // Explicitly disable reconnect behavior while satisfying the SDK transport contract.
     return Promise.resolve(null);
   }
 }

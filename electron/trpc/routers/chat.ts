@@ -17,6 +17,7 @@ import {
 } from "../../../src/shared/deepresearch-config";
 import { scanLocalAgentSkills } from "../../skills/registry";
 import type { RuntimeAgentSkill } from "../../../src/shared/agent-skills";
+import { runDeepSearchTool } from "../../../src/modules/ai/tools/runners/deepsearch-tool";
 
 const noStepLimit = () => false;
 
@@ -137,6 +138,7 @@ const SettingsSchema = z.object({
       search: ModelSettingsSchema.optional(),
       extract: ModelSettingsSchema.optional(),
       graph: ModelSettingsSchema.optional(),
+      validate: ModelSettingsSchema.optional(),
     })
     .optional(),
 });
@@ -276,6 +278,10 @@ export const chatRouter = createTRPCRouter({
         provider: chatModelConfig.resolved.llmProvider,
         model: chatModelConfig.resolved.llmModelId,
         deepResearchEnabled: deepResearchConfig.enabled,
+        searchEnabled:
+          deepResearchConfig.enabled &&
+          deepResearchConfig.strictness !== "no-search",
+        validateEnabled: deepResearchConfig.validate.enabled,
       });
       const result = await generateText({
         model: chatModelConfig.model,
@@ -286,6 +292,71 @@ export const chatRouter = createTRPCRouter({
       });
 
       return { text: result.text };
+    }),
+  validate: baseProcedure
+    .input(
+      z.object({
+        projectPath: z.string(),
+        query: z.string().min(1),
+        answer: z.string().min(1),
+        settings: SettingsSchema.optional(),
+        deepResearch: DeepResearchConfigSchema.optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const deepResearchConfig = resolveDeepResearchConfig(input.deepResearch);
+      if (!deepResearchConfig.enabled || !deepResearchConfig.validate.enabled) {
+        return {
+          status: "skipped" as const,
+          mode: "validate" as const,
+          query: input.query.trim(),
+          searchId: undefined,
+          projectId: undefined,
+          references: [],
+          sources: [],
+        };
+      }
+      const externalSkills = filterExternalSkillsBySelection(
+        await loadExternalSkills(),
+        deepResearchConfig.selectedSkillNames,
+      );
+      const legacyModel = buildLegacyModelSettings(input.settings);
+      const validateModelConfig = buildLanguageModel(
+        input.settings?.models?.validate,
+        input.settings?.models?.search ??
+          input.settings?.models?.chat ??
+          legacyModel,
+      );
+      const extractModelConfig = buildLanguageModel(
+        input.settings?.models?.extract,
+        input.settings?.models?.validate ??
+          input.settings?.models?.search ??
+          input.settings?.models?.chat ??
+          legacyModel,
+      );
+      const deepResearchStore = createDeepResearchPersistenceAdapter(
+        input.projectPath,
+      );
+      const query = input.query.trim();
+      const result = await runDeepSearchTool({
+        query,
+        searchModel: validateModelConfig.model,
+        extractModel: extractModelConfig.model,
+        deepResearchStore,
+        deepResearchConfig,
+        externalSkills,
+        mode: "validate",
+        validateTargetAnswer: input.answer,
+      });
+      return {
+        status: "complete" as const,
+        mode: "validate" as const,
+        query,
+        searchId: result.searchId,
+        projectId: result.projectId,
+        references: result.references,
+        sources: result.sources,
+      };
     }),
   stream: baseProcedure
     .input(
@@ -364,6 +435,10 @@ export const chatRouter = createTRPCRouter({
         searchModel: searchModelConfig?.resolved.llmModelId,
         extractModel: extractModelConfig?.resolved.llmModelId,
         deepResearchEnabled: deepResearchConfig.enabled,
+        searchEnabled:
+          deepResearchConfig.enabled &&
+          deepResearchConfig.strictness !== "no-search",
+        validateEnabled: deepResearchConfig.validate.enabled,
       });
       const stream = createUIMessageStream<DeertubeUIMessage>({
         originalMessages: input.messages,
@@ -371,7 +446,10 @@ export const chatRouter = createTRPCRouter({
           const modelMessages = await convertToModelMessages(modelInputMessages, {
             ignoreIncompleteToolCalls: true,
           });
-          if (!deepResearchConfig.enabled) {
+          const useDeepResearchTools =
+            deepResearchConfig.enabled &&
+            deepResearchConfig.strictness !== "no-search";
+          if (!useDeepResearchTools) {
             const result = streamText({
               model: chatModelConfig.model,
               system: systemPrompt,
@@ -388,6 +466,7 @@ export const chatRouter = createTRPCRouter({
             model: searchModelConfig?.model,
             searchModel: searchModelConfig?.model,
             extractModel: extractModelConfig?.model,
+            deepSearchExecutionMode: "enabled",
             tavilyApiKey: input.settings?.tavilyApiKey,
             jinaReaderBaseUrl: input.settings?.jinaReaderBaseUrl,
             jinaReaderApiKey: input.settings?.jinaReaderApiKey,

@@ -126,6 +126,30 @@ export const SearchSubagentFinalItemSchema = z
       .array(LineSelectionSchema)
       .default([])
       .describe("Relevant line selections for this URL."),
+    validationRefContent: z
+      .string()
+      .optional()
+      .describe(
+        "Validate-mode only: concise reference-specific support/refutation summary for the answer being checked.",
+      ),
+    accuracy: z
+      .enum(["high", "medium", "low", "conflicting", "insufficient"])
+      .optional()
+      .describe(
+        "Validate-mode only: evidence accuracy grade for this reference item.",
+      ),
+    issueReason: z
+      .string()
+      .optional()
+      .describe(
+        "Validate-mode only: why the checked claim/answer is wrong or risky according to this reference.",
+      ),
+    correctFact: z
+      .string()
+      .optional()
+      .describe(
+        "Validate-mode only: corrected fact/state according to this reference.",
+      ),
     broken: z
       .boolean()
       .optional()

@@ -42,6 +42,7 @@ export const writeDeepSearchStream = (
   toolCallId: string | undefined,
   toolName: string | undefined,
   payload: {
+    mode?: "search" | "validate";
     query?: string;
     projectId?: string;
     searchId?: string;
@@ -408,6 +409,29 @@ export const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
       typeof item.viewpoint === "string" ? item.viewpoint.trim() : "";
     const content =
       typeof item.content === "string" ? item.content.trim() : undefined;
+    const validationRefContent =
+      typeof item.validationRefContent === "string" &&
+      item.validationRefContent.trim().length > 0
+        ? item.validationRefContent.trim()
+        : undefined;
+    const issueReason =
+      typeof item.issueReason === "string" &&
+      item.issueReason.trim().length > 0
+        ? item.issueReason.trim()
+        : undefined;
+    const correctFact =
+      typeof item.correctFact === "string" &&
+      item.correctFact.trim().length > 0
+        ? item.correctFact.trim()
+        : undefined;
+    const accuracy =
+      item.accuracy === "high" ||
+      item.accuracy === "medium" ||
+      item.accuracy === "low" ||
+      item.accuracy === "conflicting" ||
+      item.accuracy === "insufficient"
+        ? item.accuracy
+        : undefined;
     const selections = parseLineSelections(item.selections);
     const broken = typeof item.broken === "boolean" ? item.broken : undefined;
     const inrelavate =
@@ -433,6 +457,10 @@ export const normalizeSearchResults = (raw: JsonValue): SearchResult[] => {
       title,
       viewpoint,
       content,
+      validationRefContent,
+      accuracy,
+      issueReason,
+      correctFact,
       selections,
       broken,
       inrelavate,
@@ -498,6 +526,20 @@ export const dedupeSearchResults = (
           preferred.content && preferred.content.length > 0
             ? preferred.content
             : secondary.content,
+        validationRefContent:
+          preferred.validationRefContent &&
+          preferred.validationRefContent.length > 0
+            ? preferred.validationRefContent
+            : secondary.validationRefContent,
+        accuracy: preferred.accuracy ?? secondary.accuracy,
+        issueReason:
+          preferred.issueReason && preferred.issueReason.length > 0
+            ? preferred.issueReason
+            : secondary.issueReason,
+        correctFact:
+          preferred.correctFact && preferred.correctFact.length > 0
+            ? preferred.correctFact
+            : secondary.correctFact,
         pageId: preferred.pageId ?? secondary.pageId,
         lineCount: preferred.lineCount ?? secondary.lineCount,
         selections: mergedSelections,
@@ -738,7 +780,9 @@ export const buildDeepSearchReferences = (
   results: SearchResult[],
   projectId: string | undefined,
   searchId: string,
+  options?: { includeValidationFields?: boolean },
 ): DeepSearchReference[] => {
+  const includeValidationFields = options?.includeValidationFields ?? false;
   const references: DeepSearchReference[] = [];
   const dedupe = new Set<string>();
 
@@ -776,6 +820,12 @@ export const buildDeepSearchReferences = (
         startLine: candidate.start,
         endLine: candidate.end,
         text: candidate.text,
+        validationRefContent: includeValidationFields
+          ? result.validationRefContent
+          : undefined,
+        accuracy: includeValidationFields ? result.accuracy : undefined,
+        issueReason: includeValidationFields ? result.issueReason : undefined,
+        correctFact: includeValidationFields ? result.correctFact : undefined,
       });
     }
   }

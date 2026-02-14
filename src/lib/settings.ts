@@ -1,6 +1,6 @@
-export type LlmPurpose = 'chat' | 'search' | 'extract' | 'graph'
+export type LlmPurpose = 'chat' | 'search' | 'extract' | 'graph' | 'validate'
 
-export const LLM_PURPOSES: LlmPurpose[] = ['chat', 'search', 'extract', 'graph']
+export const LLM_PURPOSES: LlmPurpose[] = ['chat', 'search', 'extract', 'graph', 'validate']
 
 export interface LlmProviderConfig {
   id: string
@@ -22,6 +22,7 @@ export interface LlmUsageConfig {
   search: string
   extract: string
   graph: string
+  validate: string
 }
 
 export interface LlmRuntimeModelSettings {
@@ -95,6 +96,7 @@ const createDefaultLlmUsage = (modelId: string): LlmUsageConfig => ({
   search: modelId,
   extract: modelId,
   graph: modelId,
+  validate: modelId,
 })
 
 const createDefaultProfile = (): ProviderProfile => {
@@ -143,7 +145,8 @@ const normalizeUsage = (
   const search = pickValidModelId(usage?.search, models) ?? chat
   const extract = pickValidModelId(usage?.extract, models) ?? search
   const graph = pickValidModelId(usage?.graph, models) ?? chat
-  return { chat, search, extract, graph }
+  const validate = pickValidModelId(usage?.validate, models) ?? search
+  return { chat, search, extract, graph, validate }
 }
 
 const normalizeProfile = (raw: LegacyProviderProfile): ProviderProfile => {

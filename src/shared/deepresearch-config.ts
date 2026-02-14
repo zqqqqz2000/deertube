@@ -1,4 +1,5 @@
 import { z } from "zod";
+import Mustache from "mustache";
 import {
   AgentSkillProfileSchema,
   buildSkillRegistryPromptBlock,
@@ -6,11 +7,22 @@ import {
   type RuntimeAgentSkill,
 } from "./agent-skills";
 
+Mustache.escape = (value: string): string => value;
+
 const OptionalStringSchema = z.string().optional();
 
 export const DeepResearchStrictnessSchema = z.enum([
+  "no-search",
   "all-claims",
   "uncertain-claims",
+]);
+
+export const DeepResearchReferenceAccuracySchema = z.enum([
+  "high",
+  "medium",
+  "low",
+  "conflicting",
+  "insufficient",
 ]);
 
 export const SubagentSearchComplexitySchema = z.enum([
@@ -22,6 +34,9 @@ export const SubagentSearchComplexitySchema = z.enum([
 export const TavilySearchDepthSchema = z.enum(["basic", "advanced"]);
 
 export type DeepResearchStrictness = z.infer<typeof DeepResearchStrictnessSchema>;
+export type DeepResearchReferenceAccuracy = z.infer<
+  typeof DeepResearchReferenceAccuracySchema
+>;
 export type SubagentSearchComplexity = z.infer<
   typeof SubagentSearchComplexitySchema
 >;
@@ -35,6 +50,18 @@ export const DEEP_RESEARCH_PROMPT_PLACEHOLDERS = [
   {
     key: "strictness",
     description: "Current claim-support strictness mode.",
+  },
+  {
+    key: "searchEnabled",
+    description: "Whether search during answer generation is enabled.",
+  },
+  {
+    key: "validateEnabled",
+    description: "Whether async post-answer validation is enabled.",
+  },
+  {
+    key: "validateStrictness",
+    description: "Claim-support strictness mode for async validation.",
   },
   {
     key: "skillProfile",
@@ -76,6 +103,14 @@ export const DEEP_RESEARCH_PROMPT_PLACEHOLDERS = [
     key: "splitStrategy",
     description: "Search split strategy text.",
   },
+  {
+    key: "mode",
+    description: "Subagent mode: search or validate.",
+  },
+  {
+    key: "answerToValidate",
+    description: "Assistant answer text to validate in validate mode.",
+  },
 ] as const;
 
 export const DEFAULT_SUBAGENT_SOURCE_SELECTION_POLICY =
@@ -97,6 +132,12 @@ export const DeepResearchSubagentConfigSchema = z.object({
   systemPromptOverride: OptionalStringSchema,
 });
 
+export const DeepResearchValidateConfigSchema = z.object({
+  strictness: DeepResearchStrictnessSchema.optional(),
+  enabled: z.boolean().optional(),
+  subagent: DeepResearchSubagentConfigSchema.optional(),
+});
+
 export const DeepResearchConfigSchema = z.object({
   enabled: z.boolean().default(true),
   strictness: DeepResearchStrictnessSchema.default("all-claims"),
@@ -105,6 +146,7 @@ export const DeepResearchConfigSchema = z.object({
   fullPromptOverrideEnabled: z.boolean().default(false),
   mainPromptOverride: OptionalStringSchema,
   subagent: DeepResearchSubagentConfigSchema.optional(),
+  validate: DeepResearchValidateConfigSchema.optional(),
 });
 
 export type DeepResearchSubagentConfigInput = z.input<
@@ -125,6 +167,12 @@ export interface DeepResearchSubagentConfig {
   systemPromptOverride?: string;
 }
 
+export interface DeepResearchValidateConfig {
+  strictness: DeepResearchStrictness;
+  enabled: boolean;
+  subagent: DeepResearchSubagentConfig;
+}
+
 export interface DeepResearchConfig {
   enabled: boolean;
   strictness: DeepResearchStrictness;
@@ -133,6 +181,7 @@ export interface DeepResearchConfig {
   fullPromptOverrideEnabled: boolean;
   mainPromptOverride?: string;
   subagent: DeepResearchSubagentConfig;
+  validate: DeepResearchValidateConfig;
 }
 
 export const DEFAULT_DEEP_RESEARCH_SUBAGENT_CONFIG: DeepResearchSubagentConfig =
@@ -147,6 +196,13 @@ export const DEFAULT_DEEP_RESEARCH_SUBAGENT_CONFIG: DeepResearchSubagentConfig =
     splitStrategy: DEFAULT_SUBAGENT_SPLIT_STRATEGY,
   };
 
+export const DEFAULT_DEEP_RESEARCH_VALIDATE_CONFIG: DeepResearchValidateConfig =
+  {
+    strictness: "no-search",
+    enabled: false,
+    subagent: DEFAULT_DEEP_RESEARCH_SUBAGENT_CONFIG,
+  };
+
 export const DEFAULT_DEEP_RESEARCH_CONFIG: DeepResearchConfig = {
   enabled: true,
   strictness: "all-claims",
@@ -154,6 +210,7 @@ export const DEFAULT_DEEP_RESEARCH_CONFIG: DeepResearchConfig = {
   selectedSkillNames: [],
   fullPromptOverrideEnabled: false,
   subagent: DEFAULT_DEEP_RESEARCH_SUBAGENT_CONFIG,
+  validate: DEFAULT_DEEP_RESEARCH_VALIDATE_CONFIG,
 };
 
 const normalizeOptionalPrompt = (value: string | undefined): string | undefined => {
@@ -209,6 +266,46 @@ export const resolveDeepResearchSubagentConfig = (
   };
 };
 
+export const resolveDeepResearchValidateConfig = (
+  input?: z.input<typeof DeepResearchValidateConfigSchema> | null,
+): DeepResearchValidateConfig => {
+  const parsed = DeepResearchValidateConfigSchema.safeParse(input ?? {});
+  const normalized = parsed.success ? parsed.data : undefined;
+  const strictness =
+    normalized?.strictness ??
+    (typeof normalized?.enabled === "boolean"
+      ? normalized.enabled
+        ? "all-claims"
+        : "no-search"
+      : DEFAULT_DEEP_RESEARCH_VALIDATE_CONFIG.strictness);
+  return {
+    strictness,
+    enabled: strictness !== "no-search",
+    subagent: resolveDeepResearchSubagentConfig(normalized?.subagent),
+  };
+};
+
+const buildValidateStrictnessLines = (
+  strictness: DeepResearchStrictness,
+): string[] => {
+  if (strictness === "uncertain-claims") {
+    return [
+      "Validate uncertain, contested, time-sensitive, and high-impact factual claims first.",
+      "Skip purely subjective/preference claims unless the answer presents them as objective facts.",
+      "For clearly deterministic claims, validate only when uncertainty remains.",
+    ];
+  }
+  if (strictness === "all-claims") {
+    return [
+      "Validate every material factual claim in the assistant answer.",
+      "When one sentence has multiple factual sub-claims, check each sub-claim.",
+    ];
+  }
+  return [
+    "Validation search is disabled. Do not continue search/extract and finalize with empty evidence.",
+  ];
+};
+
 export const resolveDeepResearchConfig = (
   input?: DeepResearchConfigInput | null,
 ): DeepResearchConfig => {
@@ -229,10 +326,18 @@ export const resolveDeepResearchConfig = (
       DEFAULT_DEEP_RESEARCH_CONFIG.fullPromptOverrideEnabled,
     mainPromptOverride: normalizeOptionalPrompt(normalized?.mainPromptOverride),
     subagent: resolveDeepResearchSubagentConfig(normalized?.subagent),
+    validate: resolveDeepResearchValidateConfig(normalized?.validate),
   };
 };
 
 const buildStrictnessLines = (strictness: DeepResearchStrictness): string[] => {
+  if (strictness === "no-search") {
+    return [
+      "Search is disabled for this reply. Do not call `deepSearch`.",
+      "Do not output deertube citation markers such as [1](deertube://...).",
+      "Answer directly from current context and reasoning.",
+    ];
+  }
   if (strictness === "uncertain-claims") {
     return [
       "For uncertain, contested, time-sensitive, or recommendation/factual claims, call the `deepSearch` tool and ground the answer in retrieved evidence.",
@@ -286,6 +391,16 @@ export const buildMainAgentSystemPrompt = (
     return [...baseLines, ...contextLines].filter(Boolean).join("\n\n");
   }
 
+  if (config.strictness === "no-search") {
+    return [
+      ...baseLines,
+      ...buildStrictnessLines(config.strictness),
+      ...contextLines,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
   const strictnessLines = buildStrictnessLines(config.strictness);
   return [
     ...baseLines,
@@ -328,12 +443,18 @@ const buildSubagentPromptTemplateVariables = (
   options?: {
     query?: string;
     strictness?: DeepResearchStrictness;
+    validateStrictness?: DeepResearchStrictness;
     skillProfile?: AgentSkillProfile;
     selectedSkillNames?: string[];
+    mode?: "search" | "validate";
+    answerToValidate?: string;
   },
 ): Record<string, string> => ({
   query: options?.query ?? "",
+  mode: options?.mode ?? "search",
+  answerToValidate: options?.answerToValidate ?? "",
   strictness: options?.strictness ?? "",
+  validateStrictness: options?.validateStrictness ?? "",
   skillProfile: options?.skillProfile ?? "",
   selectedSkillNames: normalizeSkillNames(options?.selectedSkillNames).join(", "),
   searchComplexity: config.searchComplexity,
@@ -349,26 +470,37 @@ const buildSubagentPromptTemplateVariables = (
 const buildMainPromptTemplateVariables = (
   config: DeepResearchConfig,
   query?: string,
-): Record<string, string> =>
-  buildSubagentPromptTemplateVariables(config.subagent, {
+): Record<string, string> => ({
+  ...buildSubagentPromptTemplateVariables(config.subagent, {
     query,
     strictness: config.strictness,
+    validateStrictness: config.validate.strictness,
     skillProfile: config.skillProfile,
     selectedSkillNames: config.selectedSkillNames,
-  });
+  }),
+  searchEnabled: String(config.strictness !== "no-search"),
+  validateEnabled: String(config.validate.strictness !== "no-search"),
+});
 
 const applyPromptTemplate = (
   template: string,
   variables: Record<string, string>,
   options?: { appendQueryWhenMissing?: boolean },
 ): string => {
-  const replaced = template.replace(
-    /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g,
-    (fullMatch, key: string) => {
-      const value = variables[key];
-      return typeof value === "string" ? value : fullMatch;
-    },
-  );
+  const placeholderMatches = template.match(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g) ?? [];
+  const renderedVariables: Record<string, string> = { ...variables };
+  placeholderMatches.forEach((entry) => {
+    const keyMatch = entry.match(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/);
+    const key = keyMatch?.[1];
+    if (!key) {
+      return;
+    }
+    if (typeof renderedVariables[key] !== "string") {
+      // Preserve unknown placeholders instead of replacing with empty strings.
+      renderedVariables[key] = `{{${key}}}`;
+    }
+  });
+  const replaced = Mustache.render(template, renderedVariables);
   const query = variables.query?.trim() ?? "";
   if (
     options?.appendQueryWhenMissing &&
@@ -384,13 +516,20 @@ export const buildSearchSubagentSystemPrompt = (
   options?: {
     subagentConfig?: DeepResearchSubagentConfigInput | null;
     query?: string;
+    strictness?: DeepResearchStrictness;
     skillProfile?: AgentSkillProfile;
     selectedSkillNames?: string[];
     availableSkills?: RuntimeAgentSkill[];
     fullPromptOverrideEnabled?: boolean;
+    mode?: "search" | "validate";
+    answerToValidate?: string;
   },
 ): string => {
   const config = resolveDeepResearchSubagentConfig(options?.subagentConfig);
+  const mode = options?.mode ?? "search";
+  const answerToValidate = options?.answerToValidate ?? "";
+  const strictness = options?.strictness ?? "all-claims";
+  const isValidateMode = mode === "validate";
   const skillRegistryPrompt = buildSkillRegistryPromptBlock({
     query: options?.query ?? "",
     profile: options?.skillProfile ?? "auto",
@@ -408,13 +547,29 @@ export const buildSearchSubagentSystemPrompt = (
       config.systemPromptOverride,
       buildSubagentPromptTemplateVariables(config, {
         query: options?.query,
+        strictness,
+        validateStrictness: isValidateMode ? strictness : undefined,
         skillProfile: options?.skillProfile,
         selectedSkillNames: options?.selectedSkillNames,
+        mode,
+        answerToValidate,
       }),
     );
   }
+  const modeSpecificLines = isValidateMode
+    ? [
+        "Validation target:",
+        answerToValidate.trim().length > 0
+          ? answerToValidate
+          : "(No answer text provided; validate against the user query only.)",
+        ...buildValidateStrictnessLines(strictness),
+      ]
+    : [];
   return [
-    "You are the DeepResearch subagent. Your task is to collect structured evidence through web search and page extraction.",
+    isValidateMode
+      ? "You are the DeepResearch validation subagent. Verify whether an existing assistant answer is well-supported by web evidence."
+      : "You are the DeepResearch subagent. Your task is to collect structured evidence through web search and page extraction.",
+    ...modeSpecificLines,
     "Available tools:",
     "- discoverSkills: List available domain skills and activation hints.",
     "- loadSkill: Load full guidance for a specific skill.",
@@ -443,9 +598,13 @@ export const buildSearchSubagentSystemPrompt = (
     "1) Decompose into distinct sub-tasks, then call search to gather candidates (<=6 per query, multiple query rounds allowed).",
     "2) Select relevant high-quality and non-redundant URLs, then call extract(url, query) for each.",
     "3) Extraction is mandatory. Do not stop after search-only results.",
-    "4) First decide your answer claims; then choose only the smallest sufficient evidence for each claim.",
+    isValidateMode
+      ? "4) First identify key claims from the answer-to-validate; then select only the smallest sufficient evidence for each claim."
+      : "4) First decide your answer claims; then choose only the smallest sufficient evidence for each claim.",
     "5) Finalization is mandatory: call writeResults exactly once with { results, errors }.",
-    "6) In writeResults input, each result item should include: url, viewpoint, content, selections.",
+    isValidateMode
+      ? "6) In writeResults input, each result item should include: url, viewpoint, content, selections, validationRefContent, accuracy, issueReason, correctFact."
+      : "6) In writeResults input, each result item should include: url, viewpoint, content, selections.",
     "7) `extract` returns line-numbered selections. All chosen selections must map to those numbered lines.",
     "8) Prefer small precise spans (typically 2-12 lines). Avoid broad/full-page spans unless strictly necessary.",
     "9) The same source can support multiple claims: keep multiple selections for one URL when needed.",
@@ -456,6 +615,9 @@ export const buildSearchSubagentSystemPrompt = (
     "14) Fatal tool failure rule: if every search call fails (e.g. Tavily errors) or every extract call fails (e.g. Jina errors), include clear reasons in `errors` so the outer agent can surface the failure to the user.",
     "15) Strict final-step rule: your very last action must be exactly one writeResults call.",
     "16) If writeResults is omitted at the end, the run is treated as failed.",
+    isValidateMode
+      ? "17) In validate mode, set `accuracy` per item to one of: high, medium, low, conflicting, insufficient. For low/conflicting/insufficient items, include `issueReason` and `correctFact` when the evidence allows."
+      : "",
     "Output rule: finalize via writeResults only. Do not output final JSON in plain text.",
     skillRegistryPrompt,
   ].join("\n");
@@ -464,15 +626,26 @@ export const buildSearchSubagentSystemPrompt = (
 export const buildSearchSubagentRuntimePrompt = ({
   query,
   subagentConfig,
+  strictness = "all-claims",
   fullPromptOverrideEnabled = false,
+  mode = "search",
+  answerToValidate = "",
 }: {
   query: string;
   subagentConfig?: DeepResearchSubagentConfigInput | null;
+  strictness?: DeepResearchStrictness;
   fullPromptOverrideEnabled?: boolean;
+  mode?: "search" | "validate";
+  answerToValidate?: string;
 }): string => {
   const config = resolveDeepResearchSubagentConfig(subagentConfig);
+  const isValidateMode = mode === "validate";
   const promptTemplateVariables = buildSubagentPromptTemplateVariables(config, {
     query,
+    strictness,
+    validateStrictness: isValidateMode ? strictness : undefined,
+    mode,
+    answerToValidate,
   });
   if (fullPromptOverrideEnabled && config.promptOverride) {
     return applyPromptTemplate(config.promptOverride, promptTemplateVariables, {
@@ -481,11 +654,23 @@ export const buildSearchSubagentRuntimePrompt = ({
   }
   return [
     `User question: ${query}`,
-    "Plan the final answer first, then output only the evidence references needed to support it.",
+    isValidateMode
+      ? "Validation mode: verify the provided answer, then output only evidence needed to support/refute its key claims."
+      : "Plan the final answer first, then output only the evidence references needed to support it.",
+    isValidateMode
+      ? `Answer to validate: ${
+          answerToValidate.trim().length > 0
+            ? answerToValidate
+            : "(empty; validate against question only)"
+        }`
+      : "",
+    ...(isValidateMode ? buildValidateStrictnessLines(strictness) : []),
     `${config.splitStrategy}`,
     "Prefer serial search: run one search call, inspect its results, then decide the next query.",
     "Language fallback strategy: start in the user-question language; only try English/other languages when results are empty, weak, or off-topic.",
-    "Each result item must include: url, viewpoint, content, selections.",
+    isValidateMode
+      ? "Each result item must include: url, viewpoint, content, selections, validationRefContent, accuracy, issueReason, correctFact."
+      : "Each result item must include: url, viewpoint, content, selections.",
     "Selections must be precise and minimal. Avoid broad/full-page spans unless strictly necessary.",
     "When one source supports multiple points, keep multiple small selections under the same URL.",
     "Merge duplicate viewpoints into one consolidated result item; do not repeat equivalent viewpoints.",
@@ -500,6 +685,9 @@ export const buildSearchSubagentRuntimePrompt = ({
     `Do not extract the same URL more than ${config.maxRepeatExtractUrl} times.`,
     "Finalization rule (strict): your very last step must be exactly one `writeResults` call.",
     "If `writeResults` is not called at the end, the run is treated as failed.",
+    isValidateMode
+      ? "Validation accuracy rubric: high (directly and strongly supported), medium (mostly supported with minor gaps), low (weakly supported), conflicting (evidence conflicts), insufficient (not enough evidence). For low/conflicting/insufficient outcomes, provide `issueReason` and `correctFact` whenever the evidence is sufficient to state them."
+      : "",
     "When evidence is sufficient, call `writeResults` exactly once with { results, errors }.",
   ].join("\n");
 };

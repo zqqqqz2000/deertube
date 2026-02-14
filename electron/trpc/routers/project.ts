@@ -30,6 +30,7 @@ interface ProjectChatSummary {
   title: string
   createdAt: string
   updatedAt: string
+  isRunning: boolean
 }
 
 interface ProjectStoreState {
@@ -146,6 +147,7 @@ function toChatSummary(chat: ProjectChatRecord): ProjectChatSummary {
     title: chat.title,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
+    isRunning: false,
   }
 }
 
@@ -203,6 +205,7 @@ const RuntimeSettingsSchema = z.object({
       search: ModelSettingsSchema.optional(),
       extract: ModelSettingsSchema.optional(),
       graph: ModelSettingsSchema.optional(),
+      validate: ModelSettingsSchema.optional(),
     })
     .optional(),
 })

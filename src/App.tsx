@@ -18,9 +18,24 @@ interface ProjectState {
   autoLayoutLocked?: boolean
 }
 
+interface WorkspaceSession {
+  project: ProjectInfo
+  initialState: ProjectState
+}
+
+const toProjectState = (result: ProjectOpenResult): ProjectState => ({
+  nodes: result.state.nodes,
+  edges: result.state.edges,
+  chat: result.state.chat ?? [],
+  autoLayoutLocked:
+    typeof result.state.autoLayoutLocked === 'boolean'
+      ? result.state.autoLayoutLocked
+      : true,
+})
+
 function App() {
-  const [project, setProject] = useState<ProjectInfo | null>(null)
-  const [projectState, setProjectState] = useState<ProjectState | null>(null)
+  const [projectSessions, setProjectSessions] = useState<WorkspaceSession[]>([])
+  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null)
   const [initializing, setInitializing] = useState(true)
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme())
 
@@ -30,16 +45,20 @@ function App() {
   }, [theme])
 
   const handleOpen = useCallback((result: ProjectOpenResult) => {
-    setProject({ path: result.path, name: result.name })
-    setProjectState({
-      nodes: result.state.nodes,
-      edges: result.state.edges,
-      chat: result.state.chat ?? [],
-      autoLayoutLocked:
-        typeof result.state.autoLayoutLocked === 'boolean'
-          ? result.state.autoLayoutLocked
-          : true,
+    const nextProject: ProjectInfo = { path: result.path, name: result.name }
+    const nextState = toProjectState(result)
+    setProjectSessions((previous) => {
+      const existingIndex = previous.findIndex(
+        (session) => session.project.path === nextProject.path,
+      )
+      if (existingIndex < 0) {
+        return [...previous, { project: nextProject, initialState: nextState }]
+      }
+      return previous.map((session, index) =>
+        index === existingIndex ? { ...session, project: nextProject } : session,
+      )
     })
+    setActiveProjectPath(nextProject.path)
   }, [])
 
   useEffect(() => {
@@ -64,7 +83,7 @@ function App() {
     }
   }, [handleOpen])
 
-  if (initializing && !project) {
+  if (initializing && projectSessions.length === 0) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-gradient-to-br from-[var(--surface-1)] via-[var(--surface-2)] to-[var(--surface-3)] text-foreground">
         <div className="rounded-xl border border-border/70 bg-card/80 px-6 py-4 text-xs uppercase tracking-[0.3em] text-muted-foreground shadow-lg">
@@ -76,20 +95,25 @@ function App() {
 
   return (
     <div className="h-screen w-screen">
-      {project && projectState ? (
-        <FlowWorkspace
-          project={project}
-          initialState={projectState}
-          theme={theme}
-          onToggleTheme={() =>
-            setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
-          }
-          onExit={() => {
-            setProject(null)
-            setProjectState(null)
-          }}
-        />
-      ) : (
+      {projectSessions.map((session) => (
+        <div
+          key={session.project.path}
+          className={session.project.path === activeProjectPath ? 'h-full w-full' : 'hidden'}
+        >
+          <FlowWorkspace
+            project={session.project}
+            initialState={session.initialState}
+            theme={theme}
+            onToggleTheme={() =>
+              setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+            }
+            onExit={() => {
+              setActiveProjectPath(null)
+            }}
+          />
+        </div>
+      ))}
+      {activeProjectPath ? null : (
         <ProjectPicker onOpen={handleOpen} />
       )}
     </div>

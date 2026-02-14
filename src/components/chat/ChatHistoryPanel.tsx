@@ -93,12 +93,19 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   DEEP_RESEARCH_PROMPT_PLACEHOLDERS,
   buildMainAgentSystemPrompt,
   buildSearchSubagentRuntimePrompt,
   buildSearchSubagentSystemPrompt,
   DeepResearchConfig,
   resolveDeepResearchConfig,
+  type DeepResearchStrictness,
   type SubagentSearchComplexity,
   type TavilySearchDepth,
 } from "@/shared/deepresearch-config";
@@ -212,14 +219,40 @@ const TAVILY_SEARCH_DEPTH_OPTIONS: {
   { value: "basic", label: "Basic" },
   { value: "advanced", label: "Advanced" },
 ];
+const SEARCH_POLICY_OPTIONS: {
+  value: DeepResearchStrictness;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "no-search",
+    label: "Never",
+    description: "Do not run search.",
+  },
+  {
+    value: "uncertain-claims",
+    label: "Uncertain",
+    description: "Run search only for uncertain claims.",
+  },
+  {
+    value: "all-claims",
+    label: "Every Claim",
+    description: "Run search for every claim.",
+  },
+];
 const OVERRIDE_TEMPLATE_PLACEHOLDER_KEYS = [
   "query",
+  "searchEnabled",
+  "validateEnabled",
+  "validateStrictness",
   "searchComplexity",
   "tavilySearchDepth",
   "maxSearchCalls",
   "maxExtractCalls",
   "maxRepeatSearchQuery",
   "maxRepeatExtractUrl",
+  "mode",
+  "answerToValidate",
 ] as const;
 const OVERRIDE_TEMPLATE_PLACEHOLDER_HINT = `Placeholders: ${OVERRIDE_TEMPLATE_PLACEHOLDER_KEYS.map((key) => `{{${key}}}`).join(", ")}`;
 const OVERRIDE_TEMPLATE_PLACEHOLDER_TITLES = DEEP_RESEARCH_PROMPT_PLACEHOLDERS
@@ -230,6 +263,17 @@ const OVERRIDE_TEMPLATE_PLACEHOLDER_TITLES = DEEP_RESEARCH_PROMPT_PLACEHOLDERS
   )
   .map((item) => `{{${item.key}}}: ${item.description}`)
   .join("\n");
+
+const searchPolicyToIndex = (strictness: DeepResearchStrictness): number => {
+  const index = SEARCH_POLICY_OPTIONS.findIndex(
+    (option) => option.value === strictness,
+  );
+  return index >= 0 ? index : 1;
+};
+
+const indexToSearchPolicy = (index: number): DeepResearchStrictness =>
+  SEARCH_POLICY_OPTIONS[Math.min(2, Math.max(0, index))]?.value ??
+  "uncertain-claims";
 
 const truncateInline = (value: string, maxChars = TOOL_DETAIL_MAX_CHARS): string => {
   const singleLine = value.replace(/\s+/g, " ").trim();
@@ -259,6 +303,62 @@ const stripLineNumberPrefix = (value: string): string =>
     })
     .join("\n")
     .trim();
+
+const formatAccuracyLabel = (
+  accuracy: string | undefined,
+): string | null => {
+  if (!accuracy) {
+    return null;
+  }
+  if (accuracy === "high") return "High";
+  if (accuracy === "medium") return "Medium";
+  if (accuracy === "low") return "Low";
+  if (accuracy === "conflicting") return "Conflicting";
+  if (accuracy === "insufficient") return "Insufficient";
+  return null;
+};
+
+const getValidateAccuracyToneClasses = (
+  accuracy: string | undefined,
+): string => {
+  if (accuracy === "high") {
+    return "border-emerald-400/45 bg-emerald-500/10";
+  }
+  if (accuracy === "medium") {
+    return "border-amber-400/45 bg-amber-500/10";
+  }
+  if (accuracy === "low") {
+    return "border-orange-400/45 bg-orange-500/10";
+  }
+  if (accuracy === "conflicting") {
+    return "border-red-400/45 bg-red-500/10";
+  }
+  if (accuracy === "insufficient") {
+    return "border-slate-400/45 bg-slate-500/10";
+  }
+  return "border-border/70 bg-card/60";
+};
+
+const getValidateAccuracyTextClass = (
+  accuracy: string | undefined,
+): string => {
+  if (accuracy === "high") {
+    return "text-emerald-700 dark:text-emerald-300";
+  }
+  if (accuracy === "medium") {
+    return "text-amber-700 dark:text-amber-300";
+  }
+  if (accuracy === "low") {
+    return "text-orange-700 dark:text-orange-300";
+  }
+  if (accuracy === "conflicting") {
+    return "text-red-700 dark:text-red-300";
+  }
+  if (accuracy === "insufficient") {
+    return "text-slate-700 dark:text-slate-300";
+  }
+  return "text-muted-foreground";
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   isJsonObject(value);
@@ -522,6 +622,12 @@ export default function ChatHistoryPanel({
   const ignoreHighlightRef = useRef(false);
   const [advancedPanelOpen, setAdvancedPanelOpen] = useState(false);
   const [deepResearchQuickOpen, setDeepResearchQuickOpen] = useState(false);
+  const [quickConfigTab, setQuickConfigTab] = useState<"search" | "validate">(
+    "search",
+  );
+  const [advancedConfigTab, setAdvancedConfigTab] = useState<
+    "search" | "validate"
+  >("search");
   const [skillsDirectory, setSkillsDirectory] = useState("");
   const [searchSkillOptions, setSearchSkillOptions] = useState<
     SearchSkillOption[]
@@ -536,10 +642,19 @@ export default function ChatHistoryPanel({
     () => resolveDeepResearchConfig(deepResearchConfig),
     [deepResearchConfig],
   );
-  const requireCertainClaimSupport =
-    resolvedDeepResearchConfig.strictness === "all-claims";
+  const searchPolicy = resolvedDeepResearchConfig.strictness;
+  const searchPolicyIndex = searchPolicyToIndex(searchPolicy);
+  const searchEnabled = searchPolicy !== "no-search";
+  const validatePolicy = resolvedDeepResearchConfig.validate.strictness;
+  const validatePolicyIndex = searchPolicyToIndex(validatePolicy);
+  const validateEnabled = validatePolicy !== "no-search";
+  const deepResearchSwitchEnabled = resolvedDeepResearchConfig.enabled;
+  const deepResearchActive =
+    deepResearchSwitchEnabled && (searchEnabled || validateEnabled);
   const highSearchComplexity =
     resolvedDeepResearchConfig.subagent.searchComplexity === "deep";
+  const highValidateSearchComplexity =
+    resolvedDeepResearchConfig.validate.subagent.searchComplexity === "deep";
   const fullPromptOverrideEnabled =
     resolvedDeepResearchConfig.fullPromptOverrideEnabled;
   const selectedSkillNames = resolvedDeepResearchConfig.selectedSkillNames;
@@ -552,6 +667,14 @@ export default function ChatHistoryPanel({
         ...resolvedDeepResearchConfig.subagent,
         systemPromptOverride: undefined,
         promptOverride: undefined,
+      },
+      validate: {
+        ...resolvedDeepResearchConfig.validate,
+        subagent: {
+          ...resolvedDeepResearchConfig.validate.subagent,
+          systemPromptOverride: undefined,
+          promptOverride: undefined,
+        },
       },
     });
     const queryPlaceholder = "{{query}}";
@@ -570,6 +693,24 @@ export default function ChatHistoryPanel({
         query: queryPlaceholder,
         subagentConfig: baseConfig.subagent,
         fullPromptOverrideEnabled: false,
+      }),
+      validateSubagentSystemPrompt: buildSearchSubagentSystemPrompt({
+        subagentConfig: baseConfig.validate.subagent,
+        query: queryPlaceholder,
+        strictness: baseConfig.validate.strictness,
+        skillProfile: baseConfig.skillProfile,
+        selectedSkillNames: baseConfig.selectedSkillNames,
+        fullPromptOverrideEnabled: false,
+        mode: "validate",
+        answerToValidate: "{{answerToValidate}}",
+      }),
+      validateSubagentRuntimePrompt: buildSearchSubagentRuntimePrompt({
+        query: queryPlaceholder,
+        subagentConfig: baseConfig.validate.subagent,
+        strictness: baseConfig.validate.strictness,
+        fullPromptOverrideEnabled: false,
+        mode: "validate",
+        answerToValidate: "{{answerToValidate}}",
       }),
     };
   }, [resolvedDeepResearchConfig]);
@@ -1064,6 +1205,39 @@ export default function ChatHistoryPanel({
     },
     [onDeepResearchConfigChange, resolvedDeepResearchConfig],
   );
+  const setSearchPolicy = useCallback(
+    (strictness: DeepResearchStrictness) => {
+      patchDeepResearchConfig({
+        strictness,
+        enabled:
+          strictness === "no-search"
+            ? resolvedDeepResearchConfig.enabled
+            : true,
+      });
+    },
+    [patchDeepResearchConfig, resolvedDeepResearchConfig.enabled],
+  );
+  const setValidatePolicy = useCallback(
+    (strictness: DeepResearchStrictness) => {
+      patchDeepResearchConfig({
+        enabled:
+          strictness === "no-search"
+            ? resolvedDeepResearchConfig.enabled
+            : true,
+        validate: {
+          ...resolvedDeepResearchConfig.validate,
+          strictness,
+          enabled: strictness !== "no-search",
+        },
+      });
+    },
+    [patchDeepResearchConfig, resolvedDeepResearchConfig],
+  );
+  const handleToggleDeepResearchMaster = useCallback(() => {
+    patchDeepResearchConfig({
+      enabled: !resolvedDeepResearchConfig.enabled,
+    });
+  }, [patchDeepResearchConfig, resolvedDeepResearchConfig.enabled]);
   const patchSubagentConfig = useCallback(
     (patch: Partial<DeepResearchConfig["subagent"]>) => {
       onDeepResearchConfigChange(
@@ -1072,6 +1246,23 @@ export default function ChatHistoryPanel({
           subagent: {
             ...resolvedDeepResearchConfig.subagent,
             ...patch,
+          },
+        }),
+      );
+    },
+    [onDeepResearchConfigChange, resolvedDeepResearchConfig],
+  );
+  const patchValidateSubagentConfig = useCallback(
+    (patch: Partial<DeepResearchConfig["validate"]["subagent"]>) => {
+      onDeepResearchConfigChange(
+        resolveDeepResearchConfig({
+          ...resolvedDeepResearchConfig,
+          validate: {
+            ...resolvedDeepResearchConfig.validate,
+            subagent: {
+              ...resolvedDeepResearchConfig.validate.subagent,
+              ...patch,
+            },
           },
         }),
       );
@@ -1097,6 +1288,25 @@ export default function ChatHistoryPanel({
     },
     [patchSubagentConfig],
   );
+  const handleNumericValidateSubagentChange = useCallback(
+    (
+      key:
+        | "maxSearchCalls"
+        | "maxExtractCalls"
+        | "maxRepeatSearchQuery"
+        | "maxRepeatExtractUrl",
+      rawValue: string,
+    ) => {
+      const parsed = Number.parseInt(rawValue, 10);
+      if (!Number.isFinite(parsed)) {
+        return;
+      }
+      patchValidateSubagentConfig({
+        [key]: parsed,
+      } as Partial<DeepResearchConfig["validate"]["subagent"]>);
+    },
+    [patchValidateSubagentConfig],
+  );
   const handleFullPromptOverrideToggle = useCallback(
     (checked: boolean) => {
       if (!checked) {
@@ -1119,6 +1329,19 @@ export default function ChatHistoryPanel({
               resolvedDeepResearchConfig.subagent.promptOverride ??
               defaultOverridePrompts.subagentRuntimePrompt,
           },
+          validate: {
+            ...resolvedDeepResearchConfig.validate,
+            subagent: {
+              ...resolvedDeepResearchConfig.validate.subagent,
+              systemPromptOverride:
+                resolvedDeepResearchConfig.validate.subagent
+                  .systemPromptOverride ??
+                defaultOverridePrompts.validateSubagentSystemPrompt,
+              promptOverride:
+                resolvedDeepResearchConfig.validate.subagent.promptOverride ??
+                defaultOverridePrompts.validateSubagentRuntimePrompt,
+            },
+          },
         }),
       );
     },
@@ -1126,6 +1349,8 @@ export default function ChatHistoryPanel({
       defaultOverridePrompts.mainPrompt,
       defaultOverridePrompts.subagentRuntimePrompt,
       defaultOverridePrompts.subagentSystemPrompt,
+      defaultOverridePrompts.validateSubagentRuntimePrompt,
+      defaultOverridePrompts.validateSubagentSystemPrompt,
       onDeepResearchConfigChange,
       patchDeepResearchConfig,
       resolvedDeepResearchConfig,
@@ -2056,6 +2281,9 @@ export default function ChatHistoryPanel({
                 const sources = Array.isArray(outputPayload?.sources)
                   ? outputPayload?.sources ?? []
                   : [];
+                const references = Array.isArray(outputPayload?.references)
+                  ? outputPayload.references
+                  : [];
                 const conclusion =
                   typeof outputPayload?.conclusion === "string"
                     ? outputPayload.conclusion
@@ -2081,9 +2309,11 @@ export default function ChatHistoryPanel({
                   eventMessage.toolName ??
                   outputPayload?.toolName ??
                   "DeepSearch";
+                const isValidateMode = outputPayload?.mode === "validate";
                 const hasDetails =
                   !!query ||
                   sources.length > 0 ||
+                  references.length > 0 ||
                   !!conclusion ||
                   Boolean(callDetail) ||
                   Boolean(resultDetail);
@@ -2093,6 +2323,9 @@ export default function ChatHistoryPanel({
                 }
                 if (sources.length > 0) {
                   compactParts.push(`sources: ${sources.length}`);
+                }
+                if (references.length > 0) {
+                  compactParts.push(`refs: ${references.length}`);
                 }
                 const compactSummary = truncateInline(compactParts.join(" | "));
                 const deepSearchProgress = getProgressByStatuses([
@@ -2147,6 +2380,9 @@ export default function ChatHistoryPanel({
                                   {query && <div className="break-words">{`Query: ${query}`}</div>}
                                   {sources.length > 0 && (
                                     <div>{`Sources: ${sources.length}`}</div>
+                                  )}
+                                  {references.length > 0 && (
+                                    <div>{`References: ${references.length}`}</div>
                                   )}
                                 </div>
                                 {callDetail && (
@@ -2230,6 +2466,134 @@ export default function ChatHistoryPanel({
                                               {snippet}
                                             </div>
                                           )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                                {references.length > 0 && (
+                                  <div className="min-w-0 space-y-2">
+                                    {references.map((reference, index) => {
+                                      const refUri =
+                                        typeof reference.uri === "string"
+                                          ? reference.uri
+                                          : "";
+                                      const refUrl =
+                                        typeof reference.url === "string"
+                                          ? reference.url
+                                          : "";
+                                      const refTitle =
+                                        typeof reference.title === "string" &&
+                                        reference.title.trim().length > 0
+                                          ? reference.title
+                                          : refUrl || `Reference ${index + 1}`;
+                                      const refId =
+                                        typeof reference.refId === "number"
+                                          ? reference.refId
+                                          : index + 1;
+                                      const startLine =
+                                        typeof reference.startLine === "number"
+                                          ? reference.startLine
+                                          : undefined;
+                                      const endLine =
+                                        typeof reference.endLine === "number"
+                                          ? reference.endLine
+                                          : undefined;
+                                      const validationRefContent =
+                                        typeof reference.validationRefContent ===
+                                          "string" &&
+                                        reference.validationRefContent.trim()
+                                          .length > 0
+                                          ? reference.validationRefContent
+                                          : undefined;
+                                      const accuracyLabel = formatAccuracyLabel(
+                                        typeof reference.accuracy === "string"
+                                          ? reference.accuracy
+                                          : undefined,
+                                      );
+                                      const accuracyValue =
+                                        typeof reference.accuracy === "string"
+                                          ? reference.accuracy
+                                          : undefined;
+                                      const issueReason =
+                                        typeof reference.issueReason === "string" &&
+                                        reference.issueReason.trim().length > 0
+                                          ? reference.issueReason
+                                          : undefined;
+                                      const correctFact =
+                                        typeof reference.correctFact === "string" &&
+                                        reference.correctFact.trim().length > 0
+                                          ? reference.correctFact
+                                          : undefined;
+                                      const refText =
+                                        typeof reference.text === "string"
+                                          ? stripLineNumberPrefix(reference.text)
+                                          : "";
+                                      const openHref = refUri || refUrl;
+                                      return (
+                                        <button
+                                          key={`${item.id}-reference-${index}`}
+                                          type="button"
+                                          className={cn(
+                                            "w-full rounded-md border px-3 py-2 text-left text-xs transition",
+                                            isValidateMode
+                                              ? getValidateAccuracyToneClasses(
+                                                  accuracyValue,
+                                                )
+                                              : "border-border/70 bg-card/60",
+                                            "hover:border-border hover:bg-card/80",
+                                          )}
+                                          onClick={() => {
+                                            if (openHref && onReferenceClick) {
+                                              onReferenceClick(openHref, refTitle);
+                                            }
+                                          }}
+                                        >
+                                          <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                                            Ref {refId}
+                                          </div>
+                                          <div className="break-words text-sm font-semibold text-foreground">
+                                            {refTitle}
+                                          </div>
+                                          {accuracyLabel ? (
+                                            <div
+                                              className={cn(
+                                                "mt-1 text-[11px]",
+                                                isValidateMode
+                                                  ? getValidateAccuracyTextClass(
+                                                      accuracyValue,
+                                                    )
+                                                  : "text-muted-foreground",
+                                              )}
+                                            >
+                                              Accuracy: {accuracyLabel}
+                                            </div>
+                                          ) : null}
+                                          {startLine && endLine ? (
+                                            <div className="mt-1 text-[11px] text-muted-foreground">
+                                              Lines {startLine}-{endLine}
+                                            </div>
+                                          ) : null}
+                                          {validationRefContent ? (
+                                            <div className="mt-1 break-words text-[11px] text-foreground/90">
+                                              {validationRefContent}
+                                            </div>
+                                          ) : null}
+                                          {issueReason ? (
+                                            <div className="mt-1 break-words rounded border border-red-400/40 bg-red-500/10 px-2 py-1 text-[11px] text-red-700 dark:text-red-300">
+                                              Why wrong: {issueReason}
+                                            </div>
+                                          ) : null}
+                                          {correctFact ? (
+                                            <div className="mt-1 break-words rounded border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-700 dark:text-emerald-300">
+                                              Correct fact: {correctFact}
+                                            </div>
+                                          ) : null}
+                                          {refText ? (
+                                            <div className="mt-1 line-clamp-2 break-words text-[11px] text-muted-foreground">
+                                              {refText}
+                                            </div>
+                                          ) : null}
                                         </button>
                                       );
                                     })}
@@ -2421,7 +2785,7 @@ export default function ChatHistoryPanel({
             <div
               className={cn(
                 "inline-flex h-7 items-center overflow-visible rounded-md border text-[11px] font-medium transition",
-                resolvedDeepResearchConfig.enabled
+                deepResearchActive
                   ? "border-primary/45 bg-primary/10 text-primary shadow-sm"
                   : "border-border/70 bg-muted/40 text-muted-foreground",
               )}
@@ -2430,16 +2794,12 @@ export default function ChatHistoryPanel({
                 type="button"
                 className={cn(
                   "h-full px-2 tracking-[0.08em] transition",
-                  resolvedDeepResearchConfig.enabled
+                  deepResearchSwitchEnabled
                     ? "hover:bg-primary/15"
                     : "hover:bg-muted/60",
                 )}
-                aria-pressed={resolvedDeepResearchConfig.enabled}
-                onClick={() =>
-                  patchDeepResearchConfig({
-                    enabled: !resolvedDeepResearchConfig.enabled,
-                  })
-                }
+                aria-pressed={deepResearchSwitchEnabled}
+                onClick={handleToggleDeepResearchMaster}
               >
                 DeepResearch
               </button>
@@ -2479,32 +2839,83 @@ export default function ChatHistoryPanel({
                     event.stopPropagation();
                   }}
                 >
-                  <div className="space-y-2.5">
+                  <Tabs
+                    value={quickConfigTab}
+                    onValueChange={(value) =>
+                      setQuickConfigTab(value as "search" | "validate")
+                    }
+                    className="space-y-2.5"
+                  >
+                    <TabsList className="grid h-8 w-full grid-cols-2">
+                      <TabsTrigger value="search" className="text-[11px]">
+                        Search
+                        <span className="ml-1 text-[10px] opacity-70">
+                          {deepResearchSwitchEnabled && searchEnabled
+                            ? "On"
+                            : "Off"}
+                        </span>
+                      </TabsTrigger>
+                      <TabsTrigger value="validate" className="text-[11px]">
+                        Validate
+                        <span className="ml-1 text-[10px] opacity-70">
+                          {deepResearchSwitchEnabled && validateEnabled
+                            ? "On"
+                            : "Off"}
+                        </span>
+                      </TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="search" className="space-y-2.5">
                       <div
                         className={cn(
-                          "flex items-center justify-between gap-3",
-                          fullPromptOverrideEnabled && "opacity-45",
+                          "space-y-1.5 rounded-md border border-border/70 bg-muted/20 p-2",
+                          (fullPromptOverrideEnabled ||
+                            !deepResearchSwitchEnabled) &&
+                            "opacity-45",
                         )}
                       >
-                        <div className="text-xs text-foreground/90">
-                          Every Claim Requires Evidence
+                        <div className="text-xs font-medium text-foreground/90">
+                          Search strategy
                         </div>
-                        <Switch
-                          checked={requireCertainClaimSupport}
-                          disabled={fullPromptOverrideEnabled}
-                          onCheckedChange={(checked) =>
-                            patchDeepResearchConfig({
-                              strictness: checked
-                                ? "all-claims"
-                                : "uncertain-claims",
-                            })
+                        <input
+                          type="range"
+                          min={0}
+                          max={2}
+                          step={1}
+                          value={searchPolicyIndex}
+                          disabled={
+                            fullPromptOverrideEnabled || !deepResearchSwitchEnabled
                           }
+                          onChange={(event) =>
+                            setSearchPolicy(
+                              indexToSearchPolicy(
+                                Number.parseInt(event.target.value, 10),
+                              ),
+                            )
+                          }
+                          className="h-1.5 w-full cursor-pointer accent-primary"
                         />
+                        <div className="grid grid-cols-3 gap-1 text-[10px] text-muted-foreground">
+                          {SEARCH_POLICY_OPTIONS.map((option) => (
+                            <div
+                              key={option.value}
+                              className={cn(
+                                "truncate text-center",
+                                option.value === searchPolicy && "text-foreground",
+                              )}
+                              title={option.description}
+                            >
+                              {option.label}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                       <div
                         className={cn(
                           "flex items-center justify-between gap-3",
-                          fullPromptOverrideEnabled && "opacity-45",
+                          (fullPromptOverrideEnabled ||
+                            !deepResearchSwitchEnabled ||
+                            !searchEnabled) &&
+                            "opacity-45",
                         )}
                       >
                         <div className="text-xs text-foreground/90">
@@ -2512,7 +2923,11 @@ export default function ChatHistoryPanel({
                         </div>
                         <Switch
                           checked={highSearchComplexity}
-                          disabled={fullPromptOverrideEnabled}
+                          disabled={
+                            fullPromptOverrideEnabled ||
+                            !deepResearchSwitchEnabled ||
+                            !searchEnabled
+                          }
                           onCheckedChange={(checked) =>
                             patchSubagentConfig({
                               searchComplexity: checked ? "deep" : "balanced",
@@ -2520,110 +2935,184 @@ export default function ChatHistoryPanel({
                           }
                         />
                       </div>
-                      <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                        <div className="mb-1.5 flex items-center justify-between gap-2">
-                          <div className="text-xs font-medium text-foreground/90">
-                            Search Skills
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 rounded-sm border border-border/70"
-                              title="Refresh skills"
-                              aria-label="Refresh skills"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void refreshSkillCatalog(true);
-                              }}
+                    </TabsContent>
+                    <TabsContent value="validate" className="space-y-2.5">
+                      <div
+                        className={cn(
+                          "space-y-1.5 rounded-md border border-border/70 bg-muted/20 p-2",
+                          (fullPromptOverrideEnabled ||
+                            !deepResearchSwitchEnabled) &&
+                            "opacity-45",
+                        )}
+                      >
+                        <div className="text-xs font-medium text-foreground/90">
+                          Search strategy
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={2}
+                          step={1}
+                          value={validatePolicyIndex}
+                          disabled={
+                            fullPromptOverrideEnabled || !deepResearchSwitchEnabled
+                          }
+                          onChange={(event) =>
+                            setValidatePolicy(
+                              indexToSearchPolicy(
+                                Number.parseInt(event.target.value, 10),
+                              ),
+                            )
+                          }
+                          className="h-1.5 w-full cursor-pointer accent-primary"
+                        />
+                        <div className="grid grid-cols-3 gap-1 text-[10px] text-muted-foreground">
+                          {SEARCH_POLICY_OPTIONS.map((option) => (
+                            <div
+                              key={option.value}
+                              className={cn(
+                                "truncate text-center",
+                                option.value === validatePolicy &&
+                                  "text-foreground",
+                              )}
+                              title={option.description}
                             >
-                              <RefreshCw
-                                className={cn(
-                                  "h-3.5 w-3.5",
-                                  skillsLoading && "animate-spin",
-                                )}
-                              />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 rounded-sm border border-border/70"
-                              title="Open skills folder"
-                              aria-label="Open skills folder"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleOpenSkillsDirectory();
-                              }}
-                            >
-                              <FolderOpen className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                        <div
-                          className="truncate text-[10px] text-muted-foreground"
-                          title={skillsDirectory || undefined}
-                        >
-                          {skillsDirectory || "Skills directory not loaded yet."}
-                        </div>
-                        <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                          Folders with names starting with <code>search-</code> are
-                          treated as search skills. Add new <code>search-*</code>{" "}
-                          skills in this folder, then click refresh.
-                        </div>
-                        {skillsError ? (
-                          <div className="mt-1 text-[10px] text-destructive">
-                            {skillsError}
-                          </div>
-                        ) : null}
-                        <div className="mt-2 max-h-28 space-y-1 overflow-auto pr-1">
-                          {searchSkillOptions.length === 0 ? (
-                            <div className="text-[10px] text-muted-foreground">
-                              No <code>search-*</code> skills found yet.
+                              {option.label}
                             </div>
-                          ) : (
-                            searchSkillOptions.map((skill) => {
-                              const selected = selectedSkillNames.includes(skill.name);
-                              return (
-                                <button
-                                  key={skill.name}
-                                  type="button"
-                                  className={cn(
-                                    "w-full rounded-md border px-2 py-1 text-left text-[11px] transition",
-                                    selected
-                                      ? "border-primary/45 bg-primary/10 text-primary"
-                                      : "border-border/70 bg-background/60 text-muted-foreground hover:text-foreground",
-                                  )}
-                                  title={`${skill.title}\n${skill.description}`}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    handleToggleSelectedSkill(skill.name);
-                                  }}
-                                >
-                                  <div className="truncate font-medium">{skill.name}</div>
-                                  <div className="truncate text-[10px] opacity-80">
-                                    {skill.title}
-                                  </div>
-                                </button>
-                              );
-                            })
-                          )}
+                          ))}
                         </div>
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="h-7 w-full justify-center border border-border/70 text-[11px]"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setDeepResearchQuickOpen(false);
-                          setAdvancedPanelOpen(true);
-                        }}
+                      <div
+                        className={cn(
+                          "flex items-center justify-between gap-3",
+                          (fullPromptOverrideEnabled ||
+                            !deepResearchSwitchEnabled ||
+                            !validateEnabled) &&
+                            "opacity-45",
+                        )}
                       >
-                        More
-                      </Button>
+                        <div className="text-xs text-foreground/90">
+                          Deeper Search
+                        </div>
+                        <Switch
+                          checked={highValidateSearchComplexity}
+                          disabled={
+                            fullPromptOverrideEnabled ||
+                            !deepResearchSwitchEnabled ||
+                            !validateEnabled
+                          }
+                          onCheckedChange={(checked) =>
+                            patchValidateSubagentConfig({
+                              searchComplexity: checked ? "deep" : "balanced",
+                            })
+                          }
+                        />
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+                  <div className="mt-2 rounded-md border border-border/70 bg-muted/20 p-2">
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
+                      <div className="text-xs font-medium text-foreground/90">
+                        Search Skills
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded-sm border border-border/70"
+                          title="Refresh skills"
+                          aria-label="Refresh skills"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void refreshSkillCatalog(true);
+                          }}
+                        >
+                          <RefreshCw
+                            className={cn(
+                              "h-3.5 w-3.5",
+                              skillsLoading && "animate-spin",
+                            )}
+                          />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded-sm border border-border/70"
+                          title="Open skills folder"
+                          aria-label="Open skills folder"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleOpenSkillsDirectory();
+                          }}
+                        >
+                          <FolderOpen className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div
+                      className="truncate text-[10px] text-muted-foreground"
+                      title={skillsDirectory || undefined}
+                    >
+                      {skillsDirectory || "Skills directory not loaded yet."}
+                    </div>
+                    <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                      Folders with names starting with <code>search-</code> are
+                      treated as search skills. Add new <code>search-*</code>{" "}
+                      skills in this folder, then click refresh.
+                    </div>
+                    {skillsError ? (
+                      <div className="mt-1 text-[10px] text-destructive">
+                        {skillsError}
+                      </div>
+                    ) : null}
+                    <div className="mt-2 max-h-28 space-y-1 overflow-auto pr-1">
+                      {searchSkillOptions.length === 0 ? (
+                        <div className="text-[10px] text-muted-foreground">
+                          No <code>search-*</code> skills found yet.
+                        </div>
+                      ) : (
+                        searchSkillOptions.map((skill) => {
+                          const selected = selectedSkillNames.includes(skill.name);
+                          return (
+                            <button
+                              key={skill.name}
+                              type="button"
+                              className={cn(
+                                "w-full rounded-md border px-2 py-1 text-left text-[11px] transition",
+                                selected
+                                  ? "border-primary/45 bg-primary/10 text-primary"
+                                  : "border-border/70 bg-background/60 text-muted-foreground hover:text-foreground",
+                              )}
+                              title={`${skill.title}\n${skill.description}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleToggleSelectedSkill(skill.name);
+                              }}
+                            >
+                              <div className="truncate font-medium">{skill.name}</div>
+                              <div className="truncate text-[10px] opacity-80">
+                                {skill.title}
+                              </div>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="mt-2 h-7 w-full justify-center border border-border/70 text-[11px]"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDeepResearchQuickOpen(false);
+                      setAdvancedPanelOpen(true);
+                    }}
+                  >
+                    More
+                  </Button>
                 </PopoverContent>
               </Popover>
             </div>
@@ -2719,200 +3208,517 @@ export default function ChatHistoryPanel({
                   </Select>
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div
-                  className={cn(
-                    "space-y-1.5",
-                    fullPromptOverrideEnabled && "opacity-45",
-                  )}
-                >
-                  <Label>Every Claim Requires Evidence</Label>
-                  <div className="flex h-9 items-center justify-between rounded-md border border-border bg-muted/30 px-3">
-                    <span className="text-xs text-foreground/90">
-                      When enabled, every claim must be supported by evidence.
+              <Tabs
+                value={advancedConfigTab}
+                onValueChange={(value) =>
+                  setAdvancedConfigTab(value as "search" | "validate")
+                }
+                className="space-y-4"
+              >
+                <TabsList className="grid h-9 w-full grid-cols-2">
+                  <TabsTrigger value="search">
+                    Search
+                    <span className="ml-1 text-[10px] opacity-70">
+                      {deepResearchSwitchEnabled && searchEnabled ? "On" : "Off"}
                     </span>
-                    <Switch
-                      checked={requireCertainClaimSupport}
-                      disabled={fullPromptOverrideEnabled}
-                      onCheckedChange={(checked) =>
-                        patchDeepResearchConfig({
-                          strictness: checked
-                            ? "all-claims"
-                            : "uncertain-claims",
-                        })
+                  </TabsTrigger>
+                  <TabsTrigger value="validate">
+                    Validate
+                    <span className="ml-1 text-[10px] opacity-70">
+                      {deepResearchSwitchEnabled && validateEnabled
+                        ? "On"
+                        : "Off"}
+                    </span>
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="search" className="space-y-3">
+                  <div
+                    className={cn(
+                      "space-y-1.5 rounded-md border border-border bg-muted/30 px-3 py-2",
+                      (fullPromptOverrideEnabled ||
+                        !deepResearchSwitchEnabled) &&
+                        "opacity-45",
+                    )}
+                  >
+                    <Label>Search strategy</Label>
+                    <div className="text-xs text-foreground/90">
+                      Choose when to run search during answer generation.
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={2}
+                      step={1}
+                      value={searchPolicyIndex}
+                      disabled={
+                        fullPromptOverrideEnabled || !deepResearchSwitchEnabled
                       }
+                      onChange={(event) =>
+                        setSearchPolicy(
+                          indexToSearchPolicy(
+                            Number.parseInt(event.target.value, 10),
+                          ),
+                        )
+                      }
+                      className="h-1.5 w-full cursor-pointer accent-primary"
                     />
+                    <div className="grid grid-cols-3 gap-1 text-[11px] text-muted-foreground">
+                      {SEARCH_POLICY_OPTIONS.map((option) => (
+                        <div
+                          key={option.value}
+                          className={cn(
+                            "truncate text-center",
+                            option.value === searchPolicy && "text-foreground",
+                          )}
+                          title={option.description}
+                        >
+                          {option.label}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <div
-                  className={cn(
-                    "space-y-1.5",
-                    fullPromptOverrideEnabled && "opacity-45",
+                  <div
+                    className={cn(
+                      "grid gap-3 sm:grid-cols-2",
+                      (!deepResearchSwitchEnabled || !searchEnabled) &&
+                        "opacity-45",
+                    )}
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-search-complexity">Search Complexity</Label>
+                      <Select
+                        value={resolvedDeepResearchConfig.subagent.searchComplexity}
+                        disabled={
+                          fullPromptOverrideEnabled ||
+                          !deepResearchSwitchEnabled ||
+                          !searchEnabled
+                        }
+                        onValueChange={(value) =>
+                          patchSubagentConfig({
+                            searchComplexity: value as SubagentSearchComplexity,
+                          })
+                        }
+                      >
+                        <SelectTrigger id="dr-search-complexity">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SEARCH_COMPLEXITY_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-search-depth">Tavily Search Depth</Label>
+                      <Select
+                        value={resolvedDeepResearchConfig.subagent.tavilySearchDepth}
+                        disabled={!deepResearchSwitchEnabled || !searchEnabled}
+                        onValueChange={(value) =>
+                          patchSubagentConfig({
+                            tavilySearchDepth: value as TavilySearchDepth,
+                          })
+                        }
+                      >
+                        <SelectTrigger id="dr-search-depth">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TAVILY_SEARCH_DEPTH_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div
+                    className={cn(
+                      "grid gap-3 sm:grid-cols-2",
+                      (!deepResearchSwitchEnabled || !searchEnabled) &&
+                        "opacity-45",
+                    )}
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-max-search">Max Search Calls</Label>
+                      <Input
+                        id="dr-max-search"
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={String(resolvedDeepResearchConfig.subagent.maxSearchCalls)}
+                        onChange={(event) =>
+                          handleNumericSubagentChange(
+                            "maxSearchCalls",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-max-extract">Max Extract Calls</Label>
+                      <Input
+                        id="dr-max-extract"
+                        type="number"
+                        min={1}
+                        max={40}
+                        value={String(
+                          resolvedDeepResearchConfig.subagent.maxExtractCalls,
+                        )}
+                        onChange={(event) =>
+                          handleNumericSubagentChange(
+                            "maxExtractCalls",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div
+                    className={cn(
+                      "grid gap-3 sm:grid-cols-2",
+                      (!deepResearchSwitchEnabled || !searchEnabled) &&
+                        "opacity-45",
+                    )}
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-repeat-search">
+                        Max Repeat for Same Query
+                      </Label>
+                      <Input
+                        id="dr-repeat-search"
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={String(
+                          resolvedDeepResearchConfig.subagent.maxRepeatSearchQuery,
+                        )}
+                        onChange={(event) =>
+                          handleNumericSubagentChange(
+                            "maxRepeatSearchQuery",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-repeat-url">
+                        Max Repeat for Same URL
+                      </Label>
+                      <Input
+                        id="dr-repeat-url"
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={String(
+                          resolvedDeepResearchConfig.subagent.maxRepeatExtractUrl,
+                        )}
+                        onChange={(event) =>
+                          handleNumericSubagentChange(
+                            "maxRepeatExtractUrl",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  {fullPromptOverrideEnabled ? (
+                    <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      Prompt-level subagent strategy fields are hidden while Full
+                      Prompt Override is enabled. The depth and call-limit values
+                      above stay active and can be injected into override templates.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="dr-source-policy">
+                          Source Selection Policy (Subagent)
+                        </Label>
+                        <Textarea
+                          id="dr-source-policy"
+                          rows={3}
+                          value={
+                            resolvedDeepResearchConfig.subagent.sourceSelectionPolicy
+                          }
+                          onChange={(event) =>
+                            patchSubagentConfig({
+                              sourceSelectionPolicy: event.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="dr-split-strategy">
+                          Search Split Strategy (Subagent)
+                        </Label>
+                        <Textarea
+                          id="dr-split-strategy"
+                          rows={3}
+                          value={resolvedDeepResearchConfig.subagent.splitStrategy}
+                          onChange={(event) =>
+                            patchSubagentConfig({
+                              splitStrategy: event.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                    </>
                   )}
-                >
-                  <Label htmlFor="dr-search-complexity">Search Complexity</Label>
-                  <Select
-                    value={resolvedDeepResearchConfig.subagent.searchComplexity}
-                    disabled={fullPromptOverrideEnabled}
-                    onValueChange={(value) =>
-                      patchSubagentConfig({
-                        searchComplexity: value as SubagentSearchComplexity,
-                      })
-                    }
-                  >
-                    <SelectTrigger id="dr-search-complexity">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SEARCH_COMPLEXITY_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="dr-search-depth">Tavily Search Depth</Label>
-                  <Select
-                    value={resolvedDeepResearchConfig.subagent.tavilySearchDepth}
-                    onValueChange={(value) =>
-                      patchSubagentConfig({
-                        tavilySearchDepth: value as TavilySearchDepth,
-                      })
-                    }
-                  >
-                    <SelectTrigger id="dr-search-depth">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TAVILY_SEARCH_DEPTH_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="dr-max-search">Max Search Calls</Label>
-                  <Input
-                    id="dr-max-search"
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={String(resolvedDeepResearchConfig.subagent.maxSearchCalls)}
-                    onChange={(event) =>
-                      handleNumericSubagentChange(
-                        "maxSearchCalls",
-                        event.target.value,
-                      )
-                    }
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="dr-max-extract">Max Extract Calls</Label>
-                  <Input
-                    id="dr-max-extract"
-                    type="number"
-                    min={1}
-                    max={40}
-                    value={String(resolvedDeepResearchConfig.subagent.maxExtractCalls)}
-                    onChange={(event) =>
-                      handleNumericSubagentChange(
-                        "maxExtractCalls",
-                        event.target.value,
-                      )
-                    }
-                  />
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="dr-repeat-search">
-                    Max Repeat for Same Query
-                  </Label>
-                  <Input
-                    id="dr-repeat-search"
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={String(
-                      resolvedDeepResearchConfig.subagent.maxRepeatSearchQuery,
+                </TabsContent>
+                <TabsContent value="validate" className="space-y-3">
+                  <div
+                    className={cn(
+                      "space-y-1.5 rounded-md border border-border bg-muted/30 px-3 py-2",
+                      (fullPromptOverrideEnabled || !deepResearchSwitchEnabled) &&
+                        "opacity-45",
                     )}
-                    onChange={(event) =>
-                      handleNumericSubagentChange(
-                        "maxRepeatSearchQuery",
-                        event.target.value,
-                      )
-                    }
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="dr-repeat-url">
-                    Max Repeat for Same URL
-                  </Label>
-                  <Input
-                    id="dr-repeat-url"
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={String(
-                      resolvedDeepResearchConfig.subagent.maxRepeatExtractUrl,
+                  >
+                    <Label>Search strategy</Label>
+                    <div className="text-xs text-foreground/90">
+                      Choose when to validate claims after the answer.
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={2}
+                      step={1}
+                      value={validatePolicyIndex}
+                      disabled={
+                        fullPromptOverrideEnabled || !deepResearchSwitchEnabled
+                      }
+                      onChange={(event) =>
+                        setValidatePolicy(
+                          indexToSearchPolicy(
+                            Number.parseInt(event.target.value, 10),
+                          ),
+                        )
+                      }
+                      className="h-1.5 w-full cursor-pointer accent-primary"
+                    />
+                    <div className="grid grid-cols-3 gap-1 text-[11px] text-muted-foreground">
+                      {SEARCH_POLICY_OPTIONS.map((option) => (
+                        <div
+                          key={option.value}
+                          className={cn(
+                            "truncate text-center",
+                            option.value === validatePolicy && "text-foreground",
+                          )}
+                          title={option.description}
+                        >
+                          {option.label}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div
+                    className={cn(
+                      "grid gap-3 sm:grid-cols-2",
+                      (!deepResearchSwitchEnabled || !validateEnabled) &&
+                        "opacity-45",
                     )}
-                    onChange={(event) =>
-                      handleNumericSubagentChange(
-                        "maxRepeatExtractUrl",
-                        event.target.value,
-                      )
-                    }
-                  />
-                </div>
-              </div>
-              {fullPromptOverrideEnabled ? (
-                <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                  Prompt-level subagent strategy fields are hidden while Full Prompt
-                  Override is enabled. The depth and call-limit values above stay active
-                  and can be injected into override templates.
-                </div>
-              ) : (
-                <>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="dr-source-policy">
-                      Source Selection Policy (Subagent)
-                    </Label>
-                    <Textarea
-                      id="dr-source-policy"
-                      rows={3}
-                      value={resolvedDeepResearchConfig.subagent.sourceSelectionPolicy}
-                      onChange={(event) =>
-                        patchSubagentConfig({
-                          sourceSelectionPolicy: event.target.value,
-                        })
-                      }
-                    />
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-validate-search-complexity">
+                        Search Complexity
+                      </Label>
+                      <Select
+                        value={
+                          resolvedDeepResearchConfig.validate.subagent
+                            .searchComplexity
+                        }
+                        disabled={!deepResearchSwitchEnabled || !validateEnabled}
+                        onValueChange={(value) =>
+                          patchValidateSubagentConfig({
+                            searchComplexity: value as SubagentSearchComplexity,
+                          })
+                        }
+                      >
+                        <SelectTrigger id="dr-validate-search-complexity">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SEARCH_COMPLEXITY_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-validate-search-depth">
+                        Tavily Search Depth
+                      </Label>
+                      <Select
+                        value={
+                          resolvedDeepResearchConfig.validate.subagent
+                            .tavilySearchDepth
+                        }
+                        disabled={!deepResearchSwitchEnabled || !validateEnabled}
+                        onValueChange={(value) =>
+                          patchValidateSubagentConfig({
+                            tavilySearchDepth: value as TavilySearchDepth,
+                          })
+                        }
+                      >
+                        <SelectTrigger id="dr-validate-search-depth">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TAVILY_SEARCH_DEPTH_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="dr-split-strategy">
-                      Search Split Strategy (Subagent)
-                    </Label>
-                    <Textarea
-                      id="dr-split-strategy"
-                      rows={3}
-                      value={resolvedDeepResearchConfig.subagent.splitStrategy}
-                      onChange={(event) =>
-                        patchSubagentConfig({
-                          splitStrategy: event.target.value,
-                        })
-                      }
-                    />
+                  <div
+                    className={cn(
+                      "grid gap-3 sm:grid-cols-2",
+                      (!deepResearchSwitchEnabled || !validateEnabled) &&
+                        "opacity-45",
+                    )}
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-validate-max-search">
+                        Max Search Calls
+                      </Label>
+                      <Input
+                        id="dr-validate-max-search"
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={String(
+                          resolvedDeepResearchConfig.validate.subagent
+                            .maxSearchCalls,
+                        )}
+                        onChange={(event) =>
+                          handleNumericValidateSubagentChange(
+                            "maxSearchCalls",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-validate-max-extract">
+                        Max Extract Calls
+                      </Label>
+                      <Input
+                        id="dr-validate-max-extract"
+                        type="number"
+                        min={1}
+                        max={40}
+                        value={String(
+                          resolvedDeepResearchConfig.validate.subagent
+                            .maxExtractCalls,
+                        )}
+                        onChange={(event) =>
+                          handleNumericValidateSubagentChange(
+                            "maxExtractCalls",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
                   </div>
-                </>
-              )}
+                  <div
+                    className={cn(
+                      "grid gap-3 sm:grid-cols-2",
+                      (!deepResearchSwitchEnabled || !validateEnabled) &&
+                        "opacity-45",
+                    )}
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-validate-repeat-search">
+                        Max Repeat for Same Query
+                      </Label>
+                      <Input
+                        id="dr-validate-repeat-search"
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={String(
+                          resolvedDeepResearchConfig.validate.subagent
+                            .maxRepeatSearchQuery,
+                        )}
+                        onChange={(event) =>
+                          handleNumericValidateSubagentChange(
+                            "maxRepeatSearchQuery",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="dr-validate-repeat-url">
+                        Max Repeat for Same URL
+                      </Label>
+                      <Input
+                        id="dr-validate-repeat-url"
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={String(
+                          resolvedDeepResearchConfig.validate.subagent
+                            .maxRepeatExtractUrl,
+                        )}
+                        onChange={(event) =>
+                          handleNumericValidateSubagentChange(
+                            "maxRepeatExtractUrl",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  {!fullPromptOverrideEnabled ? (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="dr-validate-source-policy">
+                          Source Selection Policy
+                        </Label>
+                        <Textarea
+                          id="dr-validate-source-policy"
+                          rows={2}
+                          value={
+                            resolvedDeepResearchConfig.validate.subagent
+                              .sourceSelectionPolicy
+                          }
+                          onChange={(event) =>
+                            patchValidateSubagentConfig({
+                              sourceSelectionPolicy: event.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="dr-validate-split-strategy">
+                          Search Split Strategy
+                        </Label>
+                        <Textarea
+                          id="dr-validate-split-strategy"
+                          rows={2}
+                          value={
+                            resolvedDeepResearchConfig.validate.subagent
+                              .splitStrategy
+                          }
+                          onChange={(event) =>
+                            patchValidateSubagentConfig({
+                              splitStrategy: event.target.value,
+                            })
+                          }
+                        />
+                      </div>
+                    </>
+                  ) : null}
+                </TabsContent>
+              </Tabs>
               {fullPromptOverrideEnabled ? (
                 <>
                   <div
@@ -2969,6 +3775,44 @@ export default function ChatHistoryPanel({
                       }
                       onChange={(event) =>
                         patchSubagentConfig({
+                          promptOverride: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dr-validate-subagent-system-override">
+                      Validate Subagent System Prompt Override
+                    </Label>
+                    <Textarea
+                      id="dr-validate-subagent-system-override"
+                      rows={4}
+                      placeholder="Generated from current validate prompt settings by default"
+                      value={
+                        resolvedDeepResearchConfig.validate.subagent
+                          .systemPromptOverride ?? ""
+                      }
+                      onChange={(event) =>
+                        patchValidateSubagentConfig({
+                          systemPromptOverride: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dr-validate-subagent-prompt-override">
+                      Validate Subagent Runtime Prompt Override
+                    </Label>
+                    <Textarea
+                      id="dr-validate-subagent-prompt-override"
+                      rows={4}
+                      placeholder="Generated from current validate prompt settings by default"
+                      value={
+                        resolvedDeepResearchConfig.validate.subagent
+                          .promptOverride ?? ""
+                      }
+                      onChange={(event) =>
+                        patchValidateSubagentConfig({
                           promptOverride: event.target.value,
                         })
                       }

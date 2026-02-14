@@ -3,7 +3,10 @@ import type {
   DeepResearchPersistenceAdapter,
   LineSelection,
 } from "../../../shared/deepresearch";
-import type { DeepResearchConfig } from "../../../shared/deepresearch-config";
+import type {
+  DeepResearchConfig,
+  DeepResearchReferenceAccuracy,
+} from "../../../shared/deepresearch-config";
 import type { RuntimeAgentSkill } from "../../../shared/agent-skills";
 
 export interface DeertubeMessageMetadata {
@@ -37,11 +40,16 @@ export interface DeepSearchReference {
   startLine: number;
   endLine: number;
   text: string;
+  validationRefContent?: string;
+  accuracy?: DeepResearchReferenceAccuracy;
+  issueReason?: string;
+  correctFact?: string;
 }
 
 interface DeepSearchStreamPayload {
   toolCallId: string;
   toolName?: string;
+  mode?: "search" | "validate";
   query?: string;
   projectId?: string;
   searchId?: string;
@@ -77,6 +85,7 @@ export interface ToolConfig {
   model?: LanguageModel;
   searchModel?: LanguageModel;
   extractModel?: LanguageModel;
+  deepSearchExecutionMode?: "enabled" | "disabled";
   tavilyApiKey?: string;
   jinaReaderBaseUrl?: string;
   jinaReaderApiKey?: string;
@@ -90,6 +99,10 @@ export interface SearchResult {
   title?: string;
   viewpoint: string;
   content?: string;
+  validationRefContent?: string;
+  accuracy?: DeepResearchReferenceAccuracy;
+  issueReason?: string;
+  correctFact?: string;
   pageId?: string;
   lineCount?: number;
   selections: LineSelection[];

@@ -79,6 +79,10 @@ import {
   isDeepResearchRefUri,
   type DeepResearchResolvedReference,
 } from "@/shared/deepresearch";
+import {
+  listRunningChatIds,
+  subscribeRunningChatJobs,
+} from "@/lib/running-chat-jobs";
 
 const CHAT_TABSET_ID = "chat-tabset";
 const GRAPH_TABSET_ID = "graph-tabset";
@@ -121,6 +125,24 @@ const sortChatSummariesDesc = (
   [...chats].sort(
     (left, right) => toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt),
   );
+
+interface FlowWorkspaceSession {
+  slotId: string;
+  chatId: string | null;
+  initialState: ProjectState;
+}
+
+const buildChatSlotId = (chatId: string): string => `chat:${chatId}`;
+const buildDraftSlotId = (): string => `draft:${crypto.randomUUID()}`;
+
+const applyRunningStatusToSummaries = (
+  chats: ProjectChatSummary[],
+  runningChatIds: Set<string>,
+): ProjectChatSummary[] =>
+  chats.map((chat) => ({
+    ...chat,
+    isRunning: Boolean(chat.isRunning) || runningChatIds.has(chat.id),
+  }));
 
 interface FlexLayoutNode {
   id?: string;
@@ -563,13 +585,38 @@ interface FlowWorkspaceInnerProps extends FlowWorkspaceProps {
 }
 
 function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
-  const [loadedState, setLoadedState] = useState<ProjectState | null>(null);
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<FlowWorkspaceSession[]>([]);
+  const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
   const [chatSummaries, setChatSummaries] = useState<ProjectChatSummary[]>([]);
+  const [runningChatIds, setRunningChatIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [loading, setLoading] = useState(true);
-  const [reloadKey, setReloadKey] = useState(0);
   const lastPathRef = useRef<string | null>(null);
+  const sessionsRef = useRef<FlowWorkspaceSession[]>([]);
+  const activeSlotIdRef = useRef<string | null>(null);
   const saveEnabled = props.saveEnabled ?? true;
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.slotId === activeSlotId) ?? null,
+    [activeSlotId, sessions],
+  );
+  const activeChatId = activeSession?.chatId ?? null;
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    activeSlotIdRef.current = activeSlotId;
+  }, [activeSlotId]);
+
+  useEffect(() => {
+    const refresh = () => {
+      setRunningChatIds(listRunningChatIds(props.project.path));
+    };
+    refresh();
+    return subscribeRunningChatJobs(refresh);
+  }, [props.project.path]);
 
   useEffect(() => {
     let cancelled = false;
@@ -577,8 +624,8 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
     lastPathRef.current = props.project.path;
     setLoading(true);
     if (!samePath) {
-      setLoadedState(null);
-      setActiveChatId(null);
+      setSessions([]);
+      setActiveSlotId(null);
       setChatSummaries([]);
     }
     trpc.project.open
@@ -587,17 +634,40 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
         if (cancelled) {
           return;
         }
-        setLoadedState(coerceProjectState(result.state));
-        setActiveChatId(result.activeChatId ?? null);
-        setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
-        setReloadKey((prev) => prev + 1);
+        const resolvedChatId = result.activeChatId ?? null;
+        const slotId = resolvedChatId
+          ? buildChatSlotId(resolvedChatId)
+          : buildDraftSlotId();
+        setSessions([
+          {
+            slotId,
+            chatId: resolvedChatId,
+            initialState: coerceProjectState(result.state),
+          },
+        ]);
+        setActiveSlotId(slotId);
+        setChatSummaries(
+          sortChatSummariesDesc(
+            applyRunningStatusToSummaries(
+              result.chats ?? [],
+              listRunningChatIds(props.project.path),
+            ),
+          ),
+        );
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
-        setLoadedState((prev) => prev ?? props.initialState);
-        setActiveChatId(null);
+        const slotId = buildDraftSlotId();
+        setSessions([
+          {
+            slotId,
+            chatId: null,
+            initialState: props.initialState,
+          },
+        ]);
+        setActiveSlotId(slotId);
         setChatSummaries([]);
       })
       .finally(() => {
@@ -616,27 +686,64 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
       if (!chatId || chatId === activeChatId) {
         return;
       }
+      const existing = sessionsRef.current.find(
+        (session) => session.chatId === chatId,
+      );
+      if (existing) {
+        setActiveSlotId(existing.slotId);
+        return;
+      }
       setLoading(true);
       try {
         const result = await trpc.project.openChat.mutate({
           path: props.project.path,
           chatId,
         });
-        setLoadedState(coerceProjectState(result.state));
-        setActiveChatId(result.chatId);
-        setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
-        setReloadKey((prev) => prev + 1);
+        const slotId = buildChatSlotId(result.chatId);
+        setSessions((previous) => {
+          if (previous.some((session) => session.chatId === result.chatId)) {
+            return previous;
+          }
+          return [
+            ...previous,
+            {
+              slotId,
+              chatId: result.chatId,
+              initialState: coerceProjectState(result.state),
+            },
+          ];
+        });
+        setActiveSlotId(slotId);
+        setChatSummaries(
+          sortChatSummariesDesc(
+            applyRunningStatusToSummaries(result.chats ?? [], runningChatIds),
+          ),
+        );
       } finally {
         setLoading(false);
       }
     },
-    [activeChatId, props.project.path],
+    [activeChatId, props.project.path, runningChatIds],
   );
 
   const handleCreateDraftChat = useCallback(() => {
-    setActiveChatId(null);
-    setLoadedState(createEmptyProjectState());
-    setReloadKey((prev) => prev + 1);
+    const existingDraft = sessionsRef.current.find(
+      (session) => session.chatId === null,
+    );
+    if (existingDraft) {
+      setActiveSlotId(existingDraft.slotId);
+      return;
+    }
+    const slotId = buildDraftSlotId();
+    setSessions((previous) => [
+      ...previous,
+      {
+        slotId,
+        chatId: null,
+        initialState: createEmptyProjectState(),
+      },
+    ]);
+    setActiveSlotId(slotId);
   }, []);
 
   const handlePersistDraftChat = useCallback(
@@ -649,8 +756,8 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
       state: ProjectState;
       settings?: RuntimeSettingsPayload;
     }) => {
-      if (activeChatId) {
-        return activeChatId;
+      if (activeSession?.chatId) {
+        return activeSession.chatId;
       }
       const result = await trpc.project.createChat.mutate({
         path: props.project.path,
@@ -665,11 +772,25 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
         },
       });
       const nextChatId = result.activeChatId ?? result.chat.id;
-      setActiveChatId(nextChatId);
-      setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
+      const targetSlotId = activeSlotIdRef.current;
+      setSessions((previous) => {
+        if (!targetSlotId) {
+          return previous;
+        }
+        return previous.map((session) =>
+          session.slotId === targetSlotId
+            ? { ...session, chatId: nextChatId }
+            : session,
+        );
+      });
+      setChatSummaries(
+        sortChatSummariesDesc(
+          applyRunningStatusToSummaries(result.chats ?? [], runningChatIds),
+        ),
+      );
       return nextChatId;
     },
-    [activeChatId, props.project.path],
+    [activeSession, props.project.path, runningChatIds],
   );
   const handleRenameChat = useCallback(
     async (chatId: string, title: string) => {
@@ -678,10 +799,23 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
         chatId,
         title,
       });
-      setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
-      setActiveChatId(result.activeChatId ?? null);
+      setChatSummaries(
+        sortChatSummariesDesc(
+          applyRunningStatusToSummaries(result.chats ?? [], runningChatIds),
+        ),
+      );
+      const nextActiveChatId = result.activeChatId ?? null;
+      if (!nextActiveChatId) {
+        return;
+      }
+      const existing = sessionsRef.current.find(
+        (session) => session.chatId === nextActiveChatId,
+      );
+      if (existing) {
+        setActiveSlotId(existing.slotId);
+      }
     },
-    [props.project.path],
+    [props.project.path, runningChatIds],
   );
   const handleDeleteChat = useCallback(
     async (chatId: string) => {
@@ -691,31 +825,102 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
           path: props.project.path,
           chatId,
         });
-        setLoadedState(coerceProjectState(result.state));
-        setActiveChatId(result.activeChatId ?? null);
-        setChatSummaries(sortChatSummariesDesc(result.chats ?? []));
-        setReloadKey((prev) => prev + 1);
+        const nextActiveChatId = result.activeChatId ?? null;
+        const stateFromServer = coerceProjectState(result.state);
+        const filtered = sessionsRef.current.filter(
+          (session) => session.chatId !== chatId,
+        );
+        let nextSessions = filtered;
+        let nextSlotId: string | null = null;
+        if (!nextActiveChatId) {
+          const draft = filtered.find((session) => session.chatId === null);
+          if (draft) {
+            nextSlotId = draft.slotId;
+          } else {
+            const draftSlotId = buildDraftSlotId();
+            nextSessions = [
+              ...filtered,
+              {
+                slotId: draftSlotId,
+                chatId: null,
+                initialState: stateFromServer,
+              },
+            ];
+            nextSlotId = draftSlotId;
+          }
+        } else {
+          const existing = filtered.find(
+            (session) => session.chatId === nextActiveChatId,
+          );
+          if (existing) {
+            nextSlotId = existing.slotId;
+          } else {
+            const slotId = buildChatSlotId(nextActiveChatId);
+            nextSessions = [
+              ...filtered,
+              {
+                slotId,
+                chatId: nextActiveChatId,
+                initialState: stateFromServer,
+              },
+            ];
+            nextSlotId = slotId;
+          }
+        }
+        setSessions(nextSessions);
+        setActiveSlotId(nextSlotId);
+        setChatSummaries(
+          sortChatSummariesDesc(
+            applyRunningStatusToSummaries(result.chats ?? [], runningChatIds),
+          ),
+        );
       } finally {
         setLoading(false);
       }
     },
-    [props.project.path],
+    [props.project.path, runningChatIds],
   );
 
-  const handleSavedChatUpdate = useCallback((chat: ProjectChatSummary | null) => {
-    if (!chat) {
-      return;
-    }
-    setActiveChatId(chat.id);
-    setChatSummaries((prev) =>
-      sortChatSummariesDesc([
-        chat,
-        ...prev.filter((item) => item.id !== chat.id),
-      ]),
-    );
-  }, []);
+  const handleSavedChatUpdate = useCallback(
+    (chat: ProjectChatSummary | null) => {
+      if (!chat) {
+        return;
+      }
+      setSessions((previous) => {
+        const alreadyBound = previous.some((session) => session.chatId === chat.id);
+        if (alreadyBound) {
+          return previous;
+        }
+        const firstDraft = previous.find((session) => session.chatId === null);
+        if (!firstDraft) {
+          return previous;
+        }
+        return previous.map((session) =>
+          session.slotId === firstDraft.slotId
+            ? { ...session, chatId: chat.id }
+            : session,
+        );
+      });
+      setChatSummaries((prev) =>
+        sortChatSummariesDesc([
+          {
+            ...chat,
+            isRunning: Boolean(chat.isRunning) || runningChatIds.has(chat.id),
+          },
+          ...prev.filter((item) => item.id !== chat.id),
+        ]),
+      );
+    },
+    [runningChatIds],
+  );
 
-  if (loading && !loadedState) {
+  useEffect(() => {
+    setChatSummaries((prev) =>
+      sortChatSummariesDesc(applyRunningStatusToSummaries(prev, runningChatIds)),
+    );
+  }, [runningChatIds]);
+
+  if (loading && sessions.length === 0) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-gradient-to-br from-[var(--surface-1)] via-[var(--surface-2)] to-[var(--surface-3)] text-foreground">
         <div className="rounded-xl border border-border/70 bg-card/80 px-6 py-4 text-xs uppercase tracking-[0.3em] text-muted-foreground shadow-lg">
@@ -725,26 +930,32 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
     );
   }
 
-  if (!loadedState) {
+  if (sessions.length === 0) {
     return null;
   }
 
   return (
     <div className="relative h-screen w-screen">
-      <FlowWorkspaceInner
-        key={reloadKey}
-        {...props}
-        initialState={loadedState}
-        activeChatId={activeChatId}
-        chatSummaries={chatSummaries}
-        onSwitchChat={handleSwitchChat}
-        onRenameChat={handleRenameChat}
-        onDeleteChat={handleDeleteChat}
-        onCreateDraftChat={handleCreateDraftChat}
-        onPersistDraftChat={handlePersistDraftChat}
-        onSavedChatUpdate={handleSavedChatUpdate}
-        saveEnabled={saveEnabled && !loading}
-      />
+      {sessions.map((session) => (
+        <div
+          key={session.slotId}
+          className={session.slotId === activeSlotId ? "absolute inset-0" : "hidden"}
+        >
+          <FlowWorkspaceInner
+            {...props}
+            initialState={session.initialState}
+            activeChatId={session.chatId}
+            chatSummaries={chatSummaries}
+            onSwitchChat={handleSwitchChat}
+            onRenameChat={handleRenameChat}
+            onDeleteChat={handleDeleteChat}
+            onCreateDraftChat={handleCreateDraftChat}
+            onPersistDraftChat={handlePersistDraftChat}
+            onSavedChatUpdate={handleSavedChatUpdate}
+            saveEnabled={saveEnabled}
+          />
+        </div>
+      ))}
       {loading ? (
         <div className="pointer-events-auto absolute inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm">
           <div className="rounded-xl border border-border/70 bg-card/90 px-5 py-3 text-xs uppercase tracking-[0.3em] text-muted-foreground shadow-lg">
@@ -893,6 +1104,7 @@ function FlowWorkspaceInner({
     stopChatGeneration,
   } = useChatActions({
     projectPath: project.path,
+    chatId: sessionChatId,
     nodes,
     edges,
     setNodes,
@@ -1451,6 +1663,10 @@ function FlowWorkspaceInner({
         text: stripLineNumberPrefix(reference.text),
         startLine: reference.startLine,
         endLine: reference.endLine,
+        validationRefContent: reference.validationRefContent,
+        accuracy: reference.accuracy,
+        issueReason: reference.issueReason,
+        correctFact: reference.correctFact,
       };
     },
     [resolveBrowserReference],

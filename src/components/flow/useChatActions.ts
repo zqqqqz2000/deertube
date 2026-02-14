@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactFlowInstance } from "reactflow";
 import { trpc } from "../../lib/trpc";
+import {
+  finishRunningChatJob,
+  startRunningChatJob,
+} from "@/lib/running-chat-jobs";
 import type {
   FlowEdge,
   FlowNode,
@@ -34,6 +38,7 @@ import { useContextBuilder } from "./useContextBuilder";
 
 interface UseChatActionsOptions {
   projectPath: string;
+  chatId: string | null;
   nodes: FlowNode[];
   edges: FlowEdge[];
   setNodes: (updater: (prev: FlowNode[]) => FlowNode[]) => void;
@@ -62,6 +67,7 @@ const CHAT_ACTION_DEBUG_LOGS_ENABLED =
 const DEEP_RESEARCH_CONFIG_BY_PROJECT_KEY =
   "deertube:deepResearchConfigByProject";
 const GRAPH_AUTOGEN_BY_PROJECT_KEY = "deertube:graphAutoGenByProject";
+const CHAT_STREAM_RUNNING_JOB_ID = "chat-stream";
 
 const isStartNode = (node: FlowNode | null) => {
   if (!node || node.type !== "insight") {
@@ -258,6 +264,7 @@ const saveGraphAutoGenerationEnabled = (
 
 export function useChatActions({
   projectPath,
+  chatId,
   nodes,
   edges,
   setNodes,
@@ -284,9 +291,20 @@ export function useChatActions({
   const [persistedDeepSearchEvents] = useState<ChatMessage[]>(
     () => initialMessages.filter((message) => message.kind === "deepsearch-event"),
   );
+  const [asyncDeepSearchEventMessages, setAsyncDeepSearchEventMessages] =
+    useState<ChatMessage[]>([]);
   const loggedGraphEventsRef = useRef<Map<string, string>>(new Map());
   const loggedStreamPartsRef = useRef<Map<string, string>>(new Map());
   const fallbackCreatedAtByIdRef = useRef<Map<string, string>>(new Map());
+  const lastSubmittedPromptRef = useRef("");
+  const mountedRef = useRef(true);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   useEffect(() => {
     setDeepResearchConfig(loadDeepResearchConfig(projectPath));
@@ -376,7 +394,11 @@ export function useChatActions({
         return;
       }
       const eventId = crypto.randomUUID();
+      const runningJobId = `graph:${eventId}`;
       const startedAt = new Date().toISOString();
+      if (chatId) {
+        startRunningChatJob(projectPath, chatId, runningJobId);
+      }
       setGraphEventMessages((prev) => [
         ...prev,
         {
@@ -560,10 +582,14 @@ export function useChatActions({
           ),
         );
       } finally {
+        if (chatId) {
+          finishRunningChatJob(projectPath, chatId, runningJobId);
+        }
         setGraphBusy(false);
       }
     },
     [
+      chatId,
       edges,
       flowInstance,
       nodes,
@@ -574,6 +600,121 @@ export function useChatActions({
       setEdges,
       setNodes,
     ],
+  );
+
+  const runPostAnswerValidation = useCallback(
+    async (responseId: string, responseText: string) => {
+      if (!deepResearchConfig.enabled || !deepResearchConfig.validate.enabled) {
+        return;
+      }
+      const query = lastSubmittedPromptRef.current.trim() || responseText.trim();
+      if (!query) {
+        return;
+      }
+      const toolCallId = `validate-${crypto.randomUUID()}`;
+      const eventId = `deepsearch-${toolCallId}`;
+      const runningJobId = `validate:${toolCallId}`;
+      const startedAt = new Date().toISOString();
+      if (chatId) {
+        startRunningChatJob(projectPath, chatId, runningJobId);
+      }
+      setAsyncDeepSearchEventMessages((prev) => [
+        ...prev,
+        {
+          id: eventId,
+          role: "assistant",
+          content: "",
+          createdAt: startedAt,
+          kind: "deepsearch-event",
+          toolName: "validate.run",
+          toolStatus: "running",
+          toolInput: {
+            responseId,
+            toolCallId,
+          },
+          toolOutput: {
+            toolCallId,
+            toolName: "validate.run",
+            mode: "validate",
+            query,
+            status: "running",
+          } satisfies DeepSearchStreamPayload,
+        },
+      ]);
+      try {
+        const result = await trpc.chat.validate.mutate({
+          projectPath,
+          query,
+          answer: responseText,
+          settings: runtimeSettings,
+          deepResearch: deepResearchConfig,
+        });
+        if (!mountedRef.current) {
+          return;
+        }
+        setAsyncDeepSearchEventMessages((prev) =>
+          prev.map((event) =>
+            event.id !== eventId
+              ? event
+              : {
+                  ...event,
+                  toolStatus: result.status === "complete" ? "complete" : "failed",
+                  toolOutput: {
+                    toolCallId,
+                    toolName: "validate.run",
+                    mode: "validate",
+                    query: result.query,
+                    projectId: result.projectId,
+                    searchId: result.searchId,
+                    status: result.status === "complete" ? "complete" : "failed",
+                    sources: result.sources,
+                    references: result.references,
+                    error:
+                      result.status === "skipped"
+                        ? "Validation skipped by config."
+                        : undefined,
+                    complete: true,
+                  } satisfies DeepSearchStreamPayload,
+                  error:
+                    result.status === "skipped"
+                      ? "Validation skipped by config."
+                      : undefined,
+                },
+          ),
+        );
+      } catch (err) {
+        if (!mountedRef.current) {
+          return;
+        }
+        const errorMessage =
+          err instanceof Error ? err.message : "Post-answer validation failed";
+        setAsyncDeepSearchEventMessages((prev) =>
+          prev.map((event) =>
+            event.id !== eventId
+              ? event
+              : {
+                  ...event,
+                  toolStatus: "failed",
+                  error: errorMessage,
+                  toolOutput: {
+                    toolCallId,
+                    toolName: "validate.run",
+                    mode: "validate",
+                    query,
+                    status: "failed",
+                    error: errorMessage,
+                    complete: true,
+                  } satisfies DeepSearchStreamPayload,
+                },
+          ),
+        );
+      } finally {
+        if (chatId) {
+          finishRunningChatJob(projectPath, chatId, runningJobId);
+        }
+      }
+    },
+    [chatId, deepResearchConfig, projectPath, runtimeSettings],
   );
 
   const { messages, sendMessage, regenerate, status, error, stop } =
@@ -587,9 +728,6 @@ export function useChatActions({
         settings: runtimeSettings,
       },
       onFinish: ({ message }: { message?: DeertubeUIMessage }) => {
-        if (!graphGenerationEnabled) {
-          return;
-        }
         if (!message || message.role !== "assistant") {
           return;
         }
@@ -597,9 +735,27 @@ export function useChatActions({
         if (!text.trim()) {
           return;
         }
+        void runPostAnswerValidation(message.id, text);
+        if (!graphGenerationEnabled) {
+          return;
+        }
         void runGraphTools(message.id, text);
       },
     });
+  useEffect(() => {
+    if (!chatId) {
+      return;
+    }
+    const isStreaming = status === "streaming" || status === "submitted";
+    if (isStreaming) {
+      startRunningChatJob(projectPath, chatId, CHAT_STREAM_RUNNING_JOB_ID);
+    } else {
+      finishRunningChatJob(projectPath, chatId, CHAT_STREAM_RUNNING_JOB_ID);
+    }
+    return () => {
+      finishRunningChatJob(projectPath, chatId, CHAT_STREAM_RUNNING_JOB_ID);
+    };
+  }, [chatId, projectPath, status]);
   useEffect(() => {
     if (!CHAT_ACTION_DEBUG_LOGS_ENABLED) {
       return;
@@ -660,9 +816,13 @@ export function useChatActions({
     const withGraphEvents = graphEventMessages.length
       ? mergeGraphEvents(mapped, graphEventMessages)
       : mapped;
+    const runtimeDeepSearchEvents = mergePersistedAgentEvents(
+      asyncDeepSearchEventMessages,
+      buildDeepSearchEvents(messages, status),
+    );
     const deepSearchEvents = mergePersistedAgentEvents(
       persistedDeepSearchEvents,
-      buildDeepSearchEvents(messages, status),
+      runtimeDeepSearchEvents,
     );
     const deepSearchStatusByToolCall = buildAgentToolStatusByToolCall(
       deepSearchEvents,
@@ -684,6 +844,7 @@ export function useChatActions({
     status,
     error,
     graphEventMessages,
+    asyncDeepSearchEventMessages,
     persistedSubagentEvents,
     persistedDeepSearchEvents,
   ]);
@@ -704,6 +865,7 @@ export function useChatActions({
           ? `${buildNodeQuote(selectedNodeForQuote)} `
           : "";
       const finalPrompt = `${quotePrefix}${prompt}`;
+      lastSubmittedPromptRef.current = prompt;
       reset();
       if (status === "streaming" || status === "submitted") {
         void stop();

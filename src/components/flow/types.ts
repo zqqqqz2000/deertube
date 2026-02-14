@@ -14,6 +14,7 @@ export interface ProjectChatSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
+  isRunning?: boolean;
 }
 
 export interface ProjectInfo {

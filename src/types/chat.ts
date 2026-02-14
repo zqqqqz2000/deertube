@@ -53,11 +53,16 @@ export interface DeepSearchReferencePayload {
   startLine: number
   endLine: number
   text: string
+  validationRefContent?: string
+  accuracy?: 'high' | 'medium' | 'low' | 'conflicting' | 'insufficient'
+  issueReason?: string
+  correctFact?: string
 }
 
 export interface DeepSearchStreamPayload {
   toolCallId: string
   toolName?: string
+  mode?: 'search' | 'validate'
   query?: string
   projectId?: string
   searchId?: string

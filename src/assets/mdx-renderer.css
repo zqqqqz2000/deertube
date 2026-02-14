@@ -110,6 +110,46 @@
   color: rgb(191, 219, 254);
 }
 
+.markdown-body a.markdown-link[data-ref-accuracy="high"] {
+  color: rgb(5 150 105);
+}
+
+.markdown-body a.markdown-link[data-ref-accuracy="medium"] {
+  color: rgb(217 119 6);
+}
+
+.markdown-body a.markdown-link[data-ref-accuracy="low"] {
+  color: rgb(234 88 12);
+}
+
+.markdown-body a.markdown-link[data-ref-accuracy="conflicting"] {
+  color: rgb(220 38 38);
+}
+
+.markdown-body a.markdown-link[data-ref-accuracy="insufficient"] {
+  color: rgb(71 85 105);
+}
+
+.dark .markdown-body a.markdown-link[data-ref-accuracy="high"] {
+  color: rgb(52 211 153);
+}
+
+.dark .markdown-body a.markdown-link[data-ref-accuracy="medium"] {
+  color: rgb(251 191 36);
+}
+
+.dark .markdown-body a.markdown-link[data-ref-accuracy="low"] {
+  color: rgb(251 146 60);
+}
+
+.dark .markdown-body a.markdown-link[data-ref-accuracy="conflicting"] {
+  color: rgb(248 113 113);
+}
+
+.dark .markdown-body a.markdown-link[data-ref-accuracy="insufficient"] {
+  color: rgb(148 163 184);
+}
+
 .markdown-body a.markdown-link[data-footnote-backref] {
   font-weight: 700;
 }

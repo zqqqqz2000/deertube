@@ -27,6 +27,8 @@ export async function runDeepSearchTool({
   deepResearchStore,
   deepResearchConfig,
   externalSkills,
+  mode = "search",
+  validateTargetAnswer = "",
 }: {
   query: string;
   searchModel: LanguageModel;
@@ -41,6 +43,8 @@ export async function runDeepSearchTool({
   deepResearchStore?: DeepResearchPersistenceAdapter;
   deepResearchConfig?: DeepResearchConfig;
   externalSkills?: RuntimeAgentSkill[];
+  mode?: "search" | "validate";
+  validateTargetAnswer?: string;
 }): Promise<{
   conclusion?: string;
   sources: DeepSearchSource[];
@@ -74,6 +78,7 @@ export async function runDeepSearchTool({
   const searchCreatedAt = searchSession.createdAt ?? fallbackCreatedAt;
   const projectId = deepResearchStore?.projectId;
   writeDeepSearchStream(writer, toolCallId, toolName, {
+    mode,
     query: normalizedQuery,
     projectId,
     searchId,
@@ -81,6 +86,14 @@ export async function runDeepSearchTool({
   });
 
   try {
+    const subagentConfig =
+      mode === "validate"
+        ? deepResearchConfig?.validate.subagent
+        : deepResearchConfig?.subagent;
+    const strictness =
+      mode === "validate"
+        ? deepResearchConfig?.validate.strictness
+        : deepResearchConfig?.strictness;
     const results = await runSearchSubagent({
       query: normalizedQuery,
       searchId,
@@ -94,16 +107,22 @@ export async function runDeepSearchTool({
       jinaReaderBaseUrl,
       jinaReaderApiKey,
       deepResearchStore,
-      subagentConfig: deepResearchConfig?.subagent,
+      subagentConfig,
       skillProfile: deepResearchConfig?.skillProfile,
       selectedSkillNames: deepResearchConfig?.selectedSkillNames,
       externalSkills,
       fullPromptOverrideEnabled:
         deepResearchConfig?.fullPromptOverrideEnabled ?? false,
+      strictness,
+      mode,
+      answerToValidate: validateTargetAnswer,
     });
-    const references = buildDeepSearchReferences(results, projectId, searchId);
+    const references = buildDeepSearchReferences(results, projectId, searchId, {
+      includeValidationFields: mode === "validate",
+    });
     const sources = buildDeepSearchSources(results, references);
     writeDeepSearchStream(writer, toolCallId, toolName, {
+      mode,
       query: normalizedQuery,
       projectId,
       searchId,
@@ -140,6 +159,10 @@ export async function runDeepSearchTool({
           startLine: reference.startLine,
           endLine: reference.endLine,
           text: reference.text,
+          validationRefContent: reference.validationRefContent,
+          accuracy: reference.accuracy,
+          issueReason: reference.issueReason,
+          correctFact: reference.correctFact,
         }),
       );
       await deepResearchStore.finalizeSearch({
@@ -158,6 +181,7 @@ export async function runDeepSearchTool({
       toolCallId,
       toolName,
       {
+        mode,
         query: normalizedQuery,
         projectId,
         searchId,
@@ -184,6 +208,7 @@ export async function runDeepSearchTool({
       toolCallId,
       toolName,
       {
+        mode,
         query: normalizedQuery,
         projectId,
         searchId,

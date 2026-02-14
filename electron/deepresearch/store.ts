@@ -473,5 +473,25 @@ export async function resolveDeepResearchReference(
     startLine: reference.startLine,
     endLine: reference.endLine,
     text: reference.text,
+    validationRefContent:
+      typeof reference.validationRefContent === "string"
+        ? reference.validationRefContent
+        : undefined,
+    accuracy:
+      reference.accuracy === "high" ||
+      reference.accuracy === "medium" ||
+      reference.accuracy === "low" ||
+      reference.accuracy === "conflicting" ||
+      reference.accuracy === "insufficient"
+        ? reference.accuracy
+        : undefined,
+    issueReason:
+      typeof reference.issueReason === "string"
+        ? reference.issueReason
+        : undefined,
+    correctFact:
+      typeof reference.correctFact === "string"
+        ? reference.correctFact
+        : undefined,
   };
 }

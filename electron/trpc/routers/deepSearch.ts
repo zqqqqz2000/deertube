@@ -54,6 +54,7 @@ const RuntimeSettingsSchema = z.object({
     search: ModelSettingsSchema.optional(),
     extract: ModelSettingsSchema.optional(),
     graph: ModelSettingsSchema.optional(),
+    validate: ModelSettingsSchema.optional(),
   }).optional(),
 })
 

@@ -41,6 +41,7 @@ const PURPOSE_FIELDS: { key: keyof LlmUsageConfig, label: string }[] = [
   { key: 'search', label: 'Search model' },
   { key: 'extract', label: 'Extract model' },
   { key: 'graph', label: 'Graph model' },
+  { key: 'validate', label: 'Validate model' },
 ]
 
 const createProviderDraft = (index: number) => ({

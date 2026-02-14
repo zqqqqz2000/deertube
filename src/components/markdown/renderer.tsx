@@ -22,6 +22,10 @@ export interface MarkdownReferencePreview {
   text: string;
   startLine: number;
   endLine: number;
+  validationRefContent?: string;
+  accuracy?: "high" | "medium" | "low" | "conflicting" | "insufficient";
+  issueReason?: string;
+  correctFact?: string;
 }
 
 interface ReferenceTooltipLoadingState {
@@ -50,6 +54,40 @@ const TOOLTIP_HIDE_DELAY_MS = 220;
 const resolveReferenceTitle = (reference: MarkdownReferencePreview): string => {
   const trimmed = reference.title?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : "Reference";
+};
+
+const formatAccuracyLabel = (
+  accuracy: MarkdownReferencePreview["accuracy"],
+): string | null => {
+  if (!accuracy) {
+    return null;
+  }
+  if (accuracy === "high") return "High";
+  if (accuracy === "medium") return "Medium";
+  if (accuracy === "low") return "Low";
+  if (accuracy === "conflicting") return "Conflicting";
+  return "Insufficient";
+};
+
+const getAccuracyToneClass = (
+  accuracy: MarkdownReferencePreview["accuracy"],
+): string => {
+  if (accuracy === "high") {
+    return "text-emerald-600 dark:text-emerald-300";
+  }
+  if (accuracy === "medium") {
+    return "text-amber-600 dark:text-amber-300";
+  }
+  if (accuracy === "low") {
+    return "text-orange-600 dark:text-orange-300";
+  }
+  if (accuracy === "conflicting") {
+    return "text-red-600 dark:text-red-300";
+  }
+  if (accuracy === "insufficient") {
+    return "text-slate-600 dark:text-slate-300";
+  }
+  return "text-muted-foreground";
 };
 
 interface MarkdownRendererProps {
@@ -87,6 +125,9 @@ export const MarkdownRenderer = memo(
     const hoveredReferenceUriRef = useRef<string | null>(null);
     const [referenceTooltip, setReferenceTooltip] =
       useState<ReferenceTooltipState | null>(null);
+    const [referenceAccuracyByUri, setReferenceAccuracyByUri] = useState<
+      Record<string, MarkdownReferencePreview["accuracy"]>
+    >({});
 
     const clearTooltipHideTimer = useCallback(() => {
       if (tooltipHideTimerRef.current !== null) {
@@ -235,6 +276,12 @@ export const MarkdownRenderer = memo(
             setReferenceTooltip(null);
             return;
           }
+          if (cached.accuracy) {
+            setReferenceAccuracyByUri((previous) => ({
+              ...previous,
+              [uri]: cached.accuracy,
+            }));
+          }
           setReferenceTooltip({
             status: "ready",
             uri,
@@ -262,6 +309,12 @@ export const MarkdownRenderer = memo(
         if (!resolved) {
           setReferenceTooltip(null);
           return;
+        }
+        if (resolved.accuracy) {
+          setReferenceAccuracyByUri((previous) => ({
+            ...previous,
+            [uri]: resolved.accuracy,
+          }));
         }
         setReferenceTooltip({
           status: "ready",
@@ -449,6 +502,10 @@ export const MarkdownRenderer = memo(
 
           if ((isHttpUrl(normalizedHref) || isDeertubeUrl(normalizedHref)) && onReferenceClick) {
             const labelText = flattenText(children);
+            const referenceAccuracy =
+              normalizedHref && isDeertubeReference
+                ? referenceAccuracyByUri[normalizedHref]
+                : undefined;
             return (
               <a
                 {...restProps}
@@ -480,6 +537,7 @@ export const MarkdownRenderer = memo(
                   }
                 }}
                 className={markdownLinkClassName}
+                data-ref-accuracy={referenceAccuracy ?? undefined}
               >
                 {children}
               </a>
@@ -508,6 +566,7 @@ export const MarkdownRenderer = memo(
       clearTooltipHideTimer,
       resolveNodeLabel,
       resolveReferencePreview,
+      referenceAccuracyByUri,
       scheduleHideReferenceTooltip,
       showReferenceTooltip,
     ]);
@@ -623,10 +682,35 @@ export const MarkdownRenderer = memo(
                     <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                       Lines {referenceTooltip.reference.startLine}-{referenceTooltip.reference.endLine}
                     </div>
+                    {referenceTooltip.reference.accuracy ? (
+                      <div
+                        className={cn(
+                          "mt-1 text-[10px] uppercase tracking-[0.12em]",
+                          getAccuracyToneClass(referenceTooltip.reference.accuracy),
+                        )}
+                      >
+                        Accuracy {formatAccuracyLabel(referenceTooltip.reference.accuracy)}
+                      </div>
+                    ) : null}
                     <div
                       ref={tooltipScrollRef}
                       className="mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap pr-1 text-xs leading-relaxed text-foreground/90"
                     >
+                      {referenceTooltip.reference.issueReason ? (
+                        <div className="mb-2 rounded border border-red-400/40 bg-red-500/10 px-2 py-1 text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+                          Why wrong: {referenceTooltip.reference.issueReason}
+                        </div>
+                      ) : null}
+                      {referenceTooltip.reference.correctFact ? (
+                        <div className="mb-2 rounded border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-[11px] leading-relaxed text-emerald-700 dark:text-emerald-300">
+                          Correct fact: {referenceTooltip.reference.correctFact}
+                        </div>
+                      ) : null}
+                      {referenceTooltip.reference.validationRefContent ? (
+                        <div className="mb-2 rounded border border-border/60 bg-card/40 px-2 py-1 text-[11px] leading-relaxed text-foreground/90">
+                          {referenceTooltip.reference.validationRefContent}
+                        </div>
+                      ) : null}
                       {referenceTooltip.reference.text}
                     </div>
                   </div>

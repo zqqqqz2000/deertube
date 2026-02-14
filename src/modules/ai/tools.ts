@@ -176,6 +176,28 @@ export function createTools(
               .positive()
               .describe("Inclusive 1-based end line for highlighted reference."),
             text: z.string().describe("Reference text shown to end users."),
+            validationRefContent: z
+              .string()
+              .optional()
+              .describe(
+                "Validate-mode only: concise support/refutation note for this reference.",
+              ),
+            accuracy: z
+              .enum(["high", "medium", "low", "conflicting", "insufficient"])
+              .optional()
+              .describe("Validate-mode only: evidence accuracy grade."),
+            issueReason: z
+              .string()
+              .optional()
+              .describe(
+                "Validate-mode only: why the checked claim/answer is wrong or risky based on this reference.",
+              ),
+            correctFact: z
+              .string()
+              .optional()
+              .describe(
+                "Validate-mode only: corrected fact/state from this reference.",
+              ),
           }).describe("Resolved citation reference entry."),
         ).describe("All numbered references that can be cited as [n]."),
         searchId: z.string().describe("Unique identifier of this deep-search run."),
@@ -189,6 +211,16 @@ export function createTools(
           .describe("Optional synthesis prompt (empty when synthesis is disabled)."),
       }).describe("Structured deep-search result returned to the caller."),
       execute: async ({ query }, options) => {
+        if (config.deepSearchExecutionMode === "disabled") {
+          return {
+            conclusion: undefined,
+            answer: undefined,
+            references: [],
+            searchId: `disabled-${Date.now()}`,
+            projectId: undefined,
+            prompt: "",
+          };
+        }
         const searchModel = config.searchModel ?? config.model;
         const extractModel = config.extractModel ?? config.searchModel ?? config.model;
         if (!searchModel) {
@@ -208,6 +240,7 @@ export function createTools(
           deepResearchStore: config.deepResearchStore,
           deepResearchConfig: config.deepResearchConfig,
           externalSkills: config.externalSkills,
+          mode: "search",
         });
         return {
           conclusion: result.conclusion,

@@ -1,5 +1,5 @@
 import { useMemo, useState, type KeyboardEvent, type SyntheticEvent } from "react";
-import { ArrowLeftRight, PencilLine, Plus, Trash2 } from "lucide-react";
+import { ArrowLeftRight, Loader2, PencilLine, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -205,9 +205,16 @@ export function ChatTabActions({
                       <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                         {chat.title}
                       </span>
-                      <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
-                        {formatUpdatedLabel(chat.updatedAt)}
-                      </span>
+                      {chat.isRunning ? (
+                        <Loader2
+                          className="h-3.5 w-3.5 shrink-0 animate-spin text-primary"
+                          aria-label="Running"
+                        />
+                      ) : (
+                        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                          {formatUpdatedLabel(chat.updatedAt)}
+                        </span>
+                      )}
                     </div>
                   </SelectItem>
                   {(onRenameChat ?? onDeleteChat) && (

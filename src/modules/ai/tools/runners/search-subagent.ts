@@ -22,6 +22,7 @@ import {
   buildSearchSubagentRuntimePrompt,
   buildSearchSubagentSystemPrompt,
   type DeepResearchSubagentConfigInput,
+  type DeepResearchStrictness,
   resolveDeepResearchSubagentConfig,
 } from "../../../../shared/deepresearch-config";
 import {
@@ -56,6 +57,7 @@ import { runExtractSubagent } from "./extract-subagent";
 
 const SEARCH_SUBAGENT_MAX_STEPS = 16;
 const ABORT_ERROR_NAME = "AbortError";
+const MAX_VALIDATE_ANSWER_CHARS = 5000;
 
 const normalizeToolKey = (value: string): string =>
   value.replace(/\s+/g, " ").trim().toLowerCase();
@@ -95,6 +97,8 @@ interface ExtractedUrlMeta {
   pageId?: string;
   lineCount?: number;
   viewpoint?: string;
+  validationRefContent?: string;
+  accuracy?: SearchResult["accuracy"];
   broken?: boolean;
   inrelavate?: boolean;
   error?: string;
@@ -129,6 +133,9 @@ export async function runSearchSubagent({
   selectedSkillNames,
   externalSkills,
   fullPromptOverrideEnabled = false,
+  strictness = "all-claims",
+  mode = "search",
+  answerToValidate = "",
 }: {
   query: string;
   searchId: string;
@@ -147,10 +154,15 @@ export async function runSearchSubagent({
   selectedSkillNames?: string[];
   externalSkills?: RuntimeAgentSkill[];
   fullPromptOverrideEnabled?: boolean;
+  strictness?: DeepResearchStrictness;
+  mode?: "search" | "validate";
+  answerToValidate?: string;
 }): Promise<SearchResult[]> {
   console.log("[subagent.runSearch]", {
     query,
     toolCallId,
+    mode,
+    strictness,
   });
   const resolvedSubagentConfig =
     resolveDeepResearchSubagentConfig(subagentConfig);
@@ -723,9 +735,11 @@ export async function runSearchSubagent({
         const url = typeof item.url === "string" ? item.url : "";
         const key = `${url}|${item.viewpoint}|${item.content}|${item.selections
           .map((selection) => `${selection.start}:${selection.end}:${selection.text}`)
-          .join(",")}|${String(item.broken)}|${String(item.inrelavate)}|${
-          item.error ?? ""
-        }`;
+          .join(",")}|${item.validationRefContent ?? ""}|${item.accuracy ?? ""}|${
+          item.issueReason ?? ""
+        }|${item.correctFact ?? ""}|${String(item.broken)}|${String(
+          item.inrelavate,
+        )}|${item.error ?? ""}`;
         dedupeByKey.set(key, item);
       });
       collectedFinalPayload = {
@@ -754,15 +768,21 @@ export async function runSearchSubagent({
   const searchSubagentPrompt = buildSearchSubagentRuntimePrompt({
     query,
     subagentConfig: resolvedSubagentConfig,
+    strictness,
     fullPromptOverrideEnabled,
+    mode,
+    answerToValidate: clampText(answerToValidate, MAX_VALIDATE_ANSWER_CHARS),
   });
   const searchSubagentSystemPrompt = buildSearchSubagentSystemPrompt({
     subagentConfig: resolvedSubagentConfig,
     query,
+    strictness,
     skillProfile: skillProfile ?? "auto",
     selectedSkillNames,
     availableSkills: externalSkills,
     fullPromptOverrideEnabled,
+    mode,
+    answerToValidate: clampText(answerToValidate, MAX_VALIDATE_ANSWER_CHARS),
   });
 
   throwIfAborted(abortSignal);
@@ -1107,12 +1127,14 @@ export async function runSearchSubagent({
   if (mergedResults.length > 0) {
     console.log("[subagent.runSearch.done]", {
       query,
+      mode,
       results: mergedResults.length,
     });
     return mergedResults;
   }
   console.log("[subagent.runSearch.done]", {
     query,
+    mode,
     results: 0,
   });
   return [];

@@ -17,6 +17,10 @@ export interface DeepResearchReferenceRecord {
   endLine: number;
   text: string;
   uri: string;
+  validationRefContent?: string;
+  accuracy?: "high" | "medium" | "low" | "conflicting" | "insufficient";
+  issueReason?: string;
+  correctFact?: string;
 }
 
 export interface DeepResearchSearchRecord {
@@ -45,6 +49,10 @@ export interface DeepResearchResolvedReference {
   startLine: number;
   endLine: number;
   text: string;
+  validationRefContent?: string;
+  accuracy?: "high" | "medium" | "low" | "conflicting" | "insufficient";
+  issueReason?: string;
+  correctFact?: string;
 }
 
 export interface DeepResearchSearchSession {
