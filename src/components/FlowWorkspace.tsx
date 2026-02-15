@@ -62,9 +62,21 @@ import { usePreviewHover } from "./flow/usePreviewHover";
 import { useProfileSettings } from "./flow/useProfileSettings";
 import { useChatActions } from "./flow/useChatActions";
 import { QuestionActionProvider } from "./flow/QuestionActionProvider";
+import {
+  executeBrowserValidation,
+  updateBrowserTabValidationState,
+} from "./flow/browserValidation";
+import {
+  isHttpUrl,
+  normalizeBrowserLabel,
+  normalizeHttpUrl,
+  stripLineNumberPrefix,
+  toReferenceHighlightPayload,
+  truncateLabel,
+} from "./flow/browser-utils";
 import ChatHistoryPanel from "./chat/ChatHistoryPanel";
 import type { InsightNodeData } from "../types/flow";
-import type { ChatMessage, DeepSearchReferencePayload } from "../types/chat";
+import type { ChatMessage } from "../types/chat";
 import { FlowFlexLayout } from "./flow/FlowFlexLayout";
 import { BrowserTab } from "./browser/BrowserTab";
 import { ChatTabActions } from "./flow/ChatTabActions";
@@ -84,14 +96,27 @@ import {
   listRunningChatIds,
   subscribeRunningChatJobs,
 } from "@/lib/running-chat-jobs";
+import {
+  BROWSER_TAB_PREFIX,
+  CHAT_TABSET_ID,
+  CHAT_TAB_ID,
+  GRAPH_TABSET_ID,
+  GRAPH_TAB_ID,
+  collectBrowserTabIds,
+  collectVisibleBrowserTabIds,
+  createDefaultLayoutModel,
+  createSingleBrowserLayoutModel,
+  createSingleTabLayoutModel,
+  findFirstTabsetId,
+  findTabsetIdContainingBrowserTab,
+  findTabsetIdContainingGraph,
+  hasTab,
+  hasTabset,
+  normalizeLayoutModel,
+  parseBrowserTabId,
+} from "./flow/flexlayout-utils";
+import type { FlexLayoutNode } from "./flow/flexlayout-utils";
 
-const CHAT_TABSET_ID = "chat-tabset";
-const GRAPH_TABSET_ID = "graph-tabset";
-const CHAT_TAB_ID = "chat-tab";
-const GRAPH_TAB_ID = "graph-tab";
-const CHAT_DEFAULT_WEIGHT = 32;
-const TOTAL_LAYOUT_WEIGHT = 100;
-const BROWSER_TAB_PREFIX = "browser:";
 const BROWSER_TAB_MAX_LABEL_LENGTH = 36;
 const DEFAULT_EDGE_OPTIONS = {
   type: "smoothstep",
@@ -146,537 +171,6 @@ const applyRunningStatusToSummaries = (
     ...chat,
     isRunning: Boolean(chat.isRunning) || runningChatIds.has(chat.id),
   }));
-
-interface FlexLayoutNode {
-  id?: string;
-  type?: string;
-  weight?: number;
-  component?: string;
-  selected?: number;
-  children?: FlexLayoutNode[];
-}
-
-const findLayoutNode = (
-  node: FlexLayoutNode | undefined,
-  id: string,
-): FlexLayoutNode | null => {
-  if (!node) {
-    return null;
-  }
-  if (node.id === id) {
-    return node;
-  }
-  if (!node.children) {
-    return null;
-  }
-  for (const child of node.children) {
-    const found = findLayoutNode(child, id);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-};
-
-const findFirstTabsetId = (node: FlexLayoutNode | undefined): string | null => {
-  if (!node) {
-    return null;
-  }
-  if (node.type === "tabset" && node.id) {
-    return node.id;
-  }
-  if (!node.children) {
-    return null;
-  }
-  for (const child of node.children) {
-    const found = findFirstTabsetId(child);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-};
-
-const isGraphTabNode = (node: FlexLayoutNode | undefined): boolean => {
-  if (!node || node.type !== "tab") {
-    return false;
-  }
-  const id = node.id ?? "";
-  const component = node.component ?? "";
-  return (
-    id === "graph" ||
-    id === GRAPH_TAB_ID ||
-    component === "graph" ||
-    component === GRAPH_TAB_ID
-  );
-};
-
-const findTabsetIdContainingGraph = (
-  node: FlexLayoutNode | undefined,
-): string | null => {
-  if (!node) {
-    return null;
-  }
-  if (
-    node.type === "tabset" &&
-    node.id &&
-    Array.isArray(node.children) &&
-    node.children.some((child) => isGraphTabNode(child))
-  ) {
-    return node.id;
-  }
-  if (!node.children) {
-    return null;
-  }
-  for (const child of node.children) {
-    const found = findTabsetIdContainingGraph(child);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-};
-
-const parseBrowserTabId = (value: string) => {
-  if (value.startsWith(BROWSER_TAB_PREFIX)) {
-    return value.slice(BROWSER_TAB_PREFIX.length);
-  }
-  if (value.startsWith("browser-")) {
-    return value;
-  }
-  return null;
-};
-
-const findTabsetIdContainingBrowserTab = (
-  node: FlexLayoutNode | undefined,
-  browserTabId: string,
-): string | null => {
-  if (!node) {
-    return null;
-  }
-  if (
-    node.type === "tabset" &&
-    node.id &&
-    Array.isArray(node.children) &&
-    node.children.some((child) => {
-      if (!child || child.type !== "tab") {
-        return false;
-      }
-      const component = child.component ?? child.id ?? "";
-      const parsedBrowserTabId = parseBrowserTabId(String(component));
-      return parsedBrowserTabId === browserTabId;
-    })
-  ) {
-    return node.id;
-  }
-  if (!node.children) {
-    return null;
-  }
-  for (const child of node.children) {
-    const found = findTabsetIdContainingBrowserTab(child, browserTabId);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-};
-
-const normalizeHttpUrl = (value: string): string | null => {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return null;
-    }
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-};
-
-const isHttpUrl = (value: string) => normalizeHttpUrl(value) !== null;
-
-const stripLineNumberPrefix = (value: string): string =>
-  value
-    .split(/\r?\n/)
-    .map((line) => {
-      const match = line.match(/^\d+\s+\|\s?(.*)$/);
-      return match ? match[1] : line;
-    })
-    .join("\n")
-    .trim();
-
-const normalizeBrowserLabel = (label?: string) => {
-  const trimmed = label?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-};
-
-const truncateLabel = (value: string, maxLength: number) => {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  if (maxLength <= 3) {
-    return ".".repeat(Math.max(0, maxLength));
-  }
-  return `${value.slice(0, maxLength - 3)}...`;
-};
-
-const toReferenceHighlightPayload = (
-  reference: DeepResearchResolvedReference,
-): BrowserViewReferenceHighlight => ({
-  refId: reference.refId,
-  text: reference.text,
-  startLine: reference.startLine,
-  endLine: reference.endLine,
-});
-
-const getValidationAccuracyPriority = (
-  accuracy: BrowserPageValidationRecord["accuracy"],
-): number => {
-  if (accuracy === "conflicting") {
-    return 5;
-  }
-  if (accuracy === "low") {
-    return 4;
-  }
-  if (accuracy === "insufficient") {
-    return 3;
-  }
-  if (accuracy === "medium") {
-    return 2;
-  }
-  if (accuracy === "high") {
-    return 1;
-  }
-  return 0;
-};
-
-const pickPrimaryValidationReference = (
-  references: DeepSearchReferencePayload[],
-): DeepSearchReferencePayload | null => {
-  if (references.length === 0) {
-    return null;
-  }
-  let selected: DeepSearchReferencePayload = references[0];
-  let selectedScore = getValidationAccuracyPriority(selected.accuracy);
-  references.slice(1).forEach((candidate) => {
-    const candidateScore = getValidationAccuracyPriority(candidate.accuracy);
-    if (candidateScore > selectedScore) {
-      selected = candidate;
-      selectedScore = candidateScore;
-      return;
-    }
-    if (candidateScore !== selectedScore) {
-      return;
-    }
-    if (candidate.validationRefContent && !selected.validationRefContent) {
-      selected = candidate;
-      return;
-    }
-    if (candidate.issueReason && !selected.issueReason) {
-      selected = candidate;
-    }
-  });
-  return selected;
-};
-
-const buildBrowserValidationRecord = ({
-  url,
-  title,
-  query,
-  references,
-  sourceCount,
-}: {
-  url: string;
-  title?: string;
-  query: string;
-  references: DeepSearchReferencePayload[];
-  sourceCount: number;
-}): BrowserPageValidationRecord => {
-  const checkedAt = new Date().toISOString();
-  const selected = pickPrimaryValidationReference(references);
-  if (!selected) {
-    return {
-      url,
-      title,
-      query,
-      checkedAt,
-      text: "No validated reference returned for this page.",
-      startLine: 1,
-      endLine: 1,
-      accuracy: "insufficient",
-      sourceCount,
-      referenceCount: 0,
-    };
-  }
-  const startLine = selected.startLine > 0 ? selected.startLine : 1;
-  const endLine = selected.endLine >= startLine ? selected.endLine : startLine;
-  const text = stripLineNumberPrefix(selected.text).trim();
-  return {
-    url,
-    title,
-    query,
-    checkedAt,
-    text: text.length > 0 ? text : "No validated reference excerpt available.",
-    startLine,
-    endLine,
-    referenceTitle: selected.title,
-    referenceUrl: selected.url,
-    accuracy: selected.accuracy,
-    validationRefContent: selected.validationRefContent,
-    issueReason: selected.issueReason,
-    correctFact: selected.correctFact,
-    sourceCount,
-    referenceCount: references.length,
-  };
-};
-
-const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => {
-  const ids = new Set<string>();
-  const visit = (current?: FlexLayoutNode) => {
-    if (!current) {
-      return;
-    }
-    if (current.type === "tab" && current.id) {
-      const component = current.component ?? current.id;
-      const tabId = parseBrowserTabId(String(component));
-      if (tabId) {
-        ids.add(tabId);
-      }
-    }
-    if (current.children) {
-      current.children.forEach((child) => visit(child));
-    }
-  };
-  visit(node);
-  return ids;
-};
-
-const collectVisibleBrowserTabIds = (
-  node: FlexLayoutNode | undefined,
-): Set<string> => {
-  const ids = new Set<string>();
-  const visit = (current?: FlexLayoutNode) => {
-    if (!current) {
-      return;
-    }
-    if (current.type === "tabset" && Array.isArray(current.children)) {
-      const selectedValue = current.selected;
-      let selectedNode: FlexLayoutNode | undefined;
-      if (typeof selectedValue === "number" && current.children[selectedValue]) {
-        selectedNode = current.children[selectedValue];
-      } else if (typeof selectedValue === "string") {
-        selectedNode = current.children.find(
-          (child) =>
-            child.type === "tab" &&
-            (child.id === selectedValue || child.component === selectedValue),
-        );
-      }
-      if (!selectedNode) {
-        selectedNode = current.children[0];
-      }
-      if (selectedNode?.type === "tab") {
-        const component = selectedNode.component ?? selectedNode.id;
-        const tabId = component ? parseBrowserTabId(String(component)) : null;
-        if (tabId) {
-          ids.add(tabId);
-        }
-      }
-      return;
-    }
-    if (current.children) {
-      current.children.forEach((child) => visit(child));
-    }
-  };
-  visit(node);
-  return ids;
-};
-
-const hasTab = (layout: FlexLayoutNode | undefined, tabId: string): boolean => {
-  const node = findLayoutNode(layout, tabId);
-  return Boolean(node && node.type === "tab");
-};
-
-const hasTabset = (layout: FlexLayoutNode | undefined, tabsetId: string): boolean => {
-  const node = findLayoutNode(layout, tabsetId);
-  return Boolean(node && node.type === "tabset");
-};
-
-const normalizeLayoutModel = (model: IJsonModel): IJsonModel => {
-  const next = JSON.parse(JSON.stringify(model)) as IJsonModel;
-  next.global = {
-    ...next.global,
-    tabEnableFloat: false,
-    tabEnableClose: true,
-    tabEnableRenderOnDemand: false,
-    tabSetAutoSelectTab: true,
-    tabSetEnableClose: false,
-    tabSetEnableDeleteWhenEmpty: true,
-    tabSetMinWidth: 100,
-    tabSetMinHeight: 100,
-    borderMinSize: 100,
-  };
-
-  const ensureSelected = (node: FlexLayoutNode | undefined) => {
-    if (!node?.children) {
-      return;
-    }
-    if (node.type === "tabset" && node.children.length > 0) {
-      const selected = typeof node.selected === "number" ? node.selected : undefined;
-      if (selected === undefined || selected < 0) {
-        node.selected = 0;
-      }
-    }
-    node.children.forEach((child) => ensureSelected(child));
-  };
-
-  ensureSelected(next.layout as FlexLayoutNode);
-  return next;
-};
-
-const createDefaultLayoutModel = (): IJsonModel =>
-  normalizeLayoutModel({
-    global: {
-      tabEnableFloat: false,
-      tabEnableClose: true,
-      tabEnableRenderOnDemand: false,
-      tabSetEnableClose: false,
-      tabSetEnableDeleteWhenEmpty: true,
-      tabSetMinWidth: 100,
-      tabSetMinHeight: 100,
-      borderMinSize: 100,
-    },
-    borders: [],
-    layout: {
-      type: "row",
-      weight: TOTAL_LAYOUT_WEIGHT,
-      children: [
-        {
-          type: "tabset",
-          id: CHAT_TABSET_ID,
-          weight: CHAT_DEFAULT_WEIGHT,
-          selected: 0,
-          enableClose: false,
-          enableDeleteWhenEmpty: true,
-          children: [
-            {
-              type: "tab",
-              id: CHAT_TAB_ID,
-              name: "Chat",
-              component: "chat",
-              enableClose: true,
-            },
-          ],
-        },
-        {
-          type: "tabset",
-          id: GRAPH_TABSET_ID,
-          weight: TOTAL_LAYOUT_WEIGHT - CHAT_DEFAULT_WEIGHT,
-          selected: 0,
-          enableClose: false,
-          enableDeleteWhenEmpty: true,
-          children: [
-            {
-              type: "tab",
-              id: GRAPH_TAB_ID,
-              name: "Graph",
-              component: "graph",
-              enableClose: true,
-            },
-          ],
-        },
-      ],
-    },
-  });
-
-const createSingleTabLayoutModel = (tabKind: "chat" | "graph"): IJsonModel => {
-  const tabId = tabKind === "chat" ? CHAT_TAB_ID : GRAPH_TAB_ID;
-  const tabsetId = tabKind === "chat" ? CHAT_TABSET_ID : GRAPH_TABSET_ID;
-  return normalizeLayoutModel({
-    global: {
-      tabEnableFloat: false,
-      tabEnableClose: true,
-      tabEnableRenderOnDemand: false,
-      tabSetEnableClose: false,
-      tabSetEnableDeleteWhenEmpty: true,
-      tabSetMinWidth: 100,
-      tabSetMinHeight: 100,
-      borderMinSize: 100,
-    },
-    borders: [],
-    layout: {
-      type: "row",
-      weight: TOTAL_LAYOUT_WEIGHT,
-      children: [
-        {
-          type: "tabset",
-          id: tabsetId,
-          weight: TOTAL_LAYOUT_WEIGHT,
-          selected: 0,
-          enableClose: false,
-          enableDeleteWhenEmpty: true,
-          children: [
-            {
-              type: "tab",
-              id: tabId,
-              name: tabKind === "chat" ? "Chat" : "Graph",
-              component: tabKind,
-              enableClose: true,
-            },
-          ],
-        },
-      ],
-    },
-  });
-};
-
-const createSingleBrowserLayoutModel = (
-  tabId: string,
-  label?: string,
-): IJsonModel => {
-  const resolvedLabel = normalizeBrowserLabel(label);
-  return {
-    global: {
-      tabEnableFloat: false,
-      tabEnableClose: true,
-      tabSetEnableClose: false,
-      tabSetEnableDeleteWhenEmpty: true,
-      tabSetMinWidth: 100,
-      tabSetMinHeight: 100,
-      borderMinSize: 100,
-    },
-    borders: [],
-    layout: {
-      type: "row",
-      weight: TOTAL_LAYOUT_WEIGHT,
-      children: [
-        {
-          type: "tabset",
-          id: GRAPH_TABSET_ID,
-          weight: TOTAL_LAYOUT_WEIGHT,
-          selected: 1,
-          enableClose: false,
-          enableDeleteWhenEmpty: true,
-          children: [
-            {
-              type: "tab",
-              id: GRAPH_TAB_ID,
-              name: "Graph",
-              component: "graph",
-              enableClose: true,
-            },
-            {
-              type: "tab",
-              id: tabId,
-              name: resolvedLabel ?? "Browser",
-              component: `${BROWSER_TAB_PREFIX}${tabId}`,
-              enableClose: true,
-            },
-          ],
-        },
-      ],
-    },
-  };
-};
 
 interface FlowWorkspaceInnerProps extends FlowWorkspaceProps {
   activeChatId: string | null;
@@ -1931,95 +1425,44 @@ function FlowWorkspaceInner({
         return;
       }
       setBrowserTabs((prev) =>
-        prev.map((item) =>
-          item.id === tabId
-            ? {
-                ...item,
-                validationStatus: "running",
-                validationError: undefined,
-              }
-            : item,
-        ),
+        updateBrowserTabValidationState({
+          tabs: prev,
+          tabId,
+          status: "running",
+        }),
       );
       try {
-        const snapshotResult = await trpc.browserView.captureValidationSnapshot.mutate({
-          tabId,
-        });
-        const snapshot = snapshotResult.snapshot;
-        if (!snapshot) {
-          throw new Error("Unable to capture page content for validation.");
-        }
-        const pageText = snapshot.text.trim();
-        if (!pageText) {
-          throw new Error("No page text available for validation.");
-        }
-        const resolvedPageUrl = normalizeHttpUrl(snapshot.url) ?? normalizedTabUrl;
-        const snapshotTitle = snapshot.title?.trim();
-        const tabTitle = tab.title?.trim();
-        const querySeed =
-          (snapshotTitle && snapshotTitle.length > 0
-            ? snapshotTitle
-            : undefined) ??
-          (tabTitle && tabTitle.length > 0
-            ? tabTitle
-            : undefined) ??
-          resolvedPageUrl;
-        const query = querySeed.length > 220 ? querySeed.slice(0, 220) : querySeed;
-        const validateResult = await trpc.chat.validate.mutate({
+        const { resolvedPageUrl, record } = await executeBrowserValidation({
+          tab,
+          normalizedTabUrl,
           projectPath: project.path,
-          query,
-          answer: pageText,
-          settings: runtimeSettings,
-          deepResearch: deepResearchConfig,
-        });
-        if (validateResult.status !== "complete") {
-          throw new Error("Validation skipped. Enable validate in deep research settings.");
-        }
-        const references = Array.isArray(validateResult.references)
-          ? validateResult.references
-          : [];
-        const sources = Array.isArray(validateResult.sources)
-          ? validateResult.sources
-          : [];
-        const record = buildBrowserValidationRecord({
-          url: resolvedPageUrl,
-          title:
-            (snapshotTitle && snapshotTitle.length > 0
-              ? snapshotTitle
-              : undefined) ??
-            tabTitle,
-          query: validateResult.query ?? query,
-          references,
-          sourceCount: sources.length,
+          runtimeSettings,
+          deepResearchConfig,
+          captureValidationSnapshot: () =>
+            trpc.browserView.captureValidationSnapshot.mutate({ tabId }),
+          validateAnswer: (input) => trpc.chat.validate.mutate(input),
         });
         setBrowserValidationByUrl((prev) => ({
           ...prev,
           [resolvedPageUrl]: record,
         }));
         setBrowserTabs((prev) =>
-          prev.map((item) =>
-            item.id === tabId
-              ? {
-                  ...item,
-                  validationStatus: "complete",
-                  validationError: undefined,
-                }
-              : item,
-          ),
+          updateBrowserTabValidationState({
+            tabs: prev,
+            tabId,
+            status: "complete",
+          }),
         );
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Page validation failed";
         setBrowserTabs((prev) =>
-          prev.map((item) =>
-            item.id === tabId
-              ? {
-                  ...item,
-                  validationStatus: "failed",
-                  validationError: message,
-                }
-              : item,
-          ),
+          updateBrowserTabValidationState({
+            tabs: prev,
+            tabId,
+            status: "failed",
+            error: message,
+          }),
         );
       }
     },
