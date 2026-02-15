@@ -427,6 +427,37 @@ const toExecutionStatus = (
   return "running";
 };
 
+const isTerminalToolStatus = (
+  status: ChatMessage["toolStatus"] | undefined,
+): status is "complete" | "failed" =>
+  status === "complete" || status === "failed";
+
+const shouldPreferDeepSearchMessage = (
+  current: ChatMessage | undefined,
+  next: ChatMessage,
+): boolean => {
+  if (!current) {
+    return true;
+  }
+  const currentStatus = current.toolStatus;
+  const nextStatus = next.toolStatus;
+  if (isTerminalToolStatus(currentStatus) && nextStatus === "running") {
+    return false;
+  }
+  if (isTerminalToolStatus(nextStatus) && currentStatus === "running") {
+    return true;
+  }
+  const currentTimestamp = Date.parse(current.createdAt);
+  const nextTimestamp = Date.parse(next.createdAt);
+  if (!Number.isFinite(currentTimestamp)) {
+    return true;
+  }
+  if (!Number.isFinite(nextTimestamp)) {
+    return false;
+  }
+  return nextTimestamp >= currentTimestamp;
+};
+
 const resolveSubagentParentExecutionStatus = (
   subagentMessage: ChatMessage,
   deepSearchMessage?: ChatMessage,
@@ -1055,7 +1086,10 @@ export default function ChatHistoryPanel({
       if (!toolCallId) {
         return;
       }
-      deepSearchByToolCall.set(toolCallId, message);
+      const current = deepSearchByToolCall.get(toolCallId);
+      if (shouldPreferDeepSearchMessage(current, message)) {
+        deepSearchByToolCall.set(toolCallId, message);
+      }
     });
 
     sortedMessages.forEach((message) => {

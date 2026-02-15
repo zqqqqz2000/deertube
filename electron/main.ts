@@ -7,6 +7,7 @@ import { createTRPCContext } from './trpc/init'
 import { appRouter } from './trpc/routers/_app'
 import { getPreviewController } from './trpc/preview'
 import { getBrowserViewController } from './browserview'
+import { getCdpBrowserController } from './cdp-browser'
 import { ensureBuiltinSearchSkillsSeeded } from "./skills/registry";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -116,6 +117,7 @@ function createWindow() {
 
   getPreviewController().attachWindow(win)
   getBrowserViewController().attachWindow(win)
+  getCdpBrowserController().attachWindow(win)
   createIPCHandler({
     router: appRouter,
     windows: [win],

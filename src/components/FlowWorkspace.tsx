@@ -64,11 +64,12 @@ import { useChatActions } from "./flow/useChatActions";
 import { QuestionActionProvider } from "./flow/QuestionActionProvider";
 import ChatHistoryPanel from "./chat/ChatHistoryPanel";
 import type { InsightNodeData } from "../types/flow";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, DeepSearchReferencePayload } from "../types/chat";
 import { FlowFlexLayout } from "./flow/FlowFlexLayout";
 import { BrowserTab } from "./browser/BrowserTab";
 import { ChatTabActions } from "./flow/ChatTabActions";
 import type {
+  BrowserPageValidationRecord,
   BrowserViewBounds,
   BrowserViewReferenceHighlight,
   BrowserViewSelection,
@@ -105,6 +106,7 @@ const coerceProjectState = (state: ProjectStateInput): ProjectState => ({
   chat: state.chat ?? [],
   autoLayoutLocked:
     typeof state.autoLayoutLocked === "boolean" ? state.autoLayoutLocked : true,
+  browserValidationByUrl: state.browserValidationByUrl ?? {},
 });
 
 const createEmptyProjectState = (): ProjectState => ({
@@ -112,6 +114,7 @@ const createEmptyProjectState = (): ProjectState => ({
   edges: [],
   chat: [],
   autoLayoutLocked: true,
+  browserValidationByUrl: {},
 });
 
 const toTimestamp = (value: string) => {
@@ -278,14 +281,19 @@ const findTabsetIdContainingBrowserTab = (
   return null;
 };
 
-const isHttpUrl = (value: string) => {
+const normalizeHttpUrl = (value: string): string | null => {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
   } catch {
-    return false;
+    return null;
   }
 };
+
+const isHttpUrl = (value: string) => normalizeHttpUrl(value) !== null;
 
 const stripLineNumberPrefix = (value: string): string =>
   value
@@ -320,6 +328,107 @@ const toReferenceHighlightPayload = (
   startLine: reference.startLine,
   endLine: reference.endLine,
 });
+
+const getValidationAccuracyPriority = (
+  accuracy: BrowserPageValidationRecord["accuracy"],
+): number => {
+  if (accuracy === "conflicting") {
+    return 5;
+  }
+  if (accuracy === "low") {
+    return 4;
+  }
+  if (accuracy === "insufficient") {
+    return 3;
+  }
+  if (accuracy === "medium") {
+    return 2;
+  }
+  if (accuracy === "high") {
+    return 1;
+  }
+  return 0;
+};
+
+const pickPrimaryValidationReference = (
+  references: DeepSearchReferencePayload[],
+): DeepSearchReferencePayload | null => {
+  if (references.length === 0) {
+    return null;
+  }
+  let selected: DeepSearchReferencePayload = references[0];
+  let selectedScore = getValidationAccuracyPriority(selected.accuracy);
+  references.slice(1).forEach((candidate) => {
+    const candidateScore = getValidationAccuracyPriority(candidate.accuracy);
+    if (candidateScore > selectedScore) {
+      selected = candidate;
+      selectedScore = candidateScore;
+      return;
+    }
+    if (candidateScore !== selectedScore) {
+      return;
+    }
+    if (candidate.validationRefContent && !selected.validationRefContent) {
+      selected = candidate;
+      return;
+    }
+    if (candidate.issueReason && !selected.issueReason) {
+      selected = candidate;
+    }
+  });
+  return selected;
+};
+
+const buildBrowserValidationRecord = ({
+  url,
+  title,
+  query,
+  references,
+  sourceCount,
+}: {
+  url: string;
+  title?: string;
+  query: string;
+  references: DeepSearchReferencePayload[];
+  sourceCount: number;
+}): BrowserPageValidationRecord => {
+  const checkedAt = new Date().toISOString();
+  const selected = pickPrimaryValidationReference(references);
+  if (!selected) {
+    return {
+      url,
+      title,
+      query,
+      checkedAt,
+      text: "No validated reference returned for this page.",
+      startLine: 1,
+      endLine: 1,
+      accuracy: "insufficient",
+      sourceCount,
+      referenceCount: 0,
+    };
+  }
+  const startLine = selected.startLine > 0 ? selected.startLine : 1;
+  const endLine = selected.endLine >= startLine ? selected.endLine : startLine;
+  const text = stripLineNumberPrefix(selected.text).trim();
+  return {
+    url,
+    title,
+    query,
+    checkedAt,
+    text: text.length > 0 ? text : "No validated reference excerpt available.",
+    startLine,
+    endLine,
+    referenceTitle: selected.title,
+    referenceUrl: selected.url,
+    accuracy: selected.accuracy,
+    validationRefContent: selected.validationRefContent,
+    issueReason: selected.issueReason,
+    correctFact: selected.correctFact,
+    sourceCount,
+    referenceCount: references.length,
+  };
+};
 
 const collectBrowserTabIds = (node: FlexLayoutNode | undefined): Set<string> => {
   const ids = new Set<string>();
@@ -664,7 +773,7 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
           {
             slotId,
             chatId: null,
-            initialState: props.initialState,
+            initialState: coerceProjectState(props.initialState),
           },
         ]);
         setActiveSlotId(slotId);
@@ -769,6 +878,7 @@ function FlowWorkspaceLoader(props: FlowWorkspaceProps) {
           edges: state.edges,
           chat: state.chat,
           autoLayoutLocked: state.autoLayoutLocked,
+          browserValidationByUrl: state.browserValidationByUrl,
         },
       });
       const nextChatId = result.activeChatId ?? result.chat.id;
@@ -1001,6 +1111,9 @@ function FlowWorkspaceInner({
     () => createDefaultLayoutModel(),
   );
   const [browserTabs, setBrowserTabs] = useState<BrowserViewTabState[]>([]);
+  const [browserValidationByUrl, setBrowserValidationByUrl] = useState<
+    Record<string, BrowserPageValidationRecord>
+  >(() => initialState.browserValidationByUrl ?? {});
   const [browserBounds, setBrowserBounds] = useState<
     Record<string, BrowserViewBounds>
   >({});
@@ -1057,6 +1170,7 @@ function FlowWorkspaceInner({
     () => buildRuntimeSettings(activeProfile),
     [activeProfile],
   );
+  const prefersCdpBrowser = activeProfile?.browserDisplayMode === "cdp";
   const persistDraftChatBeforeSend = useCallback(
     async (prompt: string) => {
       if (sessionChatId) {
@@ -1070,6 +1184,7 @@ function FlowWorkspaceInner({
           edges,
           chat: [],
           autoLayoutLocked,
+          browserValidationByUrl,
         },
       });
       if (nextChatId) {
@@ -1078,6 +1193,7 @@ function FlowWorkspaceInner({
     },
     [
       autoLayoutLocked,
+      browserValidationByUrl,
       edges,
       nodes,
       onPersistDraftChat,
@@ -1419,16 +1535,23 @@ function FlowWorkspaceInner({
       }
       setBrowserTabs((prev) =>
         prev.map((tab) =>
-          tab.id === payload.tabId
-            ? {
-                ...tab,
-                url: payload.url ?? tab.url,
-                title: payload.title ?? tab.title,
-                canGoBack: payload.canGoBack ?? tab.canGoBack,
-                canGoForward: payload.canGoForward ?? tab.canGoForward,
-                isLoading: payload.isLoading ?? tab.isLoading,
-              }
-            : tab,
+          {
+            if (tab.id !== payload.tabId) {
+              return tab;
+            }
+            const nextUrl = payload.url ?? tab.url;
+            const urlChanged = nextUrl !== tab.url;
+            return {
+              ...tab,
+              url: nextUrl,
+              title: payload.title ?? tab.title,
+              canGoBack: payload.canGoBack ?? tab.canGoBack,
+              canGoForward: payload.canGoForward ?? tab.canGoForward,
+              isLoading: payload.isLoading ?? tab.isLoading,
+              validationStatus: urlChanged ? undefined : tab.validationStatus,
+              validationError: urlChanged ? undefined : tab.validationError,
+            };
+          },
         ),
       );
     };
@@ -1521,10 +1644,10 @@ function FlowWorkspaceInner({
       label?: string,
       referenceHighlight?: BrowserViewReferenceHighlight,
     ): string | null => {
-      if (!isHttpUrl(rawUrl)) {
+      const normalized = normalizeHttpUrl(rawUrl);
+      if (!normalized) {
         return null;
       }
-      const normalized = new URL(rawUrl).toString();
       const existing = browserTabs.find((tab) => tab.url === normalized);
       if (existing) {
         setBrowserTabs((prev) =>
@@ -1672,8 +1795,41 @@ function FlowWorkspaceInner({
     [resolveBrowserReference],
   );
 
+  const openCdpUrl = useCallback(
+    (
+      url: string,
+      reference?: BrowserViewReferenceHighlight,
+    ) => {
+      const normalizedUrl = normalizeHttpUrl(url);
+      if (!normalizedUrl) {
+        return;
+      }
+      trpc.cdpBrowser.open
+        .mutate({
+          url: normalizedUrl,
+          reference,
+        })
+        .catch(() => undefined);
+    },
+    [],
+  );
+
   const openBrowserReference = useCallback(
     (rawUrl: string, label?: string) => {
+      if (prefersCdpBrowser) {
+        if (isHttpUrl(rawUrl)) {
+          openCdpUrl(rawUrl);
+          return;
+        }
+        void resolveBrowserReference(rawUrl).then((reference) => {
+          if (!reference) {
+            return;
+          }
+          const highlight = toReferenceHighlightPayload(reference);
+          openCdpUrl(reference.url, highlight);
+        });
+        return;
+      }
       if (isHttpUrl(rawUrl)) {
         openBrowserUrl(rawUrl, label);
         return;
@@ -1694,7 +1850,13 @@ function FlowWorkspaceInner({
         scheduleBrowserReferenceHighlight(tabId, highlight);
       });
     },
-    [openBrowserUrl, resolveBrowserReference, scheduleBrowserReferenceHighlight],
+    [
+      openBrowserUrl,
+      openCdpUrl,
+      prefersCdpBrowser,
+      resolveBrowserReference,
+      scheduleBrowserReferenceHighlight,
+    ],
   );
 
   const handleBrowserBoundsChange = useCallback(
@@ -1750,9 +1912,129 @@ function FlowWorkspaceInner({
     trpc.browserView.openExternal.mutate({ url }).catch(() => undefined);
   }, []);
 
+  const handleBrowserOpenCdp = useCallback(
+    (tabId: string, url: string) => {
+      const tab = browserTabMap.get(tabId);
+      openCdpUrl(url, tab?.referenceHighlight);
+    },
+    [browserTabMap, openCdpUrl],
+  );
+
+  const handleBrowserValidate = useCallback(
+    async (tabId: string) => {
+      const tab = browserTabMap.get(tabId);
+      if (!tab) {
+        return;
+      }
+      const normalizedTabUrl = normalizeHttpUrl(tab.url);
+      if (!normalizedTabUrl) {
+        return;
+      }
+      setBrowserTabs((prev) =>
+        prev.map((item) =>
+          item.id === tabId
+            ? {
+                ...item,
+                validationStatus: "running",
+                validationError: undefined,
+              }
+            : item,
+        ),
+      );
+      try {
+        const snapshotResult = await trpc.browserView.captureValidationSnapshot.mutate({
+          tabId,
+        });
+        const snapshot = snapshotResult.snapshot;
+        if (!snapshot) {
+          throw new Error("Unable to capture page content for validation.");
+        }
+        const pageText = snapshot.text.trim();
+        if (!pageText) {
+          throw new Error("No page text available for validation.");
+        }
+        const resolvedPageUrl = normalizeHttpUrl(snapshot.url) ?? normalizedTabUrl;
+        const snapshotTitle = snapshot.title?.trim();
+        const tabTitle = tab.title?.trim();
+        const querySeed =
+          (snapshotTitle && snapshotTitle.length > 0
+            ? snapshotTitle
+            : undefined) ??
+          (tabTitle && tabTitle.length > 0
+            ? tabTitle
+            : undefined) ??
+          resolvedPageUrl;
+        const query = querySeed.length > 220 ? querySeed.slice(0, 220) : querySeed;
+        const validateResult = await trpc.chat.validate.mutate({
+          projectPath: project.path,
+          query,
+          answer: pageText,
+          settings: runtimeSettings,
+          deepResearch: deepResearchConfig,
+        });
+        if (validateResult.status !== "complete") {
+          throw new Error("Validation skipped. Enable validate in deep research settings.");
+        }
+        const references = Array.isArray(validateResult.references)
+          ? validateResult.references
+          : [];
+        const sources = Array.isArray(validateResult.sources)
+          ? validateResult.sources
+          : [];
+        const record = buildBrowserValidationRecord({
+          url: resolvedPageUrl,
+          title:
+            (snapshotTitle && snapshotTitle.length > 0
+              ? snapshotTitle
+              : undefined) ??
+            tabTitle,
+          query: validateResult.query ?? query,
+          references,
+          sourceCount: sources.length,
+        });
+        setBrowserValidationByUrl((prev) => ({
+          ...prev,
+          [resolvedPageUrl]: record,
+        }));
+        setBrowserTabs((prev) =>
+          prev.map((item) =>
+            item.id === tabId
+              ? {
+                  ...item,
+                  validationStatus: "complete",
+                  validationError: undefined,
+                }
+              : item,
+          ),
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Page validation failed";
+        setBrowserTabs((prev) =>
+          prev.map((item) =>
+            item.id === tabId
+              ? {
+                  ...item,
+                  validationStatus: "failed",
+                  validationError: message,
+                }
+              : item,
+          ),
+        );
+      }
+    },
+    [
+      browserTabMap,
+      deepResearchConfig,
+      project.path,
+      runtimeSettings,
+    ],
+  );
+
   const handleBrowserNavigate = useCallback(
     (tabId: string, url: string) => {
-      if (!isHttpUrl(url)) {
+      const normalizedUrl = normalizeHttpUrl(url);
+      if (!normalizedUrl) {
         return;
       }
       setBrowserTabs((prev) =>
@@ -1760,10 +2042,12 @@ function FlowWorkspaceInner({
           tab.id === tabId
             ? {
                 ...tab,
-                url,
+                url: normalizedUrl,
                 title: undefined,
                 isLoading: true,
                 referenceHighlight: undefined,
+                validationStatus: undefined,
+                validationError: undefined,
               }
             : tab,
         ),
@@ -1774,7 +2058,7 @@ function FlowWorkspaceInner({
           .open
           .mutate({
             tabId,
-            url,
+            url: normalizedUrl,
             bounds,
           })
           .catch(() => undefined);
@@ -1833,6 +2117,7 @@ function FlowWorkspaceInner({
             edges,
             chat: chatMessages,
             autoLayoutLocked,
+            browserValidationByUrl,
             version: 1,
           },
         })
@@ -1848,6 +2133,7 @@ function FlowWorkspaceInner({
     };
   }, [
     autoLayoutLocked,
+    browserValidationByUrl,
     chatMessages,
     edges,
     hydrated,
@@ -2080,16 +2366,26 @@ function FlowWorkspaceInner({
     const browserTabId = parseBrowserTabId(tabId);
     if (browserTabId) {
       const tab = browserTabMap.get(browserTabId);
+      const normalizedTabUrl = tab ? normalizeHttpUrl(tab.url) : null;
+      const validation =
+        normalizedTabUrl !== null
+          ? browserValidationByUrl[normalizedTabUrl]
+          : undefined;
       return (
         <BrowserTab
           tabId={browserTabId}
           url={tab?.url ?? ""}
           canGoBack={tab?.canGoBack}
           canGoForward={tab?.canGoForward}
+          validation={validation}
+          validationStatus={tab?.validationStatus}
+          validationError={tab?.validationError}
           onBoundsChange={handleBrowserBoundsChange}
           onRequestBack={handleBrowserBack}
           onRequestForward={handleBrowserForward}
           onRequestReload={handleBrowserReload}
+          onRequestValidate={handleBrowserValidate}
+          onRequestOpenCdp={handleBrowserOpenCdp}
           onRequestOpenExternal={handleBrowserOpenExternal}
           onRequestNavigate={handleBrowserNavigate}
         />

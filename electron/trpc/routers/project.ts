@@ -8,12 +8,17 @@ import { z } from 'zod'
 import { baseProcedure, createTRPCRouter } from '../init'
 import type { FlowEdge, FlowNode } from '../../../src/types/flow'
 import type { ChatMessage } from '../../../src/types/chat'
+import type {
+  BrowserPageValidationRecord,
+  ReferenceAccuracy,
+} from '../../../src/types/browserview'
 
 interface ChatSessionState {
   nodes: FlowNode[]
   edges: FlowEdge[]
   chat: ChatMessage[]
   autoLayoutLocked?: boolean
+  browserValidationByUrl?: Record<string, BrowserPageValidationRecord>
 }
 
 interface ProjectChatRecord {
@@ -155,6 +160,96 @@ function toChatSummaries(chats: ProjectChatRecord[]): ProjectChatSummary[] {
   return sortChatRecords(chats).map((chat) => toChatSummary(chat))
 }
 
+const isReferenceAccuracy = (value: unknown): value is ReferenceAccuracy =>
+  value === 'high'
+  || value === 'medium'
+  || value === 'low'
+  || value === 'conflicting'
+  || value === 'insufficient'
+
+const normalizeOptionalText = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+const normalizePositiveInteger = (
+  value: unknown,
+  fallback: number,
+): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback
+  }
+  const floored = Math.floor(value)
+  return floored > 0 ? floored : fallback
+}
+
+const normalizeNonNegativeInteger = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0
+  }
+  const floored = Math.floor(value)
+  return floored > 0 ? floored : 0
+}
+
+const normalizeBrowserValidationRecord = (
+  key: string,
+  value: unknown,
+): BrowserPageValidationRecord | null => {
+  if (!isObject(value)) {
+    return null
+  }
+  const url = normalizeOptionalText(value.url) ?? normalizeOptionalText(key)
+  if (!url) {
+    return null
+  }
+  const query = normalizeOptionalText(value.query) ?? url
+  const text = normalizeOptionalText(value.text) ?? 'No validation excerpt available.'
+  const startLine = normalizePositiveInteger(value.startLine, 1)
+  const endLine = Math.max(startLine, normalizePositiveInteger(value.endLine, startLine))
+  const checkedAt =
+    normalizeOptionalText(value.checkedAt) ?? new Date().toISOString()
+  const accuracy = isReferenceAccuracy(value.accuracy)
+    ? value.accuracy
+    : undefined
+  return {
+    url,
+    title: normalizeOptionalText(value.title),
+    query,
+    checkedAt,
+    text,
+    startLine,
+    endLine,
+    referenceTitle: normalizeOptionalText(value.referenceTitle),
+    referenceUrl: normalizeOptionalText(value.referenceUrl),
+    accuracy,
+    validationRefContent: normalizeOptionalText(value.validationRefContent),
+    issueReason: normalizeOptionalText(value.issueReason),
+    correctFact: normalizeOptionalText(value.correctFact),
+    sourceCount: normalizeNonNegativeInteger(value.sourceCount),
+    referenceCount: normalizeNonNegativeInteger(value.referenceCount),
+  }
+}
+
+const normalizeBrowserValidationByUrl = (
+  value: unknown,
+): Record<string, BrowserPageValidationRecord> => {
+  if (!isObject(value)) {
+    return {}
+  }
+  const normalized: Record<string, BrowserPageValidationRecord> = {}
+  Object.entries(value).forEach(([key, candidate]) => {
+    const record = normalizeBrowserValidationRecord(key, candidate)
+    if (!record) {
+      return
+    }
+    normalized[record.url] = record
+  })
+  return normalized
+}
+
 function normalizeChatState(
   state: Partial<ChatSessionState> | undefined,
 ): ChatSessionState {
@@ -164,6 +259,9 @@ function normalizeChatState(
     chat: Array.isArray(state?.chat) ? state.chat : [],
     autoLayoutLocked:
       typeof state?.autoLayoutLocked === 'boolean' ? state.autoLayoutLocked : true,
+    browserValidationByUrl: normalizeBrowserValidationByUrl(
+      state?.browserValidationByUrl,
+    ),
   }
 }
 
@@ -173,6 +271,7 @@ function createEmptyChatState(): ChatSessionState {
     edges: [],
     chat: [],
     autoLayoutLocked: true,
+    browserValidationByUrl: {},
   }
 }
 
@@ -361,6 +460,10 @@ function normalizeChatRecord(
     edges: rawState.edges as FlowEdge[] | undefined,
     chat: rawState.chat as ChatMessage[] | undefined,
     autoLayoutLocked: rawState.autoLayoutLocked as boolean | undefined,
+    browserValidationByUrl:
+      rawState.browserValidationByUrl as
+        | Record<string, BrowserPageValidationRecord>
+        | undefined,
   })
   const fallbackFirstQuestion = findFirstUserQuestion(state.chat)
   const firstQuestion =
@@ -430,6 +533,10 @@ function parseProjectStore(raw: unknown): { store: ProjectStoreState; migrated: 
     edges: raw.edges as FlowEdge[] | undefined,
     chat: raw.chat as ChatMessage[] | undefined,
     autoLayoutLocked: raw.autoLayoutLocked as boolean | undefined,
+    browserValidationByUrl:
+      raw.browserValidationByUrl as
+        | Record<string, BrowserPageValidationRecord>
+        | undefined,
   })
   const hasLegacyData =
     legacyState.nodes.length > 0 ||
@@ -541,6 +648,7 @@ const chatStateSchema = z.object({
   edges: z.array(z.custom<FlowEdge>()),
   chat: z.array(z.custom<ChatMessage>()).optional(),
   autoLayoutLocked: z.boolean().optional(),
+  browserValidationByUrl: z.record(z.string(), z.custom<BrowserPageValidationRecord>()).optional(),
 })
 
 export const projectRouter = createTRPCRouter({
@@ -615,6 +723,7 @@ export const projectRouter = createTRPCRouter({
           edges: input.state.edges,
           chat: input.state.chat ?? [],
           autoLayoutLocked: input.state.autoLayoutLocked,
+          browserValidationByUrl: input.state.browserValidationByUrl,
         }),
       }
       store.chats = [...store.chats, nextChat]
@@ -711,6 +820,7 @@ export const projectRouter = createTRPCRouter({
         edges: input.state.edges,
         chat: input.state.chat ?? [],
         autoLayoutLocked: input.state.autoLayoutLocked,
+        browserValidationByUrl: input.state.browserValidationByUrl,
       })
       let chat = store.chats.find((item) => item.id === input.chatId)
       if (!chat) {

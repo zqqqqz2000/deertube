@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
 import {
   Sheet,
   SheetContent,
@@ -237,6 +238,32 @@ export default function SettingsPanel({
                         value={profile.name}
                         onChange={(event) => onProfileChange(profile.id, { name: event.target.value })}
                       />
+                    </div>
+
+                    <Separator className="bg-border/70" />
+
+                    <div className="space-y-3">
+                      <div className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                        Browser
+                      </div>
+                      <div className="flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-background/40 px-3 py-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                            Use CDP browser for refs
+                          </Label>
+                          <div className="text-sm text-muted-foreground">
+                            Open citations/sources with Chrome CDP instead of embedded BrowserView.
+                          </div>
+                        </div>
+                        <Switch
+                          checked={profile.browserDisplayMode === 'cdp'}
+                          onCheckedChange={(checked) =>
+                            onProfileChange(profile.id, {
+                              browserDisplayMode: checked ? 'cdp' : 'embedded',
+                            })
+                          }
+                        />
+                      </div>
                     </div>
 
                     <Separator className="bg-border/70" />

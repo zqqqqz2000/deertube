@@ -1,5 +1,6 @@
 import type { FlowEdge, FlowNode } from "../../types/flow";
 import type { ChatMessage } from "../../types/chat";
+import type { BrowserPageValidationRecord } from "../../types/browserview";
 import type { Theme } from "../../lib/theme";
 
 export interface ProjectState {
@@ -7,6 +8,7 @@ export interface ProjectState {
   edges: FlowEdge[];
   chat: ChatMessage[];
   autoLayoutLocked?: boolean;
+  browserValidationByUrl?: Record<string, BrowserPageValidationRecord>;
 }
 
 export interface ProjectChatSummary {

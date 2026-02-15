@@ -19,6 +19,18 @@ interface BrowserViewSelectionPayload {
   rect?: JsonValue;
 }
 
+interface BrowserViewValidationSnapshotPayload {
+  text?: JsonValue;
+  url?: JsonValue;
+  title?: JsonValue;
+}
+
+interface BrowserViewValidationSnapshot {
+  text: string;
+  url: string;
+  title?: string;
+}
+
 interface BrowserViewState {
   tabId: string;
   url?: string;
@@ -33,6 +45,7 @@ const BROWSER_PRELOAD = path.join(__dirname, "preload.mjs");
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const MAX_SELECTION_LENGTH = 5000;
 const MAX_HIGHLIGHT_TEXT_LENGTH = 4000;
+const MAX_VALIDATION_TEXT_LENGTH = 18000;
 
 const isAllowedUrl = (value: string) => {
   try {
@@ -86,7 +99,68 @@ const sanitizeReferenceHighlight = (
   };
 };
 
-function runReferenceHighlightScript(payload: { refId: number; text: string }) {
+const sanitizeValidationSnapshot = (
+  payload: BrowserViewValidationSnapshotPayload,
+  fallbackUrl: string,
+): BrowserViewValidationSnapshot | null => {
+  const url =
+    typeof payload.url === "string" && payload.url.trim().length > 0
+      ? payload.url.trim()
+      : fallbackUrl;
+  if (!isAllowedUrl(url)) {
+    return null;
+  }
+  const textRaw = typeof payload.text === "string" ? payload.text.trim() : "";
+  if (!textRaw) {
+    return null;
+  }
+  const title =
+    typeof payload.title === "string" && payload.title.trim().length > 0
+      ? payload.title.trim()
+      : undefined;
+  return {
+    url,
+    title,
+    text:
+      textRaw.length > MAX_VALIDATION_TEXT_LENGTH
+        ? `${textRaw.slice(0, MAX_VALIDATION_TEXT_LENGTH)}...`
+        : textRaw,
+  };
+};
+
+function runValidationSnapshotScript(maxLength: number) {
+  const toCompactMultilineText = (value: string): string =>
+    value
+      .replace(/\u00A0/g, " ")
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter((line) => line.length > 0)
+      .join("\n")
+      .trim();
+
+  const articleText = toCompactMultilineText(
+    document.querySelector("article")?.innerText ?? "",
+  );
+  const mainText = toCompactMultilineText(
+    document.querySelector("main")?.innerText ?? "",
+  );
+  const bodyText = toCompactMultilineText(document.body?.innerText ?? "");
+  const preferredText = articleText || mainText || bodyText;
+  const resolvedMaxLength =
+    Number.isFinite(maxLength) && maxLength > 1000 ? Math.floor(maxLength) : 12000;
+  const text =
+    preferredText.length > resolvedMaxLength
+      ? `${preferredText.slice(0, resolvedMaxLength)}...`
+      : preferredText;
+
+  return {
+    url: window.location.href,
+    title: document.title,
+    text,
+  };
+}
+
+export function runReferenceHighlightScript(payload: { refId: number; text: string }) {
   const inlineMarkerAttribute = "data-deertube-inline-highlight";
   const styleId = "deertube-ref-highlight-style";
   const lineNumberPrefix = /^\s*\d+\s+\|\s?/;
@@ -707,6 +781,34 @@ class BrowserViewController {
       return ok;
     } catch {
       return false;
+    }
+  }
+
+  async captureValidationSnapshot(
+    tabId: string,
+  ): Promise<BrowserViewValidationSnapshot | null> {
+    const view = this.views.get(tabId);
+    if (!view) {
+      return null;
+    }
+    const fallbackUrl = view.webContents.getURL();
+    if (!isAllowedUrl(fallbackUrl)) {
+      return null;
+    }
+    try {
+      const result: unknown = await view.webContents.executeJavaScript(
+        `(${runValidationSnapshotScript.toString()})(${MAX_VALIDATION_TEXT_LENGTH})`,
+        true,
+      );
+      if (!isJsonObject(result)) {
+        return null;
+      }
+      return sanitizeValidationSnapshot(
+        result as BrowserViewValidationSnapshotPayload,
+        fallbackUrl,
+      );
+    } catch {
+      return null;
     }
   }
 

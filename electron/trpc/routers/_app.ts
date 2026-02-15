@@ -5,6 +5,7 @@ import { previewRouter } from './preview'
 import { chatRouter } from './chat'
 import { graphRouter } from './graph'
 import { browserViewRouter } from './browserView'
+import { cdpBrowserRouter } from './cdpBrowser'
 import { skillsRouter } from "./skills";
 
 export const appRouter = createTRPCRouter({
@@ -12,6 +13,7 @@ export const appRouter = createTRPCRouter({
   deepSearch: deepSearchRouter,
   preview: previewRouter,
   browserView: browserViewRouter,
+  cdpBrowser: cdpBrowserRouter,
   skills: skillsRouter,
   chat: chatRouter,
   graph: graphRouter,

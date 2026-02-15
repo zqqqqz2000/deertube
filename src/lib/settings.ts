@@ -2,6 +2,8 @@ export type LlmPurpose = 'chat' | 'search' | 'extract' | 'graph' | 'validate'
 
 export const LLM_PURPOSES: LlmPurpose[] = ['chat', 'search', 'extract', 'graph', 'validate']
 
+export type BrowserDisplayMode = 'embedded' | 'cdp'
+
 export interface LlmProviderConfig {
   id: string
   name: string
@@ -42,6 +44,7 @@ export interface RuntimeSettingsPayload {
 export interface ProviderProfile {
   id: string
   name: string
+  browserDisplayMode: BrowserDisplayMode
   tavilyApiKey: string
   jinaReaderBaseUrl: string
   jinaReaderApiKey: string
@@ -105,6 +108,7 @@ const createDefaultProfile = (): ProviderProfile => {
   return {
     id: crypto.randomUUID(),
     name: 'Default',
+    browserDisplayMode: 'embedded',
     tavilyApiKey: '',
     jinaReaderBaseUrl: 'https://r.jina.ai/',
     jinaReaderApiKey: '',
@@ -202,10 +206,13 @@ const normalizeProfile = (raw: LegacyProviderProfile): ProviderProfile => {
   }
 
   const usage = normalizeUsage(raw.llmUsage, models)
+  const browserDisplayMode =
+    raw.browserDisplayMode === 'cdp' ? 'cdp' : 'embedded'
 
   return {
     id: raw.id ?? defaults.id,
     name: raw.name ?? defaults.name,
+    browserDisplayMode,
     tavilyApiKey: raw.tavilyApiKey ?? '',
     jinaReaderBaseUrl: raw.jinaReaderBaseUrl ?? defaults.jinaReaderBaseUrl,
     jinaReaderApiKey: raw.jinaReaderApiKey ?? '',

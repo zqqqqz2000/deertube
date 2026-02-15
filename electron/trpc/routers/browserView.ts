@@ -89,6 +89,13 @@ export const browserViewRouter = createTRPCRouter({
       controller.openExternal(input.url);
       return { ok: true };
     }),
+  captureValidationSnapshot: baseProcedure
+    .input(z.object({ tabId: z.string() }))
+    .mutation(async ({ input }) => {
+      const controller = getBrowserViewController();
+      const snapshot = await controller.captureValidationSnapshot(input.tabId);
+      return { snapshot };
+    }),
   highlightReference: baseProcedure
     .input(
       z.object({

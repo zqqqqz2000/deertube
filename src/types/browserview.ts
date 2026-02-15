@@ -5,6 +5,33 @@ export interface BrowserViewBounds {
   height: number;
 }
 
+export type ReferenceAccuracy =
+  | "high"
+  | "medium"
+  | "low"
+  | "conflicting"
+  | "insufficient";
+
+export type BrowserValidationStatus = "running" | "complete" | "failed";
+
+export interface BrowserPageValidationRecord {
+  url: string;
+  title?: string;
+  query: string;
+  checkedAt: string;
+  text: string;
+  startLine: number;
+  endLine: number;
+  referenceTitle?: string;
+  referenceUrl?: string;
+  accuracy?: ReferenceAccuracy;
+  validationRefContent?: string;
+  issueReason?: string;
+  correctFact?: string;
+  sourceCount: number;
+  referenceCount: number;
+}
+
 export interface BrowserViewTabState {
   id: string;
   url: string;
@@ -13,6 +40,8 @@ export interface BrowserViewTabState {
   canGoForward?: boolean;
   isLoading?: boolean;
   referenceHighlight?: BrowserViewReferenceHighlight;
+  validationStatus?: BrowserValidationStatus;
+  validationError?: string;
 }
 
 export interface BrowserViewSelection {

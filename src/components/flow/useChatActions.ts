@@ -1105,6 +1105,48 @@ const deriveDeepSearchResultStatus = (
   return payloadStatus;
 };
 
+const isTerminalToolStatus = (
+  status: ChatMessage["toolStatus"] | null,
+): status is "complete" | "failed" =>
+  status === "complete" || status === "failed";
+
+const mergeDeepSearchStatus = (
+  previous: DeepSearchStreamPayload["status"],
+  next: DeepSearchStreamPayload["status"],
+): DeepSearchStreamPayload["status"] => {
+  const previousKnown = readKnownToolStatus(previous);
+  const nextKnown = readKnownToolStatus(next);
+  if (!previousKnown) {
+    return nextKnown ?? previous;
+  }
+  if (!nextKnown) {
+    return previousKnown;
+  }
+  if (isTerminalToolStatus(previousKnown) && nextKnown === "running") {
+    return previousKnown;
+  }
+  return nextKnown;
+};
+
+const mergeDeepSearchPayload = (
+  previous: DeepSearchStreamPayload,
+  next: DeepSearchStreamPayload,
+): DeepSearchStreamPayload => ({
+  ...previous,
+  ...next,
+  mode: "mode" in next ? next.mode : previous.mode,
+  query: "query" in next ? next.query : previous.query,
+  projectId: "projectId" in next ? next.projectId : previous.projectId,
+  searchId: "searchId" in next ? next.searchId : previous.searchId,
+  status: mergeDeepSearchStatus(previous.status, next.status),
+  sources: "sources" in next ? next.sources : previous.sources,
+  references: "references" in next ? next.references : previous.references,
+  prompt: "prompt" in next ? next.prompt : previous.prompt,
+  conclusion: "conclusion" in next ? next.conclusion : previous.conclusion,
+  error: "error" in next ? next.error : previous.error,
+  complete: "complete" in next ? next.complete : previous.complete,
+});
+
 const resolveToolStatusByChatState = ({
   resultStatus,
   isActiveAssistantMessage,
@@ -1295,11 +1337,28 @@ function buildDeepSearchEvents(
         payload.complete === true ||
         payload.status === "complete" ||
         payload.status === "failed";
+      const existing = byToolCall.get(payload.toolCallId);
+      if (!existing) {
+        byToolCall.set(payload.toolCallId, {
+          payload,
+          parentMessageId: message.id,
+          createdAt,
+          done,
+        });
+        return;
+      }
+      const mergedPayload = mergeDeepSearchPayload(existing.payload, payload);
+      const mergedDone =
+        existing.done ||
+        done ||
+        mergedPayload.complete === true ||
+        mergedPayload.status === "complete" ||
+        mergedPayload.status === "failed";
       byToolCall.set(payload.toolCallId, {
-        payload,
+        payload: mergedPayload,
         parentMessageId: message.id,
         createdAt,
-        done,
+        done: mergedDone,
       });
     });
   });
