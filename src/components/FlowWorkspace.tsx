@@ -1296,14 +1296,26 @@ function FlowWorkspaceInner({
     ) => {
       const normalizedUrl = normalizeHttpUrl(url);
       if (!normalizedUrl) {
+        console.warn("[cdp-browser]", "openCdpUrl:invalid-url", { url });
         return;
       }
+      console.info("[cdp-browser]", "openCdpUrl:request", {
+        url: normalizedUrl,
+        hasReference: Boolean(reference),
+        refId: reference?.refId ?? null,
+        referenceTextLength: reference?.text.length ?? 0,
+      });
       trpc.cdpBrowser.open
         .mutate({
           url: normalizedUrl,
           reference,
         })
-        .catch(() => undefined);
+        .then((result) => {
+          console.info("[cdp-browser]", "openCdpUrl:response", result);
+        })
+        .catch((error) => {
+          console.error("[cdp-browser]", "openCdpUrl:error", error);
+        });
     },
     [],
   );
